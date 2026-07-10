@@ -84,8 +84,11 @@ script_path) as JSON.
 | `ORCHESTRATOR_MODEL` | `deepseek-v4-flash:cloud` | The model the agent runs against. |
 | `ZENDRIVER_HEADLESS` | `true` | Whether the inspection tool runs Chrome headless. |
 | `SCRIPTS_PATH` | `data/scripts` | Where the driver persists generated scripts. |
-| `ZENDRIVER_DOWNLOADS_DIR` | `data/downloads/zendriver` | Where zendriver writes any downloaded files. |
 | `ZENDRIVER_PROBE_TIMEOUT_S` | `30` | Hard probe timeout for the inspection tool. |
 | `BROWSER_AGENT_LOG_LEVEL` | `INFO` | Loguru level. |
 | `BROWSER_AGENT_LOG_FILE` | (unset) | If set, also log to this file (10 MB rotation). |
 | `BROWSER_AGENT_LOG_NO_COLOR` | (unset) | Set to `1` to disable ANSI colors. |
+
+
+## Development prompts
+

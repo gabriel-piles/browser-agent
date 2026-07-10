@@ -18,7 +18,7 @@ import asyncio
 import time
 from typing import Any
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, UsageLimits
 from pydantic_ai.models import Model
 
 from browser_agent.agent_logging import agent_logger
@@ -26,6 +26,8 @@ from browser_agent.domain.code_generation_request import CodeGenerationRequest
 from browser_agent.domain.generated_script import GeneratedScript
 from browser_agent.use_cases.agent_deps import AgentDeps
 from browser_agent.use_cases.inspect_html_tool import inspect_html
+from browser_agent.use_cases.run_validation_script_tool import run_validation_script
+from browser_agent.configuration import MAX_LLM_CALLS
 from browser_agent.use_cases.system_prompt import SYSTEM_PROMPT
 
 
@@ -43,6 +45,7 @@ class GenerateZendriverScriptUseCase:
             output_type=GeneratedScript,
         )
         agent.tool(inspect_html)
+        agent.tool(run_validation_script)
         return agent
 
     async def execute(self, request: CodeGenerationRequest) -> GeneratedScript:
@@ -54,18 +57,20 @@ class GenerateZendriverScriptUseCase:
 
     async def _run_agent(self, agent: Agent, prompt: str) -> Any:
         agent_logger.info(
-            "START  prompt_chars={n} prompt_preview={preview}",
-            n=len(prompt),
+            "START  prompt_tokens={n} prompt_preview={preview}",
+            n=len(prompt) // 4,
             preview=_truncate(prompt, 200),
         )
         started = time.monotonic()
         try:
-            return await agent.run(prompt, deps=self._deps)
+            run = await agent.run(prompt, deps=self._deps, usage_limits=UsageLimits(request_limit=MAX_LLM_CALLS))
         finally:
             agent_logger.info(
                 "END    elapsed={elapsed:.1f}s",
                 elapsed=time.monotonic() - started,
             )
+        self._log_usage(run)
+        return run
 
     @staticmethod
     def _log_script(script: GeneratedScript) -> None:
@@ -74,6 +79,16 @@ class GenerateZendriverScriptUseCase:
             deps=script.dependency_names(),
             lines=script.line_count(),
             ok=script.has_async_main(),
+        )
+
+    @staticmethod
+    def _log_usage(run: Any) -> None:
+        usage = run.usage
+        agent_logger.info(
+            "USAGE  in_tokens={in_t} out_tokens={out_t} requests={req}",
+            in_t=usage.input_tokens,
+            out_t=usage.output_tokens,
+            req=usage.requests,
         )
 
     @staticmethod
@@ -93,7 +108,7 @@ class GenerateZendriverScriptUseCase:
 def _truncate(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
-    return f"{value[:limit]}…(truncated, total={len(value)} chars)"
+    return f"{value[:limit]}…(total={len(value) // 4} tokens)"
 
 
 def run_sync(request: CodeGenerationRequest, deps: AgentDeps) -> GeneratedScript:
