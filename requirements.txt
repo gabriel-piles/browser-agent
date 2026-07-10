@@ -1,0 +1,7 @@
+pydantic-ai==2.8.0
+zendriver==0.15.4
+beautifulsoup4==4.15.0
+pydantic==2.13.3
+httpx==0.28.1
+python-dotenv==1.2.2
+loguru==0.7.3
