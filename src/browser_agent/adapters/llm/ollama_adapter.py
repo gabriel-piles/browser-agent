@@ -30,4 +30,5 @@ class OllamaAdapter(LlmPort):
         # ``OpenAIChatModel``; OllamaProvider wires the base URL and
         # auth header for us.
         from pydantic_ai.models.openai import OpenAIChatModel
+
         return OpenAIChatModel(self.model_name, provider=provider)

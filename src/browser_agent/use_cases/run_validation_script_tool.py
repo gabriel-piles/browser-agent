@@ -36,9 +36,7 @@ async def run_validation_script(ctx: RunContext[AgentDeps], python_code: str) ->
     """
     runner: ScriptRunnerPort = ctx.deps.script_runner
     async with traced_tool("run_validation_script"):
-        result: ScriptExecutionResult = await runner.run(
-            python_code, timeout=VALIDATION_TIMEOUT_S
-        )
+        result: ScriptExecutionResult = await runner.run(python_code, timeout=VALIDATION_TIMEOUT_S)
     return _format_result(result)
 
 

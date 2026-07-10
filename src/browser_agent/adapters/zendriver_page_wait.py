@@ -150,11 +150,7 @@ class ZendriverPageWait:
             else:
                 stable_polls = 0
             prev_signature = signature
-            if (
-                stable_polls >= required_stable_polls
-                and elapsed >= min_wait_deadline
-                and signature
-            ):
+            if stable_polls >= required_stable_polls and elapsed >= min_wait_deadline and signature:
                 return anchors, iframes
             await asyncio.sleep(poll_interval)
             elapsed += poll_interval

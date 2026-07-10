@@ -6,6 +6,7 @@ from browser_agent.ports.llm_port import LlmPort
 from browser_agent.ports.script_runner_port import ScriptRunnerPort
 from browser_agent.ports.web_inspector_port import WebInspectorPort
 
+
 @dataclass
 class AgentDeps:
     """The dependency object every agent receives on its ``RunContext``.

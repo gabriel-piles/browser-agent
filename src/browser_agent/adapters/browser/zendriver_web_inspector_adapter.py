@@ -60,9 +60,7 @@ class ZendriverWebInspectorAdapter(WebInspectorPort):
         tracker.begin_navigation(None)
         try:
             await tracker.attach()
-            await asyncio.wait_for(
-                tab.get(url), timeout=BROWSER_TAB_OPEN_TIMEOUT_SECONDS
-            )
+            await asyncio.wait_for(tab.get(url), timeout=BROWSER_TAB_OPEN_TIMEOUT_SECONDS)
             tracker.begin_navigation(None, clear_main_document_state=False)
             page_wait = ZendriverPageWait(
                 tab=tab,

@@ -100,9 +100,7 @@ class GenerateZendriverScriptUseCase:
             return GeneratedScript.model_validate(output)
         if isinstance(output, str):
             return GeneratedScript.model_validate_json(output)
-        raise RuntimeError(
-            f"Agent returned an unsupported output type: {type(output).__name__}"
-        )
+        raise RuntimeError(f"Agent returned an unsupported output type: {type(output).__name__}")
 
 
 def _truncate(value: str, limit: int) -> str:

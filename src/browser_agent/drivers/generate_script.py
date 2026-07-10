@@ -38,17 +38,16 @@ from browser_agent.use_cases.generate_zendriver_script_use_case import (
     GenerateZendriverScriptUseCase,
 )
 
-
 load_dotenv(PROJECT_ROOT / ".env")
 
-DEFAULT_TASK = '''
+DEFAULT_TASK = """
 I want all the links like https://*/vid/45454 from this page 
 https://jurisprudencia.corteidh.or.cr/search/jurisdiction:EA+content_type:79+categoriaCorte:r06r9jvba33obda+tipoDeDocumento:r06r9jye99o4szy/*
 For getting all the links, it has to use the filter on the left using all the options
 of the filter Estado and per page scroll down to load all the links 
 from each country as the loading of the links is done dynamically when scrolling.
 
-'''
+"""
 
 SCRIPTS_PATH.mkdir(parents=True, exist_ok=True)
 
@@ -83,9 +82,7 @@ async def _generate(task: str) -> GeneratedScript:
         inspector=ZendriverWebInspectorAdapter(headless=ZENDRIVER_HEADLESS),
         script_runner=SubprocessScriptRunnerAdapter(),
     )
-    return await GenerateZendriverScriptUseCase(deps).execute(
-        CodeGenerationRequest(task=task)
-    )
+    return await GenerateZendriverScriptUseCase(deps).execute(CodeGenerationRequest(task=task))
 
 
 def _emit(task: str, script: GeneratedScript) -> None:

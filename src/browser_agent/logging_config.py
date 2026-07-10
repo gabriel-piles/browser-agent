@@ -14,7 +14,6 @@ from typing import Any
 
 from loguru import logger
 
-
 _CHATTY_LOGGERS: dict[str, str] = {
     "httpx": "WARNING",
     "httpcore": "WARNING",
@@ -38,9 +37,7 @@ class InterceptHandler(logging.Handler):
                 break
             frame = frame.f_back
             depth += 1
-        logger.opt(depth=depth, exception=record.exc_info).log(
-            level, record.getMessage()
-        )
+        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
 
 
 def _apply_quiet_overrides() -> None:

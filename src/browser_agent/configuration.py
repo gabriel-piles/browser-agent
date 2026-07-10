@@ -1,7 +1,6 @@
 import os
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 # LLM connection — consumed by ``adapters/llm/ollama_adapter.py``.
 OLLAMA_BASE_URL = "https://ollama.com/v1"
@@ -37,5 +36,3 @@ ANCHOR_STABILITY_REQUIRED_STABLE_POLLS = 2
 # Browser lifecycle timeouts to prevent zendriver from hanging
 BROWSER_TAB_OPEN_TIMEOUT_SECONDS = 45.0
 BROWSER_TAB_LOAD_TIMEOUT_SECONDS = 20.0
-
-
