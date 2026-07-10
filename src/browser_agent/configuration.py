@@ -9,7 +9,8 @@ ORCHESTRATOR_MODEL = "deepseek-v4-flash:cloud"
 # Where the generated scripts are persisted by the driver.
 SCRIPTS_PATH = PROJECT_ROOT / "data" / "scripts"
 
-MAX_LLM_CALLS = 15
+MAX_LLM_CALLS = 25
+MAX_VALIDATION_ATTEMPTS = 3
 
 SCRIPTS_PATH.mkdir(parents=True, exist_ok=True)
 # ``headless`` defaults to False — the operator can watch Chrome

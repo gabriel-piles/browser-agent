@@ -1,15 +1,15 @@
 """The single end-to-end use case: turn a user task into a Zendriver script.
 
 The use case is a thin object — it builds a Pydantic-AI ``Agent`` with
-the inspection tool bound, the structured ``GeneratedScript`` as the
-result type, and the system prompt that encodes the script rules. It
-then runs the agent and packages the output back as a
-:class:`GeneratedScript` for the caller.
+the exploration and validation tools bound, the structured
+``GeneratedScript`` as the result type, and the system prompt that
+encodes the script rules. It then runs the agent and packages the
+output back as a :class:`GeneratedScript` for the caller.
 
-No retry, no streaming, no logging fan-out. Pydantic-AI handles the
-agent loop; we just hand it the deps and the prompt and trust the
-structured-output validation to surface malformed model output as a
-clear error.
+The browser session (a :class:`BrowserSessionPort`) is started before
+the agent runs and torn down after it finishes, so one Chrome instance
+serves all ``explore_page`` calls for the entire run. No retry, no
+streaming, no logging fan-out. Pydantic-AI handles the agent loop.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from browser_agent.agent_logging import agent_logger
 from browser_agent.domain.code_generation_request import CodeGenerationRequest
 from browser_agent.domain.generated_script import GeneratedScript
 from browser_agent.use_cases.agent_deps import AgentDeps
-from browser_agent.use_cases.inspect_html_tool import inspect_html
+from browser_agent.use_cases.explore_page_tool import explore_page
 from browser_agent.use_cases.run_validation_script_tool import run_validation_script
 from browser_agent.configuration import MAX_LLM_CALLS
 from browser_agent.use_cases.system_prompt import SYSTEM_PROMPT
@@ -44,16 +44,20 @@ class GenerateZendriverScriptUseCase:
             deps_type=AgentDeps,
             output_type=GeneratedScript,
         )
-        agent.tool(inspect_html)
+        agent.tool(explore_page)
         agent.tool(run_validation_script)
         return agent
 
     async def execute(self, request: CodeGenerationRequest) -> GeneratedScript:
-        agent = self._build_agent(self._deps.llm.get_model())
-        run = await self._run_agent(agent, request.render_prompt())
-        script = self._coerce_result(run)
-        self._log_script(script)
-        return script
+        await self._deps.browser_session.start()
+        try:
+            agent = self._build_agent(self._deps.llm.get_model())
+            run = await self._run_agent(agent, request.render_prompt())
+            script = self._coerce_result(run)
+            self._log_script(script)
+            return script
+        finally:
+            await self._deps.browser_session.close()
 
     async def _run_agent(self, agent: Agent, prompt: str) -> Any:
         agent_logger.info(
@@ -75,20 +79,20 @@ class GenerateZendriverScriptUseCase:
     @staticmethod
     def _log_script(script: GeneratedScript) -> None:
         agent_logger.info(
-            "SCRIPT deps={deps} lines={lines} has_async_main={ok}",
-            deps=script.dependency_names(),
+            "SCRIPT  lines={lines} deps={deps} preview={preview}",
             lines=script.line_count(),
-            ok=script.has_async_main(),
+            deps=script.dependency_names(),
+            preview=_truncate(script.python_code, 200),
         )
 
     @staticmethod
     def _log_usage(run: Any) -> None:
         usage = run.usage
         agent_logger.info(
-            "USAGE  in_tokens={in_t} out_tokens={out_t} requests={req}",
-            in_t=usage.input_tokens,
-            out_t=usage.output_tokens,
+            "USAGE  requests={req} input={input_tok} output={output_tok}",
             req=usage.requests,
+            input_tok=usage.input_tokens,
+            output_tok=usage.output_tokens,
         )
 
     @staticmethod
@@ -96,10 +100,6 @@ class GenerateZendriverScriptUseCase:
         output = getattr(run, "output", None)
         if isinstance(output, GeneratedScript):
             return output
-        if isinstance(output, dict):
-            return GeneratedScript.model_validate(output)
-        if isinstance(output, str):
-            return GeneratedScript.model_validate_json(output)
         raise RuntimeError(f"Agent returned an unsupported output type: {type(output).__name__}")
 
 

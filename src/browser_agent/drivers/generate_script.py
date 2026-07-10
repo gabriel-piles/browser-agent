@@ -1,7 +1,6 @@
 """Command-line entry point for the Zendriver script generation service.
-
 Reads a task from argv (or the bundled default), wires the
-:OllamaAdapter and :ZendriverWebInspectorAdapter into an
+:OllamaAdapter and :ZendriverBrowserSession into an
 :AgentDeps and runs the use case. The generated :GeneratedScript
 is printed as JSON and the executable source is written to
 ``data/scripts/<slug>.py`` for the operator to launch.
@@ -22,13 +21,14 @@ from pathlib import Path
 from dotenv import load_dotenv
 from loguru import logger
 
-from browser_agent.adapters.browser.zendriver_web_inspector_adapter import (
-    ZendriverWebInspectorAdapter,
+from browser_agent.adapters.browser.zendriver_browser_session import (
+    ZendriverBrowserSession,
 )
 from browser_agent.adapters.execution.subprocess_script_runner_adapter import (
     SubprocessScriptRunnerAdapter,
 )
 from browser_agent.adapters.llm.ollama_adapter import OllamaAdapter
+from browser_agent.adapters.emitted_page_wait import with_emitted_page_wait
 from browser_agent.configuration import SCRIPTS_PATH, ZENDRIVER_HEADLESS, PROJECT_ROOT
 from browser_agent.domain.code_generation_request import CodeGenerationRequest
 from browser_agent.domain.generated_script import GeneratedScript
@@ -79,7 +79,7 @@ async def _main(argv: list[str]) -> int:
 async def _generate(task: str) -> GeneratedScript:
     deps = AgentDeps(
         llm=OllamaAdapter(),
-        inspector=ZendriverWebInspectorAdapter(headless=ZENDRIVER_HEADLESS),
+        browser_session=ZendriverBrowserSession(headless=ZENDRIVER_HEADLESS),
         script_runner=SubprocessScriptRunnerAdapter(),
     )
     return await GenerateZendriverScriptUseCase(deps).execute(CodeGenerationRequest(task=task))
@@ -87,7 +87,7 @@ async def _generate(task: str) -> GeneratedScript:
 
 def _emit(task: str, script: GeneratedScript) -> None:
     script_path = _script_path(task)
-    script_path.write_text(script.python_code, encoding="utf-8")
+    script_path.write_text(with_emitted_page_wait(script.python_code), encoding="utf-8")
     payload = script.model_dump()
     payload["script_path"] = str(script_path)
     print(json.dumps(payload, indent=2, ensure_ascii=False))
