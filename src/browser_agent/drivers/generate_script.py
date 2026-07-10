@@ -29,7 +29,7 @@ from browser_agent.adapters.execution.subprocess_script_runner_adapter import (
 )
 from browser_agent.adapters.llm.ollama_adapter import OllamaAdapter
 from browser_agent.adapters.emitted_page_wait import with_emitted_page_wait
-from browser_agent.configuration import SCRIPTS_PATH, ZENDRIVER_HEADLESS, PROJECT_ROOT
+from browser_agent.configuration import SCRIPTS_PATH, ZENDRIVER_HEADLESS, PROJECT_ROOT, PROMPT_FILE
 from browser_agent.domain.code_generation_request import CodeGenerationRequest
 from browser_agent.domain.generated_script import GeneratedScript
 from browser_agent.logging_config import configure_logging
@@ -41,23 +41,21 @@ from browser_agent.use_cases.generate_zendriver_script_use_case import (
 load_dotenv(PROJECT_ROOT / ".env")
 
 DEFAULT_TASK = """
-I want all the links like https://*/vid/45454 from this page 
-https://jurisprudencia.corteidh.or.cr/search/jurisdiction:EA+content_type:79+categoriaCorte:r06r9jvba33obda+tipoDeDocumento:r06r9jye99o4szy/*
-For getting all the links, it has to use the filter on the left using all the options
-of the filter Estado and per page scroll down to load all the links 
-from each country as the loading of the links is done dynamically when scrolling.
-
+Describe the page interaction you want to automate.
 """
+
+_FILE_TASK = PROMPT_FILE.read_text(encoding="utf-8").strip() if PROMPT_FILE.is_file() else ""
+EFFECTIVE_TASK = _FILE_TASK or DEFAULT_TASK
 
 SCRIPTS_PATH.mkdir(parents=True, exist_ok=True)
 
 
 def _read_task(argv: list[str]) -> str:
     if "--stdin" in argv:
-        return sys.stdin.read().strip() or DEFAULT_TASK
+        return sys.stdin.read().strip() or EFFECTIVE_TASK
     if len(argv) > 1:
         return " ".join(argv[1:]).strip()
-    return DEFAULT_TASK
+    return EFFECTIVE_TASK
 
 
 def _script_path(task: str) -> Path:

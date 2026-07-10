@@ -8,6 +8,7 @@ ORCHESTRATOR_MODEL = "deepseek-v4-flash:cloud"
 
 # Where the generated scripts are persisted by the driver.
 SCRIPTS_PATH = PROJECT_ROOT / "data" / "scripts"
+PROMPT_FILE = PROJECT_ROOT / "data" / "prompt.txt"
 
 MAX_LLM_CALLS = 25
 MAX_VALIDATION_ATTEMPTS = 3
