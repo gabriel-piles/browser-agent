@@ -44,3 +44,13 @@ class BrowserSessionPort(ABC):
           elements' text + href (no full HTML dump);
         - for ``wait``, sleep and return the current HTML.
         """
+
+    @abstractmethod
+    async def get_cookies(self, urls: list[str] | None = None) -> list[dict[str, str]]:
+        """Return cookies from the active browser session as a list of dicts.
+
+        Each dict has keys: name, value, domain, path, expires, http_only,
+        secure, same_site. When ``urls`` is None, returns cookies for the
+        current page URL. Used by the download tool to share the browser's
+        auth/anti-bot cookies with curl_cffi.
+        """

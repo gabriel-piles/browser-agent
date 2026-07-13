@@ -12,6 +12,7 @@ from browser_agent.configuration import PROJECT_ROOT
 from browser_agent.domain.script_execution_result import ScriptExecutionResult
 from browser_agent.ports.script_runner_port import ScriptRunnerPort
 from browser_agent.adapters.emitted_page_wait import with_emitted_page_wait
+from browser_agent.adapters.emitted_save_record import with_emitted_save_record
 
 
 class SubprocessScriptRunnerAdapter(ScriptRunnerPort):
@@ -29,6 +30,7 @@ class SubprocessScriptRunnerAdapter(ScriptRunnerPort):
 
     async def run(self, python_code: str, timeout: float = _DEFAULT_TIMEOUT) -> ScriptExecutionResult:
         augmented = with_emitted_page_wait(python_code)
+        augmented = with_emitted_save_record(augmented)
         tmp = self._write_temp(augmented)
         try:
             return await self._execute(tmp, timeout)

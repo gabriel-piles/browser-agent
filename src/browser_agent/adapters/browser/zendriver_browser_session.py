@@ -24,6 +24,7 @@ from typing import Any
 from loguru import logger
 
 import zendriver as zd
+from zendriver.cdp import network
 
 from browser_agent.adapters.cdp_page_tracker import CdpPageTracker
 from browser_agent.adapters.zendriver_page_wait import ZendriverPageWait
@@ -82,6 +83,17 @@ class ZendriverBrowserSession(BrowserSessionPort):
             raise RuntimeError("browser session not started")
         handler = self._handler_for(action.action)
         return await handler(action)
+
+    async def get_cookies(self, urls: list[str] | None = None) -> list[dict[str, str]]:
+        """Return browser cookies as dicts for curl_cffi."""
+        if self._tab is None:
+            return []
+        try:
+            cdp_cookies = await self._tab.send(network.get_cookies(urls))
+        except Exception:
+            logger.warning("get_cookies failed, returning empty list")
+            return []
+        return [_cookie_to_dict(c) for c in cdp_cookies]
 
     def _handler_for(self, action: str) -> Any:
         return {
@@ -279,3 +291,18 @@ class ZendriverBrowserSession(BrowserSessionPort):
             await browser.stop()
         except Exception:
             logger.exception("failed to stop zendriver browser")
+
+
+def _cookie_to_dict(c: Any) -> dict[str, str]:
+    """Convert a CDP Cookie object to a plain dict for curl_cffi."""
+    same_site = getattr(c.same_site, "value", str(c.same_site)) if c.same_site else ""
+    return {
+        "name": c.name,
+        "value": c.value,
+        "domain": c.domain,
+        "path": c.path,
+        "expires": c.expires,
+        "http_only": c.http_only,
+        "secure": c.secure,
+        "same_site": same_site.lower() if same_site else "",
+    }

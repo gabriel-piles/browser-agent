@@ -27,8 +27,12 @@ from browser_agent.adapters.browser.zendriver_browser_session import (
 from browser_agent.adapters.execution.subprocess_script_runner_adapter import (
     SubprocessScriptRunnerAdapter,
 )
+from browser_agent.adapters.execution.curl_cffi_pdf_downloader_adapter import (
+    CurlCffiPdfDownloaderAdapter,
+)
 from browser_agent.adapters.llm.ollama_adapter import OllamaAdapter
 from browser_agent.adapters.emitted_page_wait import with_emitted_page_wait
+from browser_agent.adapters.emitted_save_record import with_emitted_save_record
 from browser_agent.configuration import SCRIPTS_PATH, ZENDRIVER_HEADLESS, PROJECT_ROOT, PROMPT_FILE
 from browser_agent.domain.code_generation_request import CodeGenerationRequest
 from browser_agent.domain.generated_script import GeneratedScript
@@ -79,15 +83,19 @@ async def _generate(task: str) -> GeneratedScript:
         llm=OllamaAdapter(),
         browser_session=ZendriverBrowserSession(headless=ZENDRIVER_HEADLESS),
         script_runner=SubprocessScriptRunnerAdapter(),
+        pdf_downloader=CurlCffiPdfDownloaderAdapter(),
     )
     return await GenerateZendriverScriptUseCase(deps).execute(CodeGenerationRequest(task=task))
 
 
 def _emit(task: str, script: GeneratedScript) -> None:
     script_path = _script_path(task)
-    script_path.write_text(with_emitted_page_wait(script.python_code), encoding="utf-8")
+    final_code = with_emitted_page_wait(script.python_code)
+    final_code = with_emitted_save_record(final_code)
+    script_path.write_text(final_code, encoding="utf-8")
     payload = script.model_dump()
     payload["script_path"] = str(script_path)
+    payload["metadata_db_path"] = str(script_path.resolve().parent.parent / "metadata.db")
     print(json.dumps(payload, indent=2, ensure_ascii=False))
 
 

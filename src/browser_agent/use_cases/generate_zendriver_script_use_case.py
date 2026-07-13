@@ -25,6 +25,7 @@ from browser_agent.agent_logging import agent_logger
 from browser_agent.domain.code_generation_request import CodeGenerationRequest
 from browser_agent.domain.generated_script import GeneratedScript
 from browser_agent.use_cases.agent_deps import AgentDeps
+from browser_agent.use_cases.download_pdf_tool import download_pdf
 from browser_agent.use_cases.explore_page_tool import explore_page
 from browser_agent.use_cases.run_validation_script_tool import run_validation_script
 from browser_agent.configuration import MAX_LLM_CALLS
@@ -46,6 +47,7 @@ class GenerateZendriverScriptUseCase:
         )
         agent.tool(explore_page)
         agent.tool(run_validation_script)
+        agent.tool(download_pdf)
         return agent
 
     async def execute(self, request: CodeGenerationRequest) -> GeneratedScript:
