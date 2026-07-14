@@ -1,11 +1,10 @@
 """Self-contained page-wait helper inlined into every emitted script.
 
-The generated scripts (validation runs in ``SubprocessScriptRunnerAdapter``
-and the final script written to ``data/scripts/``) are self-contained by
-contract — they MUST NOT import from this project. They need the same
-page-load readiness signal the persistent :class:`ZendriverBrowserSession`
-gives the agent (CDP ``Page.frameStoppedLoading`` + network-idle), so the
-helper is shipped as a plain-Python string and prepended to every emitted
+Both the final script the operator runs and the in-process
+validation script need the same page-load readiness signal the
+persistent :class:`ZendriverBrowserSession` gives the agent (CDP
+``Page.frameStoppedLoading`` + network-idle), so the helper is
+shipped as a plain-Python string and prepended to every emitted
 ``python_code``.
 
 Three call sites:
@@ -41,11 +40,12 @@ from __future__ import annotations
 def with_emitted_page_wait(python_code: str) -> str:
     """Prepend the vendored page-wait helper to ``python_code``.
 
-    Both the validation runner (``SubprocessScriptRunnerAdapter``) and the
-    final-script emit path (``generate_script._emit``) call this so the
-    helper appears at the top of every script the user or the validator
-    runs. The helper is idempotent: if the script already contains the
-    block marker it is returned unchanged.
+    Both the in-process validation runner
+    (:class:`InProcessScriptRunnerAdapter`) and the final-script
+    emit path (``generate_script._emit``) call this so the helper
+    appears at the top of every script that runs. The helper is
+    idempotent: if the script already contains the block marker it
+    is returned unchanged.
     """
     if "BEGIN emitted page-wait helper" in python_code:
         return python_code
@@ -53,7 +53,7 @@ def with_emitted_page_wait(python_code: str) -> str:
 
 
 # This block is intentionally a single literal string. The
-# ``subprocess_script_runner_adapter`` and the ``generate_script`` driver
+# in-process validation runner and the ``generate_script`` driver
 # concatenate it in front of the LLM's emitted code so the script gets a
 # real page-load signal without importing from this project.
 EMITTED_PAGE_WAIT_BLOCK = '''\
@@ -90,12 +90,17 @@ class _EmittedPageWaitTracker:
         self._signal = asyncio.Event()
 
     async def attach(self):
-        await self._tab.send(zd.cdp.page.enable())
-        await self._tab.send(zd.cdp.network.enable())
+        # Register event handlers BEFORE sending domain enable commands,
+        # so the internal ``_register_handlers()`` call (triggered by
+        # ``send()``) sees the handlers and wires the CDP dispatch
+        # correctly.  Matches the order in
+        # ``CdpPageTracker.attach()``.
         self._tab.add_handler(zd.cdp.page.FrameStoppedLoading, self._on_frame_stopped)
         self._tab.add_handler(zd.cdp.network.RequestWillBeSent, self._on_request_will_be_sent)
         self._tab.add_handler(zd.cdp.network.LoadingFinished, self._on_loading_finished)
         self._tab.add_handler(zd.cdp.network.LoadingFailed, self._on_loading_failed)
+        await self._tab.send(zd.cdp.page.enable())
+        await self._tab.send(zd.cdp.network.enable())
 
     def begin_navigation(self, loader_id):
         # ``begin_navigation`` is called from the helper AFTER

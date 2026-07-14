@@ -18,7 +18,18 @@ _MAX_SIZE_BYTES = 100 * 1024 * 1024
 
 
 class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
-    """Downloads PDFs via curl_cffi with Chrome TLS fingerprint impersonation."""
+    """Downloads PDFs via curl_cffi with Chrome TLS fingerprint impersonation.
+
+    This is one of two PDF download strategies. It uses curl_cffi's
+    ``AsyncSession`` with ``impersonate="chrome"`` to send HTTP
+    requests with Chrome's TLS fingerprint. When browser cookies are
+    provided, they are attached to the request so authenticated /
+    cookie-gated downloads work.
+
+    Works for sites that do not block non-browser HTTP clients. For
+    sites behind Cloudflare/Akamai JS-challenge WAF, use the
+    browser-fetch strategy (``download_pdf_browser``) instead.
+    """
 
     def __init__(self, downloads_path: Path = _DEFAULT_DOWNLOADS_PATH) -> None:
         self._downloads_path = downloads_path

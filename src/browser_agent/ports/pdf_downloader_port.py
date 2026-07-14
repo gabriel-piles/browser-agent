@@ -18,8 +18,12 @@ class PdfDownloaderPort(ABC):
         """Download the PDF at ``url`` and return metadata.
 
         Implementations MUST:
-        - use curl_cffi with ``impersonate="chrome"``;
         - attach ``cookies`` (from the browser session) when provided;
         - save the file to the downloads directory;
         - return a DownloadResult with success=False and error on failure.
+
+        The curl_cffi implementation uses Chrome TLS impersonation and
+        works for sites without JS-challenge anti-bot. For sites behind
+        Cloudflare/Akamai WAF, use the browser-fetch strategy
+        (``download_pdf_browser`` in the emitted helper) instead.
         """

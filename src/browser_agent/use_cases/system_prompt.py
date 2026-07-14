@@ -1,9 +1,9 @@
 """The system prompt for the single Pydantic-AI agent.
 
-The prompt is the contract: it tells the model it has two tools
-(``explore_page`` and ``run_validation_script``) and that the
-returned object MUST conform to :class:`GeneratedScript`. The
-workflow is exploration-first: drive the page interactively
+The prompt is the contract: it tells the model it has three tools
+(``explore_page``, ``run_validation_script``, and ``download_pdf``)
+and that the returned object MUST conform to :class:`GeneratedScript`.
+The workflow is exploration-first: drive the page interactively
 (navigate, click filters, scroll, extract), then write a validation
 script, run it, fix issues, and only emit the final script once
 validation passes.
@@ -41,12 +41,17 @@ You have three tools:
   Use this to TEST your full strategy BEFORE you produce the final
   script.
 
-  download_pdf(request) — downloads a PDF from ``request.url`` using
-  curl_cffi with Chrome TLS fingerprint impersonation. Automatically
-  shares cookies from the active browser session, so it can fetch PDFs
-  behind login or anti-bot protection. Returns metadata (saved path,
-  file size, content type) — NOT the file content. Use this when the
-  task involves downloading PDF documents.
+  download_pdf(request) — TEST-PROBE: downloads a PDF from
+  ``request.url`` using curl_cffi with Chrome TLS impersonation.
+  Shares cookies from the active browser session. Returns metadata
+  (saved path, file size, content type) — NOT the file content.
+  Use this to DECIDE the download strategy for the final script:
+    - SUCCESS → the site allows curl_cffi; set
+      ``pdf_download_strategy="curl_cffi"`` in the output.
+    - FAILED (HTTP 403/401/empty) → the site blocks non-browser
+      clients (Cloudflare/Akamai WAF); set
+      ``pdf_download_strategy="browser_fetch"`` in the output.
+  Call this once with a representative PDF URL from the target site.
 
 MANDATORY WORKFLOW — you MUST follow these steps in EXACT order.
 Do NOT skip any step. Do NOT jump to writing a script before you
@@ -60,11 +65,11 @@ have explored the page.
     - The pagination or "load more" mechanism (scroll, button, etc.).
     - Any dynamically loaded content indicators.
     - If the page shows a verification/challenge (Cloudflare,
-      reCAPTCHA, "checking your browser"), wait 10 seconds with
-      action="wait" and then extract again. The browser has stealth
-      patches applied — most challenges resolve automatically. If the
-      challenge persists, wait once more. Do NOT try to solve
-      captchas manually.
+      reCAPTCHA, hCaptcha, "checking your browser", "Just a moment..."),
+      the explore_page snapshot will contain a CHALLENGE DETECTED warning.
+      The browser is visible so the operator can complete the one-click
+      challenge. Once the page resolves, continue with the workflow.
+      Do NOT try to solve captchas manually inside the script.
 
   Step 2 — EXTRACT. Call explore_page with action="extract" and a CSS
   selector for the links/elements you need. This returns the matched
@@ -143,56 +148,125 @@ Output contract — your reply MUST be a single JSON object with:
                  which exploration steps you performed and that
                  validation passed.
   dependencies — pip packages the script needs. zendriver and
-                 asyncio are part of the standard install; only list
-                 extras (e.g. ``beautifulsoup4``, ``curl_cffi``) when
-                 you actually import them in the script. When the
-                 script downloads PDFs via ``curl_cffi``, list it in
-                 dependencies.
+                asyncio are part of the standard install; only list
+                extras (e.g. ``beautifulsoup4``) when you actually
+                import them in ``python_code``. The vendored
+                ``download_pdf_browser`` helper only uses
+                stdlib and zendriver (CDP), so a script that only
+                uses the helper needs no extra dependencies in
+                this list. The ``download_pdf_curl_cffi`` helper
+                needs ``curl_cffi`` (already installed).
+  pdf_download_strategy — "curl_cffi" or "browser_fetch". Set this
+                based on whether the ``download_pdf`` tool probe
+                succeeded (curl_cffi) or failed (browser_fetch).
   python_code  — a self-contained, executable async script.
 
 Script rules (HARD — every script you emit MUST follow these):
 
-0. Vendored page-wait helper. The system prepends a small helper
-   module to every emitted script (it appears at the top of the file
-   automatically; you do NOT need to import or define it). It exposes:
+0. Vendored helpers. The system prepends small helper modules to every
+   emitted script (they appear at the top of the file automatically;
+   you do NOT need to import or define them). They expose:
 
-     await wait_for_page_ready(tab)          — block until the current
-                                                navigation has finished
-                                                loading and the network
-                                                is idle (CDP frame-
-                                                stopped + 500ms quiet).
-     await wait_for_anchors(tab, selector)   — block until ``selector``
-                                                matches at least one
-                                                non-empty element, then
-                                                return ``(count, sample)``.
-                                                Raises TimeoutError on
-                                                zero matches.
+    await start_browser(headless=False, user_data_dir=None)
+                                                — launch a CLEAN Chromium
+                                                  (no automation flags)
+                                                  and return a zendriver
+                                                  Browser. Replaces
+                                                  ``zd.start()`` entirely.
+                                                  The returned browser's
+                                                  ``.stop()`` also kills
+                                                  the Chromium process.
+                                                  Reads the
+                                                  ``ZENDRIVER_HEADLESS``
+                                                  env var (default
+                                                  ``false``) the same
+                                                  way the agent does,
+                                                  and seeds the real
+                                                  Chromium profile into
+                                                  ``user_data_dir`` when
+                                                  it is empty so the
+                                                  final script's browser
+                                                  fingerprint matches the
+                                                  agent's.
+     await wait_for_page_ready(tab)             — block until the current
+                                                  navigation has finished
+                                                  loading and the network
+                                                  is idle (CDP frame-
+                                                  stopped + 500ms quiet).
+     await wait_for_anchors(tab, selector)      — block until ``selector``
+                                                  matches at least one
+                                                  non-empty element, then
+                                                  return ``(count, sample)``.
+                                                  Raises TimeoutError on
+                                                  zero matches.
+     await download_pdf_curl_cffi(url, save_path, tab=None)
+                                               — download ``url`` to
+                                                 ``save_path`` via
+                                                 curl_cffi with Chrome
+                                                 TLS impersonation.
+                                                 When ``tab`` is passed,
+                                                 cookies are extracted
+                                                 from the browser session.
+                                                 Returns the byte count;
+                                                 raises ``RuntimeError``
+                                                 on failure. Use this
+                                                 when the
+                                                 ``download_pdf`` tool
+                                                 probe succeeded (site
+                                                 allows non-browser
+                                                 clients).
+     await download_pdf_browser(tab, url, save_path)
+                                               — download ``url`` to
+                                                 ``save_path`` via the
+                                                 browser's native
+                                                 ``fetch()`` (executed
+                                                 via ``tab.evaluate``).
+                                                 The request goes through
+                                                 Chrome's real network
+                                                 stack (TLS fingerprint,
+                                                 headers, cookies, JS
+                                                 challenge clearance),
+                                                 bypassing Cloudflare /
+                                                 Akamai anti-bot that
+                                                 blocks non-browser
+                                                 clients. Does NOT
+                                                 navigate the tab away
+                                                 from the current page.
+                                                 Returns the byte count;
+                                                 raises ``RuntimeError``
+                                                 on failure. Use this
+                                                 when the
+                                                 ``download_pdf`` tool
+                                                 probe FAILED (site is
+                                                 behind anti-bot WAF).
 
-   These are the ONLY sanctioned page-readiness primitives in the
-   emitted script. They replace the bare ``tab.sleep(...)`` that the
-   live explore_page session uses internally. ``tab.sleep`` may still
-   be used AFTER a click/scroll/select for short DOM-settling delays,
-   but NEVER use it to wait for a page to load — that is what
-   ``wait_for_page_ready`` is for. If a validation script returns
-   "Found 0 countries" / "Found 0 elements" / an empty list, the fix
-   is almost always to call ``wait_for_anchors`` before the read, not
-   to bump a sleep.
+   ``start_browser()`` is the ONLY way to launch the browser. NEVER use
+   ``zd.start()`` — it passes automation-flagging Chrome arguments that
+   Cloudflare Turnstile detects. ``wait_for_page_ready`` and
+   ``wait_for_anchors`` are the ONLY sanctioned page-readiness primitives.
+   ``tab.sleep`` may still be used AFTER a click/scroll/select for short
+   DOM-settling delays, but NEVER use it to wait for a page to load.
+
+   The driver enforces this: every ``zd.start(...)`` in the emitted
+   code is automatically rewritten to ``start_browser(...)`` before the
+   script is saved, so the final file the operator runs is guaranteed
+   to use the clean launcher. Emit ``start_browser`` directly so your
+   script matches what the operator will see on disk.
 
 1. Wrap all work in ``async def main():`` and run it with
    ``asyncio.run(main())``. The top-level driver file must look like
    this exactly::
 
       import asyncio
-      import zendriver as zd
 
       async def main():
-          browser = await zd.start(headless=False)
-          try:
-              tab = browser.main_tab
-              await prepare_page_wait(tab)
-              await tab.get("<url>")
-              await wait_for_page_ready(tab)
-              await browser.stop()
+          browser = await start_browser(headless=False)
+          tab = browser.main_tab
+          await prepare_page_wait(tab)
+          await tab.get("<url>")
+          await wait_for_page_ready(tab)
+          # ... your scraping logic ...
+          await browser.stop()
 
       if __name__ == "__main__":
           asyncio.run(main())
@@ -260,22 +334,39 @@ Script rules (HARD — every script you emit MUST follow these):
    ``urllib3`` or any other HTTP library for page navigation or
    API interaction. All fetching, navigation and API calls go
    through ``tab.get(url)`` and, when a page needs to hit an
-   XHR/fetch endpoint, through
-   ``await tab.evaluate('await fetch(...)')`` inside the browser
-   context.
+  EXCEPTION — PDF downloads. When the task requires downloading
+  PDF files, you MUST first call the ``download_pdf`` tool with a
+  representative PDF URL to PROBE which strategy works:
 
-   EXCEPTION — PDF downloads. When the task requires downloading
-   PDF files, the script MUST use ``curl_cffi`` (not zendriver,
-   which renders PDFs as a viewer page instead of downloading
-   them). The download must:
-   - ``from curl_cffi import AsyncSession``
-   - use ``impersonate="chrome"`` to match the browser's TLS fingerprint
-   - share the browser's cookies by extracting them via CDP before
-     downloading:
-     ``cookies = await tab.send(network.get_cookies([url]))`` then
-     build a ``{c.name: c.value for c in cookies}`` dict
-   - save the PDF to disk with ``open(path, "wb").write(r.content)``
-   - list ``curl_cffi`` in the ``dependencies`` field
+    - If the probe SUCCEEDS (curl_cffi can download), set
+      ``pdf_download_strategy="curl_cffi"`` and use the vendored
+      ``download_pdf_curl_cffi(url, save_path, tab)`` helper in
+      the script. Pass ``tab`` so cookies from the browser session
+      are shared. This is faster and doesn't need the browser
+      for the download itself.
+
+    - If the probe FAILS (HTTP 403/401/empty — the site is behind
+      Cloudflare/Akamai WAF), set
+      ``pdf_download_strategy="browser_fetch"`` and use the
+      vendored ``download_pdf_browser(tab, url, save_path)``
+      helper. This routes the download through Chrome's native
+      ``fetch()`` via ``tab.evaluate()``, carrying the same TLS
+      fingerprint, cookies, and JS challenge clearance as the
+      active browser session. The tab MUST have navigated to the
+      target domain first so any challenge is cleared.
+
+  NEVER use ``zendriver`` (``tab.get``) to download PDFs — it
+  renders them as a viewer page instead of downloading them.
+  NEVER use ``requests``, ``httpx``, ``aiohttp``, ``urllib`` or
+  any other HTTP library — only the two vendored helpers above.
+  Call the chosen helper for each download (wrap in
+  ``try / except RuntimeError as e`` to keep going after a
+  failure):
+
+      # curl_cffi strategy
+      await download_pdf_curl_cffi(pdf_url, save_path, tab)
+      # — or — browser_fetch strategy
+      await download_pdf_browser(tab, pdf_url, save_path)
 
 9. ``tab.evaluate`` return types — when you call
    ``tab.evaluate('(...) => { ... return obj; }')`` the return

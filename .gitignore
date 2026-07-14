@@ -220,3 +220,4 @@ __marimo__/
 /data/
 .mise.local.toml
 /models/
+/src/browser_agent/drivers/human_challenge.py

@@ -9,16 +9,24 @@ from browser_agent.use_cases.agent_deps import AgentDeps
 
 
 async def download_pdf(ctx: RunContext[AgentDeps], request: DownloadPdfRequest) -> str:
-    """Download a PDF file from ``request.url`` using the browser's cookies.
+    """Test-download a PDF from ``request.url`` using curl_cffi (Chrome TLS impersonation).
 
-    Uses curl_cffi with Chrome TLS fingerprint impersonation and shares
-    cookies from the active browser session, so it can fetch PDFs behind
-    login walls or anti-bot protection. Returns metadata (saved path,
-    file size, content type) — NOT the file content.
+    This is a PROBE: it tells you whether the site's PDFs can be
+    downloaded with ``curl_cffi`` (fast, no browser needed in the
+    final script) or whether the site blocks non-browser HTTP
+    clients (Cloudflare/Akamai WAF), in which case the final script
+    must use ``download_pdf_browser(tab, url, save_path)`` instead.
 
-    Use this when the task involves downloading PDF documents. The
-    browser session's cookies are shared automatically, so the download
-    works for authenticated or anti-bot-protected URLs.
+    Shares cookies from the active browser session. Returns metadata
+    (saved path, file size, content type) — NOT the file content.
+
+    Decision rule:
+      - SUCCESS → set ``pdf_download_strategy="curl_cffi"``; the
+        final script uses ``download_pdf_curl_cffi(url, save_path,
+        tab)``.
+      - FAILED (HTTP 403/401/empty) → set
+        ``pdf_download_strategy="browser_fetch"``; the final script
+        uses ``download_pdf_browser(tab, url, save_path)``.
 
     Parameters:
       url       — direct URL to the PDF file.

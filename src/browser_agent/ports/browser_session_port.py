@@ -52,5 +52,17 @@ class BrowserSessionPort(ABC):
         Each dict has keys: name, value, domain, path, expires, http_only,
         secure, same_site. When ``urls`` is None, returns cookies for the
         current page URL. Used by the download tool to share the browser's
-        auth/anti-bot cookies with curl_cffi.
+        auth/anti-bot session context.
+        """
+
+    @abstractmethod
+    async def new_tab(self) -> Any:
+        """Open a fresh tab in the same browser window and return it.
+
+        Used by the in-process validation runner to give the
+        LLM's emitted script its own tab without spawning a new
+        Chromium. The returned object is whatever the underlying
+        driver exposes (``zendriver.Tab`` for the default
+        adapter); callers MUST NOT cache it across calls — the
+        session is free to recycle the underlying browser.
         """

@@ -36,6 +36,19 @@ class GeneratedScript(BaseModel):
             "as a standalone file."
         ),
     )
+    pdf_download_strategy: str = Field(
+        default="browser_fetch",
+        description=(
+            "Which PDF download strategy the final script uses: "
+            '"curl_cffi" (faster, uses Chrome TLS impersonation via '
+            "curl_cffi; works for sites without JS-challenge anti-bot) "
+            'or "browser_fetch" (uses the browser native fetch() via '
+            "tab.evaluate; bypasses Cloudflare/Akamai). Set by testing "
+            "the download_pdf tool during exploration — if curl_cffi "
+            "succeeds use it; if it fails with HTTP 403 or similar, "
+            'fall back to "browser_fetch".'
+        ),
+    )
 
     def dependency_names(self) -> list[str]:
         """Return the list of pip package names, de-duplicated and stripped."""

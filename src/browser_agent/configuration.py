@@ -21,13 +21,6 @@ MAX_VALIDATION_ATTEMPTS = 3
 # var to ``1`` / ``true`` for headless runs.
 ZENDRIVER_HEADLESS = os.environ.get("ZENDRIVER_HEADLESS", "false").lower() in {"1", "true", "yes"}
 
-# Anti-bot detection: extra Chrome args that suppress the automation
-# fingerprint (``navigator.webdriver``, ``cdc_`` variables, blink
-# automation flags). Sites like Cloudflare / reCAPTCHA check these.
-ZENDRIVER_STEALTH_ARGS = [
-    "--disable-blink-features=AutomationControlled",
-]
-
 # Hard probe timeout (seconds). The inspection tool bails out and
 # returns a truncated snippet if Chrome doesn't navigate inside this
 # window. Useful when the target is gated.

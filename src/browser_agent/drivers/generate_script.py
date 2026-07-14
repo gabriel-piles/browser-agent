@@ -24,15 +24,21 @@ from loguru import logger
 from browser_agent.adapters.browser.zendriver_browser_session import (
     ZendriverBrowserSession,
 )
-from browser_agent.adapters.execution.subprocess_script_runner_adapter import (
-    SubprocessScriptRunnerAdapter,
+from browser_agent.adapters.execution.in_process_script_runner_adapter import (
+    InProcessScriptRunnerAdapter,
 )
 from browser_agent.adapters.execution.curl_cffi_pdf_downloader_adapter import (
     CurlCffiPdfDownloaderAdapter,
 )
 from browser_agent.adapters.llm.ollama_adapter import OllamaAdapter
+from browser_agent.adapters.emitted_clean_launch import (
+    with_emitted_clean_launch,
+    with_emitted_inject_profile_path,
+    with_emitted_normalize_launch,
+)
 from browser_agent.adapters.emitted_page_wait import with_emitted_page_wait
 from browser_agent.adapters.emitted_save_record import with_emitted_save_record
+from browser_agent.adapters.emitted_pdf_download import with_emitted_pdf_download
 from browser_agent.configuration import ZENDRIVER_HEADLESS, PROJECT_ROOT
 from browser_agent.adapters.runs_config_loader import RunsConfigLoader
 from browser_agent.domain.code_generation_request import CodeGenerationRequest
@@ -75,19 +81,41 @@ async def _main(argv: list[str]) -> int:
 
 
 async def _generate(task: str, run_path: Path) -> GeneratedScript:
+    session = ZendriverBrowserSession(
+        headless=ZENDRIVER_HEADLESS,
+        user_data_dir=run_path / "profile",
+    )
     deps = AgentDeps(
         llm=OllamaAdapter(),
-        browser_session=ZendriverBrowserSession(headless=ZENDRIVER_HEADLESS),
-        script_runner=SubprocessScriptRunnerAdapter(),
+        browser_session=session,
+        script_runner=InProcessScriptRunnerAdapter(
+            browser_session=session,
+            metadata_db_path=run_path / "metadata.db",
+            task_slug=run_path.name,
+        ),
         pdf_downloader=CurlCffiPdfDownloaderAdapter(downloads_path=run_path / "downloads"),
     )
     return await GenerateZendriverScriptUseCase(deps).execute(CodeGenerationRequest(task=task))
 
 
 def _emit(task: str, script: GeneratedScript, run_path: Path) -> None:
-    script_path = _script_path(task, run_path)
-    final_code = with_emitted_page_wait(script.python_code)
+    # Step 1 — Rewrite any ``zd.start(...)`` the LLM emitted to ``start_browser(...)``.
+    # Without this the final script would pass ~22 automation-flagging Chrome args
+    # that trigger anti-bot checks (the in-process validation runner hides this by
+    # shimming ``zendriver.start`` to share the agent's tab).
+    final_code = with_emitted_normalize_launch(script.python_code)
+    # Step 2 — Inject the agent's exploration profile path so the emitted script
+    # reuses the same warm profile directory (cookies, clearance tokens, local state
+    # that the agent built up during live exploration).  A fresh empty profile is a
+    # strong signal for Cloudflare / anti-bot; reusing the warm profile eliminates
+    # the difference between the agent's browser and the emitted script's browser.
+    profile_path = str((run_path / "profile").resolve())
+    final_code = with_emitted_inject_profile_path(final_code, profile_path)
+    # Step 3 — Prepend the vendored helper definitions (they must appear before the
+    # LLM's code so forward references resolve).
     final_code = with_emitted_save_record(final_code)
+    final_code = with_emitted_pdf_download(final_code, script.pdf_download_strategy)
+    script_path = _script_path(task, run_path)
     script_path.write_text(final_code, encoding="utf-8")
     payload = script.model_dump()
     payload["script_path"] = str(script_path)
