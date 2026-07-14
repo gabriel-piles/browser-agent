@@ -128,43 +128,21 @@ async def download_pdf_curl_cffi(url, save_path, tab=None):
 # ──────────────────────────────────────────────────────────────────
 EMITTED_BROWSER_FETCH_BLOCK = '''\
 # ── BEGIN emitted browser-fetch pdf-download helper (vendored from browser_agent) ──
+import asyncio
 import base64
 import json
 from pathlib import Path
 
 _PDF_DOWNLOAD_TIMEOUT_S = 90.0
+_PDF_DOWNLOAD_RETRIES = 3
+_PDF_DOWNLOAD_RETRY_DELAY_S = 1.5
 
 
-async def download_pdf_browser(tab, url, save_path):
-    """Download ``url`` to ``save_path`` via the browser's native ``fetch()``.
-
-    Uses ``tab.evaluate()`` + the browser's ``fetch()`` from the current
-    page context so the request goes through Chrome's real network stack
-    (TLS fingerprint, headers, cookies, JS challenge clearance).  This
-    bypasses Cloudflare / Akamai anti-bot that blocks non-browser HTTP
-    clients.
-
-    HTTP URLs are automatically upgraded to HTTPS to avoid mixed-content
-    blocking when the current page is served over HTTPS.
-
-    The tab MUST have already navigated to the target domain so the
-    Cloudflare challenge is cleared before calling this function.
-
-    Returns the file size in bytes.  Raises ``RuntimeError`` on failure.
-    """
-    import asyncio
-
-    save_path = Path(save_path)
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if url.startswith("http://"):
-        url = "https://" + url[7:]
-
-    escaped = json.dumps(url)
-
+async def _fetch_pdf_once(tab, url):
+    """Single attempt: fetch ``url`` in ``tab``, return base64 body or raise RuntimeError."""
     js = (
         f"(async () => {{\\n"
-        f"  const r = await fetch({escaped}, {{ credentials: 'include' }});\\n"
+        f"  const r = await fetch({json.dumps(url)}, {{ credentials: 'include' }});\\n"
         f"  if (!r.ok) throw new Error('HTTP ' + r.status);\\n"
         f"  const blob = await r.blob();\\n"
         f"  return await new Promise((res, rej) => {{\\n"
@@ -175,21 +153,83 @@ async def download_pdf_browser(tab, url, save_path):
         f"  }});\\n"
         f"}})()"
     )
-
     try:
-        result = await asyncio.wait_for(
+        return await asyncio.wait_for(
             tab.evaluate(js, await_promise=True),
             timeout=_PDF_DOWNLOAD_TIMEOUT_S,
         )
-    except asyncio.TimeoutError:
-        raise RuntimeError(f"download timed out for {url}")
+    except asyncio.TimeoutError as exc:
+        raise RuntimeError(f"download timed out for {url}") from exc
+    except Exception as exc:
+        # zendriver wraps JS-side fetch failures (e.g. Cloudflare
+        # re-challenges, network resets) as ProtocolException with
+        # "TypeError: Failed to fetch" in the message. Convert to
+        # RuntimeError so the caller can retry/handle uniformly.
+        raise RuntimeError(f"fetch failed for {url}: {exc}") from exc
 
-    if not result:
+
+async def _try_browser_fetch(tab, url, save_path):
+    """Retry the browser fetch, return file size, raise RuntimeError on final failure."""
+    last_exc = None
+    for attempt in range(1, _PDF_DOWNLOAD_RETRIES + 1):
+        try:
+            result = await _fetch_pdf_once(tab, url)
+            if not result:
+                raise RuntimeError(f"empty response for {url}")
+            save_path.write_bytes(base64.b64decode(result))
+            return save_path.stat().st_size
+        except RuntimeError as exc:
+            last_exc = exc
+            if attempt < _PDF_DOWNLOAD_RETRIES:
+                await asyncio.sleep(_PDF_DOWNLOAD_RETRY_DELAY_S * attempt)
+    raise last_exc
+
+
+async def _try_curl_cffi(url, save_path):
+    """Fallback: download via curl_cffi with Chrome TLS impersonation."""
+    try:
+        from curl_cffi import AsyncSession
+    except ImportError as exc:
+        raise RuntimeError(f"curl_cffi not available for {url}") from exc
+    try:
+        async with AsyncSession() as s:
+            r = await s.get(url, impersonate="chrome", timeout=60.0)
+    except Exception as exc:
+        raise RuntimeError(f"curl_cffi request failed for {url}: {exc}") from exc
+    if r.status_code >= 400:
+        raise RuntimeError(f"HTTP {r.status_code} for {url}")
+    if not r.content:
         raise RuntimeError(f"empty response for {url}")
+    save_path.write_bytes(r.content)
+    return len(r.content)
 
-    body = base64.b64decode(result)
-    save_path.write_bytes(body)
-    return len(body)
+
+async def download_pdf_browser(tab, url, save_path):
+    """Download ``url`` to ``save_path``.
+
+    Primary: the browser's native ``fetch()`` from the current tab,
+    which routes through Chrome's real network stack (TLS fingerprint,
+    cookies, JS challenge clearance) and bypasses Cloudflare /
+    Akamai anti-bot.  Retries on transient failures.
+
+    Fallback: ``curl_cffi`` with Chrome TLS impersonation for
+    cross-origin URLs where the in-tab fetch is blocked by the
+    page's CSP / CORS.
+
+    HTTP URLs are upgraded to HTTPS to avoid mixed-content blocking.
+
+    Returns the file size in bytes.  Raises ``RuntimeError`` if both
+    strategies fail.
+    """
+    if url.startswith("http://"):
+        url = "https://" + url[7:]
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        return await _try_browser_fetch(tab, url, save_path)
+    except RuntimeError:
+        pass
+    return await _try_curl_cffi(url, save_path)
 # ── END emitted browser-fetch pdf-download helper ──
 
 '''
