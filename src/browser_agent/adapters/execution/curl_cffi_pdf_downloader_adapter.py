@@ -10,8 +10,7 @@ from browser_agent.configuration import PROJECT_ROOT
 from browser_agent.domain.download_result import DownloadResult
 from browser_agent.ports.pdf_downloader_port import PdfDownloaderPort
 
-DOWNLOADS_PATH = PROJECT_ROOT / "data" / "downloads"
-DOWNLOADS_PATH.mkdir(parents=True, exist_ok=True)
+_DEFAULT_DOWNLOADS_PATH = PROJECT_ROOT / "data" / "downloads"
 
 _IMPERSONATE = "chrome"
 _TIMEOUT_S = 60.0
@@ -20,6 +19,10 @@ _MAX_SIZE_BYTES = 100 * 1024 * 1024
 
 class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
     """Downloads PDFs via curl_cffi with Chrome TLS fingerprint impersonation."""
+
+    def __init__(self, downloads_path: Path = _DEFAULT_DOWNLOADS_PATH) -> None:
+        self._downloads_path = downloads_path
+        self._downloads_path.mkdir(parents=True, exist_ok=True)
 
     async def download(
         self,
@@ -60,15 +63,14 @@ class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
             return {}
         return {c["name"]: c["value"] for c in cookies if c.get("name") and c.get("value")}
 
-    @staticmethod
-    def _resolve_save_path(save_path: str | None, url: str) -> Path:
+    def _resolve_save_path(self, save_path: str | None, url: str) -> Path:
         """Derive a safe filename, stripping any directory components."""
         if save_path:
-            return DOWNLOADS_PATH / Path(save_path).name
+            return self._downloads_path / Path(save_path).name
         tail = url.rstrip("/").split("/")[-1]
         if "." in tail and not tail.startswith("?"):
-            return DOWNLOADS_PATH / Path(tail).name
-        return DOWNLOADS_PATH / f"download_{int(time.time())}.pdf"
+            return self._downloads_path / Path(tail).name
+        return self._downloads_path / f"download_{int(time.time())}.pdf"
 
     @staticmethod
     def _validate_response(r: Any, body_len: int) -> str:

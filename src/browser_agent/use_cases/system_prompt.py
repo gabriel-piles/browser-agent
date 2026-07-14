@@ -59,6 +59,12 @@ have explored the page.
       their CSS selectors.
     - The pagination or "load more" mechanism (scroll, button, etc.).
     - Any dynamically loaded content indicators.
+    - If the page shows a verification/challenge (Cloudflare,
+      reCAPTCHA, "checking your browser"), wait 10 seconds with
+      action="wait" and then extract again. The browser has stealth
+      patches applied — most challenges resolve automatically. If the
+      challenge persists, wait once more. Do NOT try to solve
+      captchas manually.
 
   Step 2 — EXTRACT. Call explore_page with action="extract" and a CSS
   selector for the links/elements you need. This returns the matched

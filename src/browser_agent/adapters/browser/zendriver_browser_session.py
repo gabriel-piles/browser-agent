@@ -34,6 +34,7 @@ from browser_agent.configuration import (
     PAGE_LOAD_NETWORK_QUIET_WINDOW_MS,
     PAGE_LOAD_TIMEOUT_SECONDS,
     PAGE_LOAD_WAIT_UNTIL,
+    ZENDRIVER_STEALTH_ARGS,
 )
 from browser_agent.domain.html_snippet import HtmlSnippet
 from browser_agent.domain.page_action import PageAction
@@ -46,6 +47,13 @@ _apply_zendriver_patch()
 _DEFAULT_SETTLE_SECONDS = 3.0
 _DEFAULT_WAIT_SECONDS = 1.0
 _EXTRACT_MAX_ELEMENTS = 50
+
+_STEALTH_JS = """
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+window.chrome = {runtime: {}};
+"""
 
 
 class ZendriverBrowserSession(BrowserSessionPort):
@@ -61,12 +69,19 @@ class ZendriverBrowserSession(BrowserSessionPort):
         if self._browser is not None:
             return
         logger.info("starting zendriver browser (headless={})", self._headless)
-        self._browser = await zd.start(headless=self._headless)
+        self._browser = await zd.start(headless=self._headless, browser_args=ZENDRIVER_STEALTH_ARGS)
         self._tab = self._browser.main_tab
         if self._tab is None:
             raise RuntimeError("zendriver started without a main tab")
+        await self._inject_stealth()
         self._tracker = CdpPageTracker(self._tab)
         await self._tracker.attach()
+
+    async def _inject_stealth(self) -> None:
+        """Inject JS to mask automation fingerprint on every new document."""
+        from zendriver.cdp import page
+
+        await self._tab.send(page.add_script_to_evaluate_on_new_document(source=_STEALTH_JS))
 
     async def close(self) -> None:
         browser = self._browser

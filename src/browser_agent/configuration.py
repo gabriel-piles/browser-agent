@@ -6,19 +6,27 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 OLLAMA_BASE_URL = "https://ollama.com/v1"
 ORCHESTRATOR_MODEL = "deepseek-v4-flash:cloud"
 
-# Where the generated scripts are persisted by the driver.
-SCRIPTS_PATH = PROJECT_ROOT / "data" / "scripts"
-METADATA_DB_PATH = PROJECT_ROOT / "data" / "metadata.db"
-PROMPT_FILE = PROJECT_ROOT / "data" / "prompt.txt"
+# YAML file that defines every run: ``active_run`` (the name to
+# execute) plus a list of ``runs`` each with ``name`` and ``prompt``.
+RUNS_FILE = PROJECT_ROOT / "data" / "runs.yaml"
+# Per-run root: scripts, downloads and metadata.db all live under
+# ``data/runs/<active_run>/``.
+RUNS_PATH = PROJECT_ROOT / "data" / "runs"
 
 MAX_LLM_CALLS = 25
 MAX_VALIDATION_ATTEMPTS = 3
 
-SCRIPTS_PATH.mkdir(parents=True, exist_ok=True)
 # ``headless`` defaults to False — the operator can watch Chrome
 # navigate during inspection and the generated script. Set the env
 # var to ``1`` / ``true`` for headless runs.
 ZENDRIVER_HEADLESS = os.environ.get("ZENDRIVER_HEADLESS", "false").lower() in {"1", "true", "yes"}
+
+# Anti-bot detection: extra Chrome args that suppress the automation
+# fingerprint (``navigator.webdriver``, ``cdc_`` variables, blink
+# automation flags). Sites like Cloudflare / reCAPTCHA check these.
+ZENDRIVER_STEALTH_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+]
 
 # Hard probe timeout (seconds). The inspection tool bails out and
 # returns a truncated snippet if Chrome doesn't navigate inside this
