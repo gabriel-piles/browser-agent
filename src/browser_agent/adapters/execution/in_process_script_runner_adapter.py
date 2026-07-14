@@ -164,14 +164,30 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
         not kill the agent's session. All other browser attributes
         are passed through to the real browser so the LLM's
         ``browser.get(url, new_tab=True)`` etc. still work.
+
+        When a metadata DB path is configured, this namespace also
+        carries ``_SAVE_RECORD_DB_PATH`` and ``_SAVE_RECORD_TASK_SLUG``
+        so the vendored save-record helper writes to the runner's
+        ``metadata.db`` instead of deriving a path from ``__file__``.
+        ``__file__`` itself points inside the runner's ``scripts/``
+        directory so any fall-back path resolution stays inside the
+        runner folder.
         """
         real_browser = _unwrap_browser(self._session)
         wrapper = _ValidationBrowser(real_browser, tab)
         ns: dict[str, Any] = {
             "__name__": "__validation__",
-            "__file__": str(self._metadata_db_path.parent / "validation.py") if self._metadata_db_path else "<validation>",
             "asyncio": asyncio,
         }
+        if self._metadata_db_path is not None:
+            run_path = self._metadata_db_path.parent
+            scripts_dir = run_path / "scripts"
+            scripts_dir.mkdir(parents=True, exist_ok=True)
+            ns["__file__"] = str(scripts_dir / "validation.py")
+            ns["_SAVE_RECORD_DB_PATH"] = str(self._metadata_db_path)
+            ns["_SAVE_RECORD_TASK_SLUG"] = self._task_slug
+        else:
+            ns["__file__"] = "<validation>"
         ns["start_browser"] = _build_start_browser(wrapper)
         return ns
 

@@ -138,7 +138,18 @@ have explored the page.
   Step 9 — EMIT THE FINAL SCRIPT. Only after a validation script
   succeeds, produce the final GeneratedScript with the full
   data-collection logic. Use the exact same selectors and patterns
-  that the validation script proved working.
+  that the validation script proved working. The final script is
+  the deliverable; it MUST be self-contained and match the vendored
+  helper signatures described in rule 0. The operator will run it
+  directly with ``python <file>``.
+
+  Step 10 — SELF-TEST THE EMITTED SCRIPT (implicit). The framework
+  runs the final script in a separate subprocess for a short window
+  before declaring success. You do not need to do anything extra,
+  but you MUST keep the final script self-contained and safe: it will
+  be started in the same virtualenv, so it can import zendriver,
+  asyncio, and any helpers it defines itself, but it cannot import
+  files from this codebase.
 
 Output contract — your reply MUST be a single JSON object with:
 
@@ -307,6 +318,55 @@ Script rules (HARD — every script you emit MUST follow these):
    or None. Use ``getattr(element, "text", None) or ""`` rather
    than bare ``.text``.
 
+4a. Element handle API — the objects returned by ``tab.query_selector``,
+   ``tab.query_selector_all``, and ``row.query_selector`` are zendriver
+   element handles, NOT Playwright elements. They expose:
+
+      ``await el.text``           — element text content (coroutine/property)
+      ``el.attrs.get("href")``    — dict of element attributes
+      ``el.get_attribute("href")`` — fallback attribute read (async or sync,
+                                     depending on the runtime version)
+
+   Because the helper library may return different handle types in
+   different contexts, always defensively try the most common APIs. A safe
+   helper pattern for reading text is:
+
+      async def get_text(el):
+          if el is None:
+              return ""
+          if hasattr(el, "text"):
+              value = el.text
+              if asyncio.iscoroutine(value):
+                  value = await value
+              return (value or "").strip()
+          return ""
+
+   A safe helper pattern for reading an attribute is:
+
+      async def get_attr(el, name):
+          if el is None:
+              return ""
+          # 1) dict-style attrs (sync)
+          attrs = getattr(el, "attrs", None)
+          if attrs and name in attrs:
+              return (attrs[name] or "").strip()
+          # 2) get_attribute method (may be sync or async)
+          getter = getattr(el, "get_attribute", None)
+          if getter is not None:
+              value = getter(name)
+              if value is None:
+                  return ""
+              if asyncio.iscoroutine(value):
+                  value = await value
+              return (value or "").strip()
+          return ""
+
+   NEVER call ``await el.text_content()`` or ``await el.get_attribute(...)``
+   directly without first checking that the method exists and is callable.
+   If you use those names, verify the call succeeds in the validation
+   script; otherwise the final script will crash with ``TypeError`` on the
+   element handle.
+
 5. The script MUST be self-contained: no imports from this
    project, no relative file paths, no environment variables it
    does not itself define. The only external dependency you can
@@ -403,6 +463,20 @@ Script rules (HARD — every script you emit MUST follow these):
     crash-resilient: if it dies at page 3000, the first 2999 records
     are already in SQLite. The validation script SHOULD also call
     save_record at least once to verify persistence works end-to-end.
+
+12. Output paths — When you create a directory for downloaded files or
+    any other output, compute the path relative to the script file's own
+    location so it resolves to the *run* directory, not inside ``scripts/``.
+    Use the same pattern the vendored ``save_record`` helper uses::
+
+        from pathlib import Path
+        out_dir = Path(__file__).resolve().parent.parent / "downloads"
+        os.makedirs(out_dir, exist_ok=True)
+
+    This guarantees files land in ``<run>/downloads/`` rather than
+    ``<run>/scripts/downloads/``. NEVER use a bare relative path like
+    ``"downloads"`` — it breaks when the operator runs the script from
+    the ``scripts/`` directory.
 
 Remember: explore the page first (navigate → extract → click filter
 → scroll → extract again), then write ONE validation script that

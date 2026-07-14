@@ -12,11 +12,18 @@ pattern.
 The helper writes one row per page to a fixed-schema ``metadata`` table.
 ``INSERT OR REPLACE`` keyed on ``source_url`` makes the scraper
 crash-resilient (records saved incrementally) and idempotent on re-runs
-(no duplicates). For the final emitted script the DB path and task
-slug are computed from ``__file__`` at runtime; the in-process
-validation runner injects them as ``_SAVE_RECORD_DB_PATH`` /
-``_SAVE_RECORD_TASK_SLUG`` globals so validation writes land in the
-same SQLite file the final script uses.
+(no duplicates).
+
+Path resolution:
+
+* For final scripts the DB path and task slug are computed from
+  ``__file__`` at runtime. Because final scripts live under
+  ``data/runs/<run>/scripts/``, resolving ``.. / .. / metadata.db``
+  lands inside the runner folder.
+* The in-process validation runner injects ``_SAVE_RECORD_DB_PATH`` /
+  ``_SAVE_RECORD_TASK_SLUG`` globals before executing the helper, so
+  validation writes land in the same SQLite file the final script uses
+  and never leak a database outside the runner folder.
 """
 
 from __future__ import annotations
@@ -48,12 +55,18 @@ import json
 import datetime
 from pathlib import Path
 
-_SAVE_RECORD_DB_PATH = str(Path(__file__).resolve().parent.parent / "metadata.db")
-try:
-    open(_SAVE_RECORD_DB_PATH, "a").close()
-except OSError:
-    _SAVE_RECORD_DB_PATH = str(Path(__file__).resolve().parent / "metadata.db")
-_SAVE_RECORD_TASK_SLUG = Path(__file__).resolve().stem
+# The in-process validation runner injects these globals so the
+# metadata database is always written inside the runner folder. When
+# they are not present, this is a standalone final script and we fall
+# back to a path derived from its location under ``<run>/scripts/``.
+if "_SAVE_RECORD_DB_PATH" not in globals():
+    _SAVE_RECORD_DB_PATH = str(Path(__file__).resolve().parent.parent / "metadata.db")
+    try:
+        open(_SAVE_RECORD_DB_PATH, "a").close()
+    except OSError:
+        _SAVE_RECORD_DB_PATH = str(Path(__file__).resolve().parent / "metadata.db")
+if "_SAVE_RECORD_TASK_SLUG" not in globals():
+    _SAVE_RECORD_TASK_SLUG = Path(__file__).resolve().stem
 
 
 def save_record(source_url: str, data: dict) -> None:

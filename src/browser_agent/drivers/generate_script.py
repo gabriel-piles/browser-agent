@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import subprocess
 import sys
 import datetime
 from pathlib import Path
@@ -70,13 +72,59 @@ def _script_path(task: str, run_path: Path) -> Path:
     return scripts_dir / f"{today}__{slug}.py"
 
 
+_SMOKE_TIMEOUT_S = 20.0
+
+
+async def _smoke_run(script_path: Path) -> None:
+    """Run the emitted script standalone for a short window and surface errors.
+
+    The in-process validation runner shares the agent's browser and shims
+    ``import zendriver`` / ``start_browser()``, so it can hide integration
+    mistakes in the final file.  This gate starts the script as the operator
+    will run it (``python <file>`` in the project's virtualenv) and lets it
+    execute for up to ``_SMOKE_TIMEOUT_S`` seconds.  If the script exits
+    non-zero or the timeout fires, we log the captured output and raise so the
+    caller knows the deliverable is broken before the operator discovers it.
+    """
+    venv_python = Path(sys.executable)
+    logger.info(
+        "smoke-running emitted script for up to {timeout}s: {path} (python={py})",
+        timeout=_SMOKE_TIMEOUT_S,
+        path=script_path,
+        py=venv_python,
+    )
+    # Inherit the current environment so the venv's site-packages and any
+    # project-level env vars are available to the subprocess.
+    proc = await asyncio.create_subprocess_exec(
+        str(venv_python),
+        str(script_path),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        cwd=str(script_path.parent),
+        env=os.environ.copy(),
+    )
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_SMOKE_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        proc.kill()
+        stdout, _ = await proc.communicate()
+        logger.warning("smoke-run timed out after {timeout}s (script still running)", timeout=_SMOKE_TIMEOUT_S)
+        return
+    output = stdout.decode("utf-8", errors="replace") if stdout else ""
+    if proc.returncode != 0:
+        logger.error("smoke-run failed for {path}\n{output}", path=script_path, output=output)
+        raise RuntimeError(f"Emitted script failed during smoke run (exit_code={proc.returncode}): {script_path}\n{output}")
+    logger.info("smoke-run succeeded for {path}", path=script_path)
+
+
 async def _main(argv: list[str]) -> int:
     run = RunsConfigLoader.load_active()
     run_path = RunsConfigLoader.load_active_path()
     task = _read_task(argv, run.prompt)
     logger.info("driver received task tokens={n} run={run}", n=len(task) // 4, run=run.name)
     script = await _generate(task, run_path)
-    _emit(task, script, run_path)
+    script_path = _emit(task, script, run_path)
+    await _smoke_run(script_path)
     return 0
 
 
@@ -98,7 +146,7 @@ async def _generate(task: str, run_path: Path) -> GeneratedScript:
     return await GenerateZendriverScriptUseCase(deps).execute(CodeGenerationRequest(task=task))
 
 
-def _emit(task: str, script: GeneratedScript, run_path: Path) -> None:
+def _emit(task: str, script: GeneratedScript, run_path: Path) -> Path:
     # Step 1 — Rewrite any ``zd.start(...)`` the LLM emitted to ``start_browser(...)``.
     # Without this the final script would pass ~22 automation-flagging Chrome args
     # that trigger anti-bot checks (the in-process validation runner hides this by
@@ -113,6 +161,8 @@ def _emit(task: str, script: GeneratedScript, run_path: Path) -> None:
     final_code = with_emitted_inject_profile_path(final_code, profile_path)
     # Step 3 — Prepend the vendored helper definitions (they must appear before the
     # LLM's code so forward references resolve).
+    final_code = with_emitted_clean_launch(final_code)
+    final_code = with_emitted_page_wait(final_code)
     final_code = with_emitted_save_record(final_code)
     final_code = with_emitted_pdf_download(final_code, script.pdf_download_strategy)
     script_path = _script_path(task, run_path)
@@ -121,6 +171,7 @@ def _emit(task: str, script: GeneratedScript, run_path: Path) -> None:
     payload["script_path"] = str(script_path)
     payload["metadata_db_path"] = str(run_path / "metadata.db")
     print(json.dumps(payload, indent=2, ensure_ascii=False))
+    return script_path
 
 
 def main() -> None:
