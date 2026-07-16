@@ -1,6 +1,6 @@
 """The per-row outcome of running :class:`SyncToUwaziUseCase`.
 
-The :class:`ApplyResult` is what ``step_3_uwazi_apply.py`` prints at the
+The :class:`ApplyResult` is what ``step_3_upload_to_uwazi.py`` prints at the
 end of a run. Per-language counts give the operator a quick
 sanity check; ``skip_reasons`` and ``errors`` surface the rows the
 apply pipeline refused (or failed) to push, with a reason

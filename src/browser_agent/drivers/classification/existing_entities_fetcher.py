@@ -74,12 +74,36 @@ class ExistingEntitiesFetcher:
         return out
 
     def _scalar_from_metadata(self, raw) -> str | None:
-        """Coerce a Uwazi metadata value (dict|list|scalar) to a flat string, or ``None``."""
+        """Coerce a Uwazi metadata value (dict|list/scalar) to a flat string, or ``None``.
+
+        Four value shapes are recognised, walked in order:
+
+        * a bare scalar (``"abc"``, ``42``) — returned as-is;
+        * a ``{value: <x>}`` wrapper (the canonical post-validation
+          shape every property uses) — recurses into ``x``;
+        * a ``{value: {url, label}}`` wrapper around a link dict
+          (Uwazi stores link properties as ``[{value: {url, label}}]``,
+          the doubly-nested form the validator emits) — returns the
+          ``url``;
+        * a flat ``{url, label}`` link dict — returns the ``url``.
+
+        Lists are walked left-to-right and the first non-None
+        extraction wins. Returning ``None`` for an unrecognised shape
+        signals "no scalar key" so the caller can leave the row out
+        of the dedup index rather than pollute it with a useless key.
+        """
         if raw is None:
             return None
         if isinstance(raw, dict):
-            v = raw.get("value")
-            return str(v).strip() if v is not None else None
+            if "value" in raw:
+                inner = self._scalar_from_metadata(raw["value"])
+                if inner is not None:
+                    return inner
+                return None
+            url = raw.get("url")
+            if isinstance(url, str) and url.strip():
+                return url.strip()
+            return None
         if isinstance(raw, list):
             for item in raw:
                 v = self._scalar_from_metadata(item)

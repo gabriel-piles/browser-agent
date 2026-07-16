@@ -3,7 +3,7 @@
 Run this driver after :mod:`browser_agent.drivers.step_1_uwazi_propose`
 (or after hand-editing the mapping YAML) and before
 :mod:`browser_agent.drivers.step_3_uwazi_apply`. The driver takes
-the YAML mapping written by ``step_1_uwazi_propose.py``, the live
+the YAML mapping written by ``step_1_propose_mapping.py``, the live
 ``metadata.db`` rows for the active run, and the live Uwazi
 thesauri; it writes one :class:`ThesaurusMapping` YAML per
 thesaurus to ``data/runs/<active_run>/thesauri_mappings/``,
@@ -18,7 +18,7 @@ key, missing required property, missing PDF when ``upload_pdf``
 is true).
 
 The YAML files are human-editable: fix any LLM mistakes by
-hand before running ``step_3_uwazi_apply.py``.
+hand before running ``step_3_upload_to_uwazi.py``.
 """
 
 from __future__ import annotations
@@ -136,7 +136,7 @@ class MatchDriver:
                 mapping_default_language=context.mapping.default_language,
                 out_path=self._paths.default_thesaurus_path(thesaurus_name),
             )
-        print("\nDone. Review the YAML files in thesauri_mappings/ " "before running step_3_uwazi_apply.py.")
+        print("\nDone. Review the YAML files in thesauri_mappings/ " "before running step_3_upload_to_uwazi.py.")
 
     def _print_setup_summary(self, thesauri_count: int, field_count: int) -> None:
         """Print the one-line summary of the data the driver just loaded."""

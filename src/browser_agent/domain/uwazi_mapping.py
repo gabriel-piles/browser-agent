@@ -2,8 +2,8 @@
 
 This is the contract between ``browser-agent`` metadata rows and a
 specific Uwazi template. The :class:`UwaziMapping` is the only
-file ``step_3_uwazi_apply.py`` reads to push data; ``step_1_uwazi_propose.py``
-drafts it, a human reviews it, and ``step_2_uwazi_match.py`` adds
+file ``step_3_upload_to_uwazi.py`` reads to push data; ``step_1_propose_mapping.py``
+drafts it, a human reviews it, and ``step_2_validate_data.py`` adds
 per-thesaurus value mappings that the apply step then uses to
 normalise select/multiselect columns.
 """
@@ -31,9 +31,15 @@ class UwaziMapping(BaseModel):
     identity: IdentityConfig = Field(default_factory=IdentityConfig)
     properties: tuple[MappedProperty, ...] = Field(
         default_factory=tuple,
-        description="The single list the operator edits: every target property on Uwazi plus how it is filled.",
+        description=(
+            "The single list the operator edits: every target property on Uwazi plus how it is filled. "
+            "The first entry (when the template declares a title) is the ``title`` common property "
+            "(type=TITLE); the apply step reads it as ``Entity.title`` and the metadata builder skips it."
+        ),
     )
-    skipped: tuple[SkippedField, ...] = Field(default_factory=tuple)
+
+    skipped: tuple[SkippedField, ...] = Field(default_factory=tuple, description="Catalog fields the LLM declined to map.")
+
     publish: bool = Field(default=False, description="Whether to publish created entities (vs leave them as drafts).")
     upload_pdf: bool = Field(default=False, description="Whether to attach the local PDF file when one exists.")
 

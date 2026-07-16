@@ -1,7 +1,7 @@
 """One thesaurus mapping: thesaurus id + every entry for it.
 
-Written by ``step_2_uwazi_match.py`` to ``data/runs/<run>/thesauri_mappings/<name>.yaml``;
-read by ``step_3_uwazi_apply.py`` to substitute crawl values with their
+Written by ``step_2_validate_data.py`` to ``data/runs/<run>/thesauri_mappings/<name>.yaml``;
+read by ``step_3_upload_to_uwazi.py`` to substitute crawl values with their
 canonical Uwazi thesaurus values before pushing.
 """
 

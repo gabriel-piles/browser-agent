@@ -38,7 +38,7 @@ class ProposeConsole:
         """Print the full mapping summary, then the next-step hint."""
         print(f"\nDraft mapping written to {self._mapping_path}")
         self._print_body(mapping)
-        print("\nNext: review the YAML, then run step_2_uwazi_match.py " "and step_3_uwazi_apply.py.")
+        print("\nNext: review the YAML, then run step_2_validate_data.py " "and step_3_upload_to_uwazi.py.")
 
     def _print_body(self, mapping: UwaziMapping) -> None:
         """Print counts, skipped entries, and the identity block."""

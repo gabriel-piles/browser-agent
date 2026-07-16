@@ -5,9 +5,12 @@ live Uwazi template property metadata (``name``, ``label``, ``type``,
 ``required``, ``thesaurus_id``) plus the mapping-specific choices
 (``source``, ``thesaurus``, ``parse_formats``, ``default_value``, ``notes``).
 
-Special ``name`` values:
-- ``title`` maps a source field to the Uwazi entity title.
-- ``file`` maps a source field or PDF to the entity's primary file.
+Special ``type`` values that are NOT part of ``Entity.metadata``:
+- ``title`` (``FieldType.TITLE``) targets the Uwazi entity title. The
+  apply step sends the value as ``Entity.title``; the metadata blob
+  builder skips it. The ``name`` is always ``"title"`` for these
+  entries (it matches the template's ``title`` common property).
+- ``file`` (``FieldType.FILE``) targets the entity's primary file.
 """
 
 from __future__ import annotations

@@ -32,6 +32,10 @@ class SyncPlanRow(BaseModel):
         default=None, description="The key used to find/create the entity (e.g. URL path placeholder value)."
     )
     mapping_sha256: str = Field(default="", description="Mapping SHA at plan time, for drift detection.")
+    skip_reason: str | None = Field(
+        default=None,
+        description="Why the plan chose to skip this row (e.g. 'already_on_uwazi', 'no_local_pdf').",
+    )
 
 
 class SyncPlan(BaseModel):

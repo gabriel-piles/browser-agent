@@ -54,45 +54,75 @@ def to_property(schema) -> UwaziProperty:
 
 
 def to_template(library_template) -> UwaziTemplate:
-    """Convert a ``uwazi_api.Template`` to a :class:`UwaziTemplate`."""
+    """Convert a ``uwazi_api.Template`` to a :class:`UwaziTemplate`.
+
+    Domain-specific properties land in :attr:`UwaziTemplate.properties`;
+    the ``title`` common property is exposed separately on
+    :attr:`UwaziTemplate.title` (other common properties like
+    ``creationDate`` and ``editDate`` stay filtered out because
+    the mapping layer never touches them).
+    """
     properties = tuple(to_property(prop) for prop in library_template.properties if not prop.isCommonProperty)
+    title_prop = next(
+        (to_property(p) for p in library_template.common_properties if p.name == "title"),
+        None,
+    )
     return UwaziTemplate(
         name=library_template.name,
         template_id=library_template.id,
         properties=properties,
+        title=title_prop,
         default_language="en",
     )
 
 
-def _flatten_thesauri_values(values) -> tuple[str, ...]:
-    """Collect leaf labels from a nested ``ThesauriValue`` tree."""
+def _collect_leaves(values) -> tuple[str, ...]:
+    """Collect leaf labels (no children) from a nested ``ThesauriValue`` tree, DFS order."""
     out: list[str] = []
     stack = list(values or ())
     while stack:
         v = stack.pop()
         if v.values:
             stack.extend(v.values)
+        else:
+            out.append(v.label)
+    out.reverse()
+    return tuple(out)
+
+
+def _collect_all_labels(values) -> tuple[str, ...]:
+    """Collect every label (parents + leaves) from a nested tree, DFS order."""
+    out: list[str] = []
+    stack = list(values or ())
+    while stack:
+        v = stack.pop()
         out.append(v.label)
+        if v.values:
+            stack.extend(v.values)
+    out.reverse()
     return tuple(out)
 
 
 def _to_thesauri_tree(values) -> tuple[ThesauriValue, ...]:
-    """Convert a list of ``uwazi_api`` ThesauriValue to a tuple of :class:`ThesauriValue`."""
-    return tuple(
-        ThesauriValue(
-            label=v.label,
-            id=v.id,
-            values=tuple(ThesauriValue(label=vv.label, id=vv.id, values=tuple()) for vv in (v.values or ())),
+    """Recursively convert ``uwazi_api`` ThesauriValue to the domain tree, preserving depth."""
+
+    def convert(node) -> ThesauriValue:
+        return ThesauriValue(
+            label=node.label,
+            id=node.id,
+            values=tuple(convert(child) for child in (node.values or ())),
         )
-        for v in (values or ())
-    )
+
+    return tuple(convert(v) for v in (values or ()))
 
 
 def to_thesauri_snapshot(thesaurus) -> ThesauriSnapshot:
     """Convert a ``uwazi_api.Thesauri`` to a :class:`ThesauriSnapshot`."""
+    raw_values = thesaurus.values or ()
     return ThesauriSnapshot(
         thesaurus_id=thesaurus.id,
         name=thesaurus.name,
-        values=_flatten_thesauri_values(thesaurus.values or ()),
-        tree=_to_thesauri_tree(thesaurus.values or ()),
+        values=_collect_leaves(raw_values),
+        all_labels=_collect_all_labels(raw_values),
+        tree=_to_thesauri_tree(raw_values),
     )

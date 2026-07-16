@@ -1,6 +1,6 @@
 """One crawl-value -> Uwazi-value mapping for a single thesaurus.
 
-Written by ``step_2_uwazi_match.py``: each entry maps a value scraped from
+Written by ``step_2_validate_data.py``: each entry maps a value scraped from
 ``metadata.db`` to its canonical form on the Uwazi thesaurus, with
 a ``needs_review`` flag for the human reviewer.
 """

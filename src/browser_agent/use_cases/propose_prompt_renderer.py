@@ -15,20 +15,28 @@ from browser_agent.domain.uwazi_template import UwaziTemplate
 
 _PROPOSE_SYSTEM_PROMPT = """You are a Uwazi-mapping assistant.
 You are given a snapshot of a Uwazi template (its name, id, properties,
-and the thesaurus values for each select/multiselect property) and a
-catalog of source fields scraped from the web. Your job is to draft a
-mapping that sends every useful source field to a Uwazi property and
-guesses default values for the template properties that have no
-matching scraped field.
+its common properties like ``title``, and the thesaurus values for
+each select/multiselect property) and a catalog of source fields
+scraped from the web. Your job is to draft a mapping that sends every
+useful source field to a Uwazi property and guesses default values for
+the template properties that have no matching scraped field.
 
 Rules:
-- Place every field you can; use ``type="title"`` for the entity title,
+- Place every field you can; use ``type="title"`` for the entity title
+  (always target the ``title`` common property, never leave it empty),
   ``type="date"`` for dates (with ``parse_formats``), ``type="select"``
   / ``type="multiselect"`` for fields backed by a thesaurus (set
   ``thesaurus`` to the thesaurus name), ``type="text"`` for plain
   strings, ``type="numeric"`` for numbers, ``type="markdown"`` for
   long-form text, ``type="link"`` for URL-valued fields, ``type="skipped"``
   for fields you cannot place.
+- The ``title`` common property is mandatory. Always emit a
+  ``fields`` entry whose ``target`` is the name of the title common
+  property (see ``common_properties`` in the template snapshot) and
+  whose ``type`` is ``"title"``. Map it to the scraped field whose
+  value best identifies one record (e.g. a heading, document title,
+  or case name); if no good match exists, pick the most descriptive
+  free-text field.
 - For the identity block: pick the simplest key source that uniquely
   identifies a record. Prefer ``path_placeholder`` when the source
   URLs share a stable pattern; otherwise use ``field``. When the
@@ -71,8 +79,9 @@ class ProposePromptRenderer:
             f"{self._catalog_blob(catalog)}\n\n"
             "Return the JSON object conforming to the schema. Every catalog "
             "field marked export_to_uwazi=true must be placed on a target "
-            "property, and every template property with no matching field "
-            "must get a source=null default entry."
+            "property, the ``title`` common property must always be filled, "
+            "and every template property with no matching field must get a "
+            "source=null default entry."
         )
 
     def _template_snapshot(self, template, thesauri_by_id) -> str:
@@ -80,9 +89,14 @@ class ProposePromptRenderer:
         payload = {
             "name": template.name,
             "template_id": template.template_id,
+            "common_properties": [self._template_property(p, thesauri_by_id) for p in self._common_props(template)],
             "properties": [self._template_property(p, thesauri_by_id) for p in template.properties],
         }
         return json.dumps(payload, ensure_ascii=False)
+
+    def _common_props(self, template: UwaziTemplate) -> tuple:
+        """Return the common properties to expose to the LLM (currently just title)."""
+        return (template.title,) if template.title is not None else ()
 
     def _template_property(self, prop, thesauri_by_id) -> dict:
         """Return the dict shape of one :class:`UwaziProperty` for the prompt."""

@@ -29,13 +29,25 @@ class ApplyResultPrinter:
         self._print_errors(result)
 
     def _print_skips(self, result) -> None:
-        """Print the first five skip-reason rows when the result has any."""
+        """Print every skip-reason row, plus a per-reason summary count.
+
+        Without the summary the operator only sees the first five
+        rows; with a mix of ``no_local_pdf`` and ``already_on_uwazi``
+        the rest is invisible. The summary line is the cheapest way
+        to make the trade-off (skip-by-pdf vs skip-by-duplicate)
+        scannable in a few characters.
+        """
         skip_rows = result.skip_reasons_list()
         if not skip_rows:
             return
         print(f"  skips: {len(skip_rows)}")
-        for language, source_url, reason in skip_rows[:5]:
+        for language, source_url, reason in skip_rows:
             print(f"    - {language} {source_url}: {reason}")
+        counts: dict[str, int] = {}
+        for _language, _source_url, reason in skip_rows:
+            counts[reason] = counts.get(reason, 0) + 1
+        summary = ", ".join(f"{reason}={n}" for reason, n in sorted(counts.items()))
+        print(f"  skip reasons: {summary}")
 
     def _print_errors(self, result) -> None:
         """Print the per-row errors when the result has any."""

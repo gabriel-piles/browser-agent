@@ -16,11 +16,62 @@ from browser_agent.domain.identity_config import KeySource
 from browser_agent.domain.mapped_property import MappedProperty
 from browser_agent.domain.metadata_field_catalog import MetadataFieldCatalog
 from browser_agent.domain.thesauri_snapshot import ThesauriSnapshot
+from browser_agent.domain.thesauri_value import ThesauriValue
 from browser_agent.domain.uwazi_mapping import UwaziMapping
 from browser_agent.domain.uwazi_property import UwaziProperty
 from browser_agent.domain.uwazi_template import UwaziTemplate
 
 _URL_PATTERN_PLACEHOLDER_RE = re.compile(r"<[A-Za-z_][A-Za-z0-9_]*>")
+
+
+def _find_tree_node(tree: tuple[ThesauriValue, ...], label: str) -> ThesauriValue | None:
+    """Return the ThesauriValue node with ``label`` in ``tree`` or None; recurses."""
+    for node in tree:
+        if node.label == label:
+            return node
+        if node.values:
+            found = _find_tree_node(node.values, label)
+            if found is not None:
+                return found
+    return None
+
+
+def _first_leaf_label(node: ThesauriValue) -> str | None:
+    """Return the first leaf label in the subtree rooted at ``node``, or None when empty."""
+    current = node
+    while current.values:
+        current = current.values[0]
+    return current.label
+
+
+def _needs_correction(prop: MappedProperty) -> bool:
+    """Return True when ``prop`` is a select/multiselect with a default_value and a thesaurus."""
+    if prop.source is not None or prop.default_value is None:
+        return False
+    if prop.type not in (FieldType.SELECT, FieldType.MULTI_SELECT) or not prop.thesaurus_id:
+        return False
+    return True
+
+
+def _correct_one(
+    prop: MappedProperty,
+    thesauri_by_id: dict[str, ThesauriSnapshot],
+) -> MappedProperty:
+    """Return ``prop`` unchanged, or copy-corrected when its default_value is a parent group."""
+    thesaurus = thesauri_by_id.get(prop.thesaurus_id or "")
+    if thesaurus is None:
+        return prop
+    if prop.default_value in thesaurus.values:
+        return prop
+    node = _find_tree_node(thesaurus.tree, prop.default_value)
+    if node is None:
+        return prop
+    first_leaf = _first_leaf_label(node)
+    if first_leaf is None or first_leaf == prop.default_value:
+        return prop
+    base = prop.notes or ""
+    suffix = f"default_value corrected from {prop.default_value!r} to leaf label {first_leaf!r}"
+    return prop.model_copy(update={"default_value": first_leaf, "notes": f"{base}; {suffix}" if base else suffix})
 
 
 class MappingFallbackFiller:
@@ -36,7 +87,7 @@ class MappingFallbackFiller:
         """Patch the identity (frozen-safe) and append missing default entries."""
         self._patch_identity(mapping, catalog, template)
         self._fill_missing_defaults(mapping, template, thesauri_by_id or {})
-        self._correct_default_values(mapping, thesauri_by_id or {})
+        mapping.properties = tuple(_correct_one(p, thesauri_by_id or {}) for p in mapping.properties)
 
     def _patch_identity(
         self,
@@ -61,62 +112,19 @@ class MappingFallbackFiller:
         template: UwaziTemplate,
         thesauri_by_id: dict[str, ThesauriSnapshot],
     ) -> None:
-        """Append ``source=None`` entries for template properties the LLM missed."""
-        missing = [p for p in template.properties if p.name not in self._mapped_targets(mapping)]
+        """Append ``source=None`` entries for template properties the LLM missed.
+
+        The title is added by :class:`LlmDraftAssembler` from the
+        template's common properties; we never auto-append a default
+        for it (title lives on ``Entity.title``, not in metadata).
+        """
+        covered = self._mapped_targets(mapping)
+        if template.title is not None:
+            covered.add(template.title.name)
+        missing = [p for p in template.properties if p.name not in covered]
         if not missing:
             return
         mapping.properties = mapping.properties + tuple(self._default_entry(p, thesauri_by_id) for p in missing)
-
-    def _correct_default_values(
-        self,
-        mapping: UwaziMapping,
-        thesauri_by_id: dict[str, ThesauriSnapshot],
-    ) -> None:
-        """Fix select/multiselect default values that are parent group names."""
-        updated: list[MappedProperty] = []
-        for prop in mapping.properties:
-            if prop.source is not None or prop.default_value is None:
-                updated.append(prop)
-                continue
-            if prop.type not in (FieldType.SELECT, FieldType.MULTI_SELECT) or not prop.thesaurus_id:
-                updated.append(prop)
-                continue
-            thesaurus = thesauri_by_id.get(prop.thesaurus_id)
-            if thesaurus is None:
-                updated.append(prop)
-                continue
-            corrected = self._correct_default_value(prop.default_value, thesaurus)
-            if corrected != prop.default_value:
-                prop = prop.model_copy(
-                    update={
-                        "default_value": corrected,
-                        "notes": self._amended_note(prop, corrected),
-                    }
-                )
-            updated.append(prop)
-        mapping.properties = tuple(updated)
-
-    def _correct_default_value(
-        self,
-        default_value: str,
-        thesaurus: ThesauriSnapshot,
-    ) -> str:
-        """Return a leaf label; if ``default_value`` is a parent group, pick its first leaf."""
-        leaves = set(thesaurus.values)
-        if default_value in leaves:
-            return default_value
-        for node in thesaurus.tree:
-            if node.label == default_value and node.values:
-                return node.values[0].label
-        return default_value
-
-    def _amended_note(self, prop: MappedProperty, corrected: str) -> str | None:
-        """Append a correction note to the existing notes."""
-        base = prop.notes or ""
-        suffix = f"default_value corrected from {prop.default_value!r} to leaf label {corrected!r}"
-        if base:
-            return f"{base}; {suffix}"
-        return suffix
 
     def _mapped_targets(self, mapping: UwaziMapping) -> set[str]:
         """Return the Uwazi property names already covered by the mapping."""
