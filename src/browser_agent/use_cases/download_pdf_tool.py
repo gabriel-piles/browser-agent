@@ -44,11 +44,19 @@ async def download_pdf(ctx: RunContext[AgentDeps], request: DownloadPdfRequest) 
 
 
 def _format_result(result: DownloadResult) -> str:
-    lines = [f"# Download: {'SUCCESS' if result.success else 'FAILED'}"]
+    if result.skipped:
+        status = "SKIPPED"
+    elif result.success:
+        status = "SUCCESS"
+    else:
+        status = "FAILED"
+    lines = [f"# Download: {status}"]
     lines.append(f"# URL: {result.url}")
     lines.append(f"# saved_path: {result.saved_path}")
     lines.append(f"# file_size: {result.file_size_bytes} bytes")
     lines.append(f"# content_type: {result.content_type}")
+    if result.skipped:
+        lines.append(f"# reason: {result.reason or 'already_downloaded'}")
     if result.error:
         lines.append(f"# ERROR: {result.error}")
     return "\n".join(lines)

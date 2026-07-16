@@ -75,7 +75,45 @@ def with_emitted_all_pdf_downloads(python_code: str) -> str:
 # a real download helper without importing from this project.
 EMITTED_CURL_CFFI_BLOCK = '''\
 # ── BEGIN emitted curl_cffi pdf-download helper (vendored from browser_agent) ──
+import os as _os
 from pathlib import Path
+
+
+def _pdf_existing_size(path):
+    """Return existing on-disk size in bytes, or 0 when missing/empty/corrupt."""
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return 0
+    except OSError:
+        return 0
+    return st.st_size if st.st_size > 0 else 0
+
+
+def _pdf_write_atomic(path, data):
+    """Write ``data`` to ``path`` atomically (temp + rename). On any failure,
+    remove the temp file. Renames are atomic on POSIX so a crash mid-write
+    never leaves a partial file at ``path``. ``path`` may be ``str`` or ``Path``."""
+    path = Path(path)
+    part = path.with_name(path.name + ".part")
+    try:
+        if part.exists():
+            try:
+                part.unlink()
+            except OSError:
+                pass
+        with open(part, "wb") as f:
+            f.write(data)
+            f.flush()
+            _os.fsync(f.fileno())
+        _os.replace(part, path)
+    except Exception:
+        try:
+            if part.exists():
+                part.unlink()
+        except OSError:
+            pass
+        raise
 
 
 async def download_pdf_curl_cffi(url, save_path, tab=None):
@@ -85,13 +123,24 @@ async def download_pdf_curl_cffi(url, save_path, tab=None):
     provided, cookies are extracted from the active browser session
     so cookie-gated / authenticated downloads work.
 
-    Returns the file size in bytes.  Raises ``RuntimeError`` on
-    failure (HTTP error, network error, empty response).
+    Idempotent: if ``save_path`` already exists and is non-empty, the
+    download is skipped and the existing file size is returned in
+    the result dict (``skipped=True``).  Writes are atomic
+    (temp + rename) so a crash mid-download never leaves a partial
+    file at ``save_path``.
+
+    Returns a dict ``{"size": int, "skipped": bool, "reason": str}``.
+    Raises ``RuntimeError`` on failure (HTTP error, network error,
+    empty response).
     """
     from curl_cffi import AsyncSession
 
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
+
+    existing = _pdf_existing_size(save_path)
+    if existing > 0:
+        return {"size": existing, "skipped": True, "reason": "already_downloaded"}
 
     cookies = {}
     if tab is not None:
@@ -117,8 +166,8 @@ async def download_pdf_curl_cffi(url, save_path, tab=None):
     if not body:
         raise RuntimeError(f"empty response for {url}")
 
-    save_path.write_bytes(body)
-    return len(body)
+    _pdf_write_atomic(save_path, body)
+    return {"size": len(body), "skipped": False, "reason": "downloaded"}
 # ── END emitted curl_cffi pdf-download helper ──
 
 '''
@@ -131,11 +180,49 @@ EMITTED_BROWSER_FETCH_BLOCK = '''\
 import asyncio
 import base64
 import json
+import os as _os
 from pathlib import Path
 
 _PDF_DOWNLOAD_TIMEOUT_S = 90.0
 _PDF_DOWNLOAD_RETRIES = 3
 _PDF_DOWNLOAD_RETRY_DELAY_S = 1.5
+
+
+def _pdf_existing_size(path):
+    """Return existing on-disk size in bytes, or 0 when missing/empty/corrupt."""
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return 0
+    except OSError:
+        return 0
+    return st.st_size if st.st_size > 0 else 0
+
+
+def _pdf_write_atomic(path, data):
+    """Write ``data`` to ``path`` atomically (temp + rename). On any failure,
+    remove the temp file. Renames are atomic on POSIX so a crash mid-write
+    never leaves a partial file at ``path``. ``path`` may be ``str`` or ``Path``."""
+    path = Path(path)
+    part = path.with_name(path.name + ".part")
+    try:
+        if part.exists():
+            try:
+                part.unlink()
+            except OSError:
+                pass
+        with open(part, "wb") as f:
+            f.write(data)
+            f.flush()
+            _os.fsync(f.fileno())
+        _os.replace(part, path)
+    except Exception:
+        try:
+            if part.exists():
+                part.unlink()
+        except OSError:
+            pass
+        raise
 
 
 async def _fetch_pdf_once(tab, url):
@@ -169,15 +256,20 @@ async def _fetch_pdf_once(tab, url):
 
 
 async def _try_browser_fetch(tab, url, save_path):
-    """Retry the browser fetch, return file size, raise RuntimeError on final failure."""
+    """Retry the browser fetch, write ``save_path`` atomically.
+
+    Returns a result dict ``{"size": int, "skipped": bool, "reason": str}``.
+    Raises ``RuntimeError`` on final failure.
+    """
     last_exc = None
     for attempt in range(1, _PDF_DOWNLOAD_RETRIES + 1):
         try:
             result = await _fetch_pdf_once(tab, url)
             if not result:
                 raise RuntimeError(f"empty response for {url}")
-            save_path.write_bytes(base64.b64decode(result))
-            return save_path.stat().st_size
+            body = base64.b64decode(result)
+            _pdf_write_atomic(save_path, body)
+            return {"size": len(body), "skipped": False, "reason": "downloaded"}
         except RuntimeError as exc:
             last_exc = exc
             if attempt < _PDF_DOWNLOAD_RETRIES:
@@ -186,7 +278,11 @@ async def _try_browser_fetch(tab, url, save_path):
 
 
 async def _try_curl_cffi(url, save_path):
-    """Fallback: download via curl_cffi with Chrome TLS impersonation."""
+    """Fallback: download via curl_cffi with Chrome TLS impersonation.
+
+    Returns a result dict ``{"size": int, "skipped": bool, "reason": str}``.
+    Raises ``RuntimeError`` on failure.
+    """
     try:
         from curl_cffi import AsyncSession
     except ImportError as exc:
@@ -200,8 +296,8 @@ async def _try_curl_cffi(url, save_path):
         raise RuntimeError(f"HTTP {r.status_code} for {url}")
     if not r.content:
         raise RuntimeError(f"empty response for {url}")
-    save_path.write_bytes(r.content)
-    return len(r.content)
+    _pdf_write_atomic(save_path, r.content)
+    return {"size": len(r.content), "skipped": False, "reason": "downloaded"}
 
 
 async def download_pdf_browser(tab, url, save_path):
@@ -218,13 +314,20 @@ async def download_pdf_browser(tab, url, save_path):
 
     HTTP URLs are upgraded to HTTPS to avoid mixed-content blocking.
 
-    Returns the file size in bytes.  Raises ``RuntimeError`` if both
-    strategies fail.
+    Idempotent: when ``save_path`` already exists and is non-empty,
+    the download is skipped and the existing size is returned in the
+    result dict (``skipped=True``).  Writes are atomic (temp + rename).
+
+    Returns a result dict ``{"size": int, "skipped": bool, "reason": str}``.
+    Raises ``RuntimeError`` if both strategies fail.
     """
     if url.startswith("http://"):
         url = "https://" + url[7:]
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = _pdf_existing_size(save_path)
+    if existing > 0:
+        return {"size": existing, "skipped": True, "reason": "already_downloaded"}
     try:
         return await _try_browser_fetch(tab, url, save_path)
     except RuntimeError:

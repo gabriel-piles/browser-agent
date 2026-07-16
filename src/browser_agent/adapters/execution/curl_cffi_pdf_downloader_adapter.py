@@ -41,10 +41,32 @@ class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
         cookies: list[dict[str, str]] | None = None,
         save_path: str | None = None,
     ) -> DownloadResult:
-        """Download the PDF at ``url``, return metadata (not file content)."""
+        """Download the PDF at ``url``, return metadata (not file content).
+
+        Idempotent: if the target file already exists and is non-empty,
+        the download is skipped and a ``DownloadResult`` with
+        ``success=True, skipped=True`` is returned.  Writes are atomic
+        (temp + rename) so a crash mid-write never leaves a partial
+        file at the target path.
+        """
         from curl_cffi import AsyncSession
 
         path = self._resolve_save_path(save_path, url)
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        existing = self._existing_size(path)
+        if existing > 0:
+            return DownloadResult(
+                success=True,
+                saved_path=str(path),
+                url=url,
+                content_type="",
+                file_size_bytes=existing,
+                skipped=True,
+                reason="already_downloaded",
+            )
+
         cookie_dict = self._build_cookie_dict(cookies)
         try:
             async with AsyncSession() as s:
@@ -58,13 +80,15 @@ class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
             return DownloadResult(
                 success=False, saved_path=str(path), url=url, content_type="", file_size_bytes=0, error=error
             )
-        Path(path).write_bytes(r.content)
+        self._write_atomic(path, r.content)
         return DownloadResult(
             success=True,
             saved_path=str(path),
             url=url,
             content_type=r.headers.get("content-type", ""),
             file_size_bytes=len(r.content),
+            skipped=False,
+            reason="downloaded",
         )
 
     @staticmethod
@@ -82,6 +106,40 @@ class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
         if "." in tail and not tail.startswith("?"):
             return self._downloads_path / Path(tail).name
         return self._downloads_path / f"download_{int(time.time())}.pdf"
+
+    @staticmethod
+    def _existing_size(path: Path) -> int:
+        """Return existing on-disk size in bytes, or 0 when missing/empty."""
+        try:
+            st = path.stat()
+        except (FileNotFoundError, OSError):
+            return 0
+        return st.st_size if st.st_size > 0 else 0
+
+    @staticmethod
+    def _write_atomic(path: Path, data: bytes) -> None:
+        """Write ``data`` to ``path`` atomically (temp + rename)."""
+        import os as _os
+
+        part = path.with_name(path.name + ".part")
+        try:
+            if part.exists():
+                try:
+                    part.unlink()
+                except OSError:
+                    pass
+            with open(part, "wb") as f:
+                f.write(data)
+                f.flush()
+                _os.fsync(f.fileno())
+            _os.replace(part, path)
+        except Exception:
+            try:
+                if part.exists():
+                    part.unlink()
+            except OSError:
+                pass
+            raise
 
     @staticmethod
     def _validate_response(r: Any, body_len: int) -> str:
