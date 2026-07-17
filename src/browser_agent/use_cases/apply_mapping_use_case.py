@@ -49,27 +49,26 @@ def _parse_row_data(raw: str | None) -> dict:
 
 
 def resolve_pdf_filename(record: dict, source_url: str, downloads_dir: Path | None) -> str | None:
-    """Return the local PDF path for one record, or ``None``.
+    """Return the absolute local PDF path for one record, or ``None``.
 
-    The scraper stores ``pdf_url`` per row; the downloaded files land in
-    ``<run>/downloads/`` with the URL basename as the filename. This
-    helper bridges the two: it derives the basename from the record's
-    ``pdf_url`` (falling back to ``source_url``), checks the file
-    exists on disk, and returns its absolute path string when it does.
-
-    Rows whose ``pdf_url`` is empty or whose file was not downloaded
-    (e.g. the ``no-pdf-*`` placeholder rows) return ``None`` so the
-    upload-validation report and the apply plan stay consistent.
+    The scraper stores the on-disk filename in the record's
+    ``pdf_filename`` field (e.g. ``pdf_001_01.pdf``); the file lands in
+    ``<run>/downloads/``. The record's ``pdf_url`` is an opaque
+    download token whose tail is NOT the saved filename, so it is only
+    used as a fallback when ``pdf_filename`` is missing. Returns the
+    absolute path string when the file exists on disk, else ``None``.
     """
     if downloads_dir is None:
         return None
-    url = record.get("pdf_url") or source_url
-    if not isinstance(url, str) or not url:
-        return None
-    tail = url.rstrip("/").split("/")[-1]
-    if not tail or "." not in tail or tail.startswith("?"):
-        return None
-    candidate = downloads_dir / tail
+    name = record.get("pdf_filename")
+    if not isinstance(name, str) or not name:
+        url = record.get("pdf_url") or source_url
+        if not isinstance(url, str) or not url:
+            return None
+        name = url.rstrip("/").split("/")[-1]
+        if not name or "." not in name or name.startswith("?"):
+            return None
+    candidate = downloads_dir / name
     if candidate.is_file():
         return str(candidate)
     return None
@@ -437,7 +436,8 @@ def _build_plan_row(
     record, source_url, mapping, entities_by_key, thesaurus_lookup, thesaurus_parents, downloads_dir: Path | None = None
 ) -> SyncPlanRow:
     """Transform one record into one :class:`SyncPlanRow`."""
-    record.setdefault("pdf_filename", resolve_pdf_filename(record, source_url, downloads_dir))
+    pdf_path = resolve_pdf_filename(record, source_url, downloads_dir)
+    record["pdf_filename"] = pdf_path
     language = mapping.default_language
     action, skip_reason = _row_action(record, source_url, mapping, entities_by_key)
     return SyncPlanRow(
@@ -446,7 +446,7 @@ def _build_plan_row(
         source_url=source_url,
         title=_title_of_record(record, source_url, mapping),
         metadata=build_metadata_for_row(record, source_url, mapping, thesaurus_lookup, thesaurus_parents),
-        pdf_path=record.get("pdf_filename") or None,
+        pdf_path=pdf_path,
         key_value=resolve_key_value(record, source_url, mapping.identity, mapping),
         mapping_sha256=mapping.sha256,
         skip_reason=skip_reason,
