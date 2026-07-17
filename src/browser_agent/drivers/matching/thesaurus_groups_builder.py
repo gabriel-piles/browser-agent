@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Iterable
 
+from browser_agent.drivers.console.section_printer import SectionPrinter
 from browser_agent.domain.field_type import FieldType
 from browser_agent.domain.thesauri_snapshot import ThesauriSnapshot
 from browser_agent.domain.uwazi_mapping import UwaziMapping
@@ -30,13 +31,17 @@ class ThesaurusGroupsBuilder:
     ) -> list[dict]:
         """Return one group dict per select/multiselect property with extracted values."""
         groups: list[dict] = []
+        skips: list[str] = []
         for prop in mapping.properties:
             if prop.type not in (FieldType.SELECT, FieldType.MULTI_SELECT):
                 continue
             counter = field_counters.get(prop.source, Counter())
-            group = self._build_one(prop, template, thesauri_by_id, counter)
+            group, skip = self._build_one(prop, template, thesauri_by_id, counter)
             if group is not None:
                 groups.append(group)
+            elif skip:
+                skips.append(skip)
+        self._print_skips(skips)
         return groups
 
     def bucket_by_thesaurus(self, groups: list[dict]) -> dict[str, list[dict]]:
@@ -59,17 +64,23 @@ class ThesaurusGroupsBuilder:
         template: UwaziTemplate,
         thesauri_by_id: dict[str, ThesauriSnapshot],
         counter: Counter,
-    ) -> dict | None:
-        """Build one group dict, or ``None`` to skip the property."""
+    ) -> tuple[dict | None, str]:
+        """Return ``(group, skip_reason)``; exactly one is non-empty."""
         template_prop = template.property_by_name(prop.name)
         thesaurus = thesauri_by_id.get(template_prop.thesaurus_id) if template_prop and template_prop.thesaurus_id else None
         if thesaurus is None:
-            print(f"  [skip] {prop.source} -> {prop.name}: no thesaurus on the Uwazi property")
-            return None
+            return None, f"{prop.source} -> {prop.name}: no thesaurus on the Uwazi property"
         if not counter:
-            print(f"  [skip] {prop.source} -> {prop.name}: no extracted values")
-            return None
-        return {"property": prop, "thesaurus": thesaurus, "counter": counter}
+            return None, f"{prop.source} -> {prop.name}: no extracted values"
+        return {"property": prop, "thesaurus": thesaurus, "counter": counter}, ""
+
+    def _print_skips(self, skips: list[str]) -> None:
+        """Print the skipped-field subheading, or nothing when there are none."""
+        if not skips:
+            return
+        SectionPrinter().subheading("Skipped fields (no thesaurus / no extracted values)")
+        for reason in skips:
+            print(f"    - {reason}")
 
     def _thesaurus_name_of(self, group: dict) -> str:
         """Resolve the canonical thesaurus name for a group."""

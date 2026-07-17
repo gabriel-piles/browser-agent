@@ -44,6 +44,18 @@ Rules:
   ``key_source="key_field_and_property"`` with that property as
   ``key_property`` and the source URL (or a URL-derived field) as
   ``key_field`` so already-uploaded entities are detected by their link.
+- For the ``select_filtering`` block: when the template has one or
+  more ``select`` properties whose value space partitions the
+  entities in a way the operator can predict (e.g. a ``status``,
+  ``language``, ``country`` select), propose a narrow download of
+  existing entities instead of fetching every row. Set
+  ``select_filtering_name`` to the Uwazi property name (must match
+  one of the template's properties) and ``select_filtering_options``
+  to a list of leaf-label values the operator is willing to ingest;
+  the apply/match drivers will only download entities whose value on
+  that property is in the list. Leave both empty (or ``null``) to
+  keep the unfiltered behaviour. The chosen values must come from
+  the property's ``thesaurus_values`` leaf labels.
 - For every template property that has NO matching scraped field, emit
   a field entry with ``source=null`` and a guessed ``default_value``:
   a constant text, a thesaurus **leaf** label (for select/multiselect),

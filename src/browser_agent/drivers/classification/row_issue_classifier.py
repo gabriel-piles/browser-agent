@@ -84,6 +84,8 @@ class RowIssueClassifier:
             template_name=mapping.template,
             language=mapping.default_language,
             key_property=mapping.identity.key_property or "",
+            select_filter_name=mapping.identity.select_filtering_name,
+            select_filter_values=mapping.identity.select_filtering_options,
         )
 
     def _classify_rows(

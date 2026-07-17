@@ -8,6 +8,8 @@ finished walking the run's metadata.db rows.
 
 from __future__ import annotations
 
+from browser_agent.drivers.console.section_printer import SectionPrinter
+
 
 class UploadValidationReporter:
     """Print the upload-validation report: existing-entity count, plan counts, issues."""
@@ -20,21 +22,22 @@ class UploadValidationReporter:
         existing_count: int,
     ) -> None:
         """Print the upload-validation report for ``mapping``'s template."""
+        SectionPrinter().heading("Upload validation")
+        print(f"  template:  {mapping.template!r}")
         label = "entity" if existing_count == 1 else "entities"
-        print(f"\n  Upload validation for template {mapping.template!r}:")
-        print(f"    {existing_count} existing {label} on Uwazi")
+        print(f"  existing:  {existing_count} {label} on Uwazi")
         print(
-            "    plan: "
+            "  plan: "
             f"create={counts.get('create', 0)}, "
             f"update={counts.get('update', 0)}, "
             f"skip={counts.get('skip', 0)}"
         )
         if not issues:
-            print("    no issues found in new entities")
+            print("  no issues found in new entities")
             return
-        print(f"    {len(issues)} new row(s) have issues:")
+        print(f"  {len(issues)} new row(s) have issues:")
         for source_url, title, row_issues in issues:
-            heading = f"      - {title!r} ({source_url})" if title else f"      - ({source_url})"
-            print(heading)
+            line = f"    - {title!r} ({source_url})" if title else f"    - ({source_url})"
+            print(line)
             for issue in row_issues:
-                print(f"          * {issue}")
+                print(f"        * {issue}")

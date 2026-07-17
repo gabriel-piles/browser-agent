@@ -10,6 +10,11 @@ which of the four sources supplies the key:
   itself.
 * ``key_field_and_property`` — combine a field name with a Uwazi
   property name to look up the entity.
+
+``select_filtering_name`` + ``select_filtering_options`` narrow
+the existing-entity download to Uwazi rows whose value on the
+named select property is in the options list; both null/empty
+falls back to the unfiltered download.
 """
 
 from __future__ import annotations
@@ -41,4 +46,18 @@ class IdentityConfig(BaseModel):
     source_url_property: str | None = Field(
         default=None,
         description="Uwazi property that should receive the original source URL.",
+    )
+    select_filtering_name: str | None = Field(
+        default=None,
+        description=(
+            "Uwazi select property name used to pre-filter the existing-entity download; "
+            "None keeps the unfiltered behaviour."
+        ),
+    )
+    select_filtering_options: tuple[str, ...] = Field(
+        default_factory=tuple,
+        description=(
+            "Values of ``select_filtering_name`` to keep when downloading existing entities; "
+            "empty keeps the unfiltered behaviour."
+        ),
     )

@@ -111,6 +111,8 @@ class LlmDraftAssembler:
             key_property=draft.key_property,
             path_placeholder=draft.path_placeholder,
             source_url_property=draft.source_url_property,
+            select_filtering_name=draft.select_filtering_name,
+            select_filtering_options=tuple(draft.select_filtering_options),
         )
 
     def _key_source(self, raw: str | None) -> KeySource:

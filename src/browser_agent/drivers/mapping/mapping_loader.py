@@ -14,6 +14,7 @@ from pathlib import Path
 
 import yaml
 
+from browser_agent.drivers.console.section_printer import SectionPrinter
 from browser_agent.domain.uwazi_mapping import UwaziMapping
 
 
@@ -40,8 +41,9 @@ class MappingLoader:
         return UwaziMapping.model_validate(data)
 
     def _print_summary(self, mapping_path: Path, mapping: UwaziMapping) -> None:
-        """Print a one-line summary of the loaded mapping."""
-        print(f"Loaded mapping from {mapping_path}")
+        """Print the section header + one-line summary of the loaded mapping."""
+        SectionPrinter().heading("Mapping loaded")
+        print(f"  source:       {mapping_path}")
         print(f"  template:     {mapping.template}")
         print(f"  properties:   {len(mapping.properties)}")
         print(f"  sha256:       {mapping.sha256}")

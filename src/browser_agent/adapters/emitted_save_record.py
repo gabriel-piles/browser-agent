@@ -9,11 +9,23 @@ helper is shipped as a plain-Python string and prepended to every
 emitted ``python_code``, mirroring the :mod:`emitted_page_wait`
 pattern.
 
-The helper writes one row per page to a fixed-schema ``metadata`` table.
-``INSERT OR REPLACE`` keyed on ``source_url`` makes the scraper
-crash-resilient (records saved incrementally) and idempotent on re-runs
-(no duplicates).
+The helper writes one row per scraped entity to a fixed-schema
+``metadata`` table. ``INSERT OR REPLACE`` keyed on ``source_url``
+makes the scraper crash-resilient (records saved incrementally) and
+idempotent on re-runs (no duplicates).
 
+When the task downloads multiple files (PDFs, images) per page, the
+script MUST call ``save_record`` once per FILE with a unique
+``source_url`` (e.g. ``f"{page_url}/pdf/{pdf_idx}"``) so each file
+gets its own row. The on-disk filename MUST be a deterministic
+function of the file's download URL (a short hash:
+``pdf_{sha1(url)[:12]}.pdf``), never a human label or a position
+index — labels collide across pages, and position indices break the
+download helper's skip-by-path when result order changes. Store the
+human-readable name and document type inside the ``data`` dict
+(``pdf_name``, ``pdf_type``, ``pdf_id``, ``pdf_url``,
+``pdf_filename``) so downstream code joins file to metadata without
+parsing the path.
 Path resolution:
 
 * For final scripts the DB path and task slug are computed from
@@ -70,12 +82,22 @@ if "_SAVE_RECORD_TASK_SLUG" not in globals():
 
 
 def save_record(source_url: str, data: dict) -> None:
-    """Persist one page's metadata into the shared SQLite store.
+    """Persist one entity's metadata into the shared SQLite store.
 
     Upserts by source_url: re-running the scraper updates existing
     records instead of creating duplicates. The table schema is fixed
     so downstream scripts can query it without knowing which scraper
     produced the data.
+
+    When downloading multiple files per page (PDFs, images), call this
+    once per FILE with a unique source_url (e.g. ``f"{page_url}/pdf/{i}"``)
+    so each file gets its own row. The on-disk filename MUST be a hash of
+    the file's download URL (``pdf_{sha1(url)[:12]}.pdf``), stored in
+    ``data`` as ``pdf_id`` / ``pdf_filename``; keep the human label and
+    type in ``pdf_name`` / ``pdf_type``. Never derive the filename from
+    the label (collides) or a position index (breaks skip-by-path on
+    reorder) — the path must be a pure function of the URL so the
+    download helper's existence check means "already downloaded this URL".
     """
     conn = sqlite3.connect(_SAVE_RECORD_DB_PATH)
     try:

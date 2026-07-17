@@ -33,6 +33,7 @@ from browser_agent.drivers.matching.match_context_loader import MatchContextLoad
 from browser_agent.drivers.mapping.mapping_loader import MappingLoader
 from browser_agent.drivers.classification.row_issue_classifier import RowIssueClassifier
 from browser_agent.drivers.classification.row_issue_detector import RowIssueDetector
+from browser_agent.drivers.console.section_printer import SectionPrinter
 from browser_agent.drivers.paths.run_paths import RunPaths
 from browser_agent.drivers.matching.thesaurus_exact_matcher import ThesaurusExactMatcher
 from browser_agent.drivers.matching.thesaurus_groups_builder import ThesaurusGroupsBuilder
@@ -84,6 +85,7 @@ class MatchDriver:
         self._print_setup_summary(len(context.thesauri_by_id), len(context.field_counters))
         self._default_validator.print_report(context.mapping.properties, context.template, context.thesauri_by_id)
         self._run_upload_validation(context)
+        SectionPrinter().heading("Thesaurus matching")
         groups = self._build_groups(context)
         if not groups:
             return
@@ -109,6 +111,8 @@ class MatchDriver:
             template_name=context.mapping.template,
             language=context.mapping.default_language,
             key_property=context.mapping.identity.key_property or "",
+            select_filter_name=context.mapping.identity.select_filtering_name,
+            select_filter_values=context.mapping.identity.select_filtering_options,
         )
         counts, issues = classifier.classify(records, context.mapping, context.template, thesaurus_lookup)
         self._upload_reporter.print_report(context.mapping, counts, issues, len(entities_by_key))
@@ -136,12 +140,13 @@ class MatchDriver:
                 mapping_default_language=context.mapping.default_language,
                 out_path=self._paths.default_thesaurus_path(thesaurus_name),
             )
-        print("\nDone. Review the YAML files in thesauri_mappings/ " "before running step_3_upload_to_uwazi.py.")
+        print("\nDone. Review the YAML files in thesauri_mappings/ before running step_3_upload_to_uwazi.py.")
 
     def _print_setup_summary(self, thesauri_count: int, field_count: int) -> None:
-        """Print the one-line summary of the data the driver just loaded."""
-        print(f"Loaded {thesauri_count} thesaurus/thesauri")
-        print(f"Aggregated distinct values for {field_count} source field(s)")
+        """Print the section header + one-line summary of loaded data."""
+        SectionPrinter().heading("Thesauri & source fields loaded")
+        print(f"  thesauri:       {thesauri_count}")
+        print(f"  source fields:  {field_count} with extracted values")
 
     def _query_metadata_rows(self) -> list[tuple[str, str, str]]:
         """Return ``(source_url, task_slug, data_json)`` rows from the run's metadata.db."""

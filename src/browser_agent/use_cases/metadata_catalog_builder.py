@@ -74,15 +74,39 @@ class MetadataCatalogBuilder:
             return {}
 
     def _record(self, name, value, distinct: dict, page_count: Counter) -> None:
-        """Update the per-field stats for one (name, value) pair from a row."""
+        """Update the per-field stats for one (name, value) pair from a row.
+
+        List/tuple values (multi-value fields such as multiselect or
+        tag lists, stored as JSON arrays in ``metadata.data``) are
+        expanded one element at a time so the LLM sees individual
+        samples (e.g. ``Spain``, ``Argentina``) rather than the
+        single ``"['Spain', 'Argentina']"`` blob that ``str(list)``
+        would yield. ``page_count`` stays row-level (one row = one
+        page observed with the field) so the field's per-page
+        statistic is unaffected by how many values a row carries.
+        ``None`` and empty-string elements inside the list are
+        skipped. Scalars and other JSON shapes fall through to the
+        original single-record path.
+        """
         if not isinstance(name, str) or not name:
             return
+        if value in (None, ""):
+            return
+        if isinstance(value, (list, tuple)):
+            page_count[name] += 1
+            for item in value:
+                self._record_sample(name, item, distinct)
+            return
+        page_count[name] += 1
+        self._record_sample(name, value, distinct)
+
+    def _record_sample(self, name, value, distinct: dict) -> None:
+        """Record one scalar sample into the per-field distinct bucket."""
         if value in (None, ""):
             return
         text = str(value).strip()
         if not text:
             return
-        page_count[name] += 1
         bucket = distinct.setdefault(name, [])
         if text not in bucket and len(bucket) < self._examples_per_field:
             bucket.append(text)

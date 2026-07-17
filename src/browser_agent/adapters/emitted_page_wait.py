@@ -129,19 +129,27 @@ class _EmittedPageWaitTracker:
         return bool(self._in_flight)
 
     async def _check_ready_state(self, expected_url):
-        # ``document.readyState == \"complete\"`` is the strongest signal
+        # ``document.readyState == "complete"`` is the strongest signal
         # that the page is fully loaded regardless of whether Chrome
         # fired a fresh ``frameStoppedLoading`` (same-URL reload,
-        # BFCache hits, etc.). The check is independent of the
-        # in-flight request count because ``readyState`` flips to
-        # ``complete`` only after every sub-resource has loaded.
-        if not expected_url or not self._navigation_started:
+        # BFCache hits, missed events from a late-attached tracker,
+        # etc.). The check is independent of the in-flight request
+        # count because ``readyState`` flips to ``complete`` only after
+        # every sub-resource has loaded.
+        #
+        # When ``expected_url`` is None (caller omitted the URL) we
+        # still poll ``readyState`` against the tab's current URL —
+        # this is the safety net for scripts that forget to call
+        # ``prepare_page_wait`` before the first navigation, since the
+        # tracker then attaches AFTER ``frameStoppedLoading`` already
+        # fired and would otherwise wait forever.
+        if not self._navigation_started:
             return None
         try:
             cur_url = self._tab.url
         except Exception:
             return None
-        if cur_url != expected_url:
+        if expected_url and cur_url != expected_url:
             return None
         try:
             ready = await self._tab.evaluate("document.readyState")
@@ -160,19 +168,17 @@ class _EmittedPageWaitTracker:
             and (now - self._frame_events[-1]) <= 0.25
         ):
             return True
-        # Fast path 2: ``document.readyState`` is ``complete`` for the
-        # expected URL. Works for same-URL reloads where Chrome does
-        # not fire a fresh ``frameStoppedLoading``.
-        if expected_url:
-            if await self._check_ready_state(expected_url):
-                return True
+        # Fast path 2: ``document.readyState`` is ``complete``. Works
+        # for same-URL reloads and for the case where the tracker
+        # attached after the navigation already finished.
+        if await self._check_ready_state(expected_url):
+            return True
         deadline = self._loop.time() + timeout
         while True:
             if self._navigation_started and len(self._frame_events) > self._frame_watermark:
                 return True
-            if expected_url:
-                if await self._check_ready_state(expected_url):
-                    return True
+            if await self._check_ready_state(expected_url):
+                return True
             remaining = deadline - self._loop.time()
             if remaining <= 0:
                 return False

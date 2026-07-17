@@ -115,6 +115,19 @@ have explored the page.
       the change in the output).
     - If the task involves scrolling, scroll once and print the height
       before/after so you can see whether content loaded.
+    - PDF NAMES VALIDATION — when the task downloads PDFs or extracts a
+      label/type per file, for EACH row you extract a label from, print
+      BOTH the row's authoritative attribute (``title``/``aria-label``)
+      AND the inner element text. Confirm the value you keep identifies
+      the DOCUMENT (e.g. "Resumen", "Voto de los Jueces...") and not a
+      badge (e.g. "Español", "1 de 5"). If the attribute is the real
+      label and the inner text is a badge, USE THE ATTRIBUTE. A label
+      that looks like a language or a count is a badge — switch sources.
+      This is the #1 silent bug in PDF scraping; do not skip it.
+    - PDF DOWNLOAD DRILL — when the task downloads multiple PDFs per
+      page, download at least 2 from one page and print their final
+      on-disk paths. Confirm the paths are unique and non-colliding
+      (rule 13): no two PDFs share a filename, even if labels repeat.
     - Print a clear SUCCESS/FAIL summary at the end.
   Do NOT split these into separate validation scripts. ONE script,
   ONE run, all checks together. This is critical because you only get
@@ -322,24 +335,65 @@ Script rules (HARD — every script you emit MUST follow these):
    ``tab.query_selector_all``, and ``row.query_selector`` are zendriver
    element handles, NOT Playwright elements. They expose:
 
-      ``await el.text``           — element text content (coroutine/property)
-      ``el.attrs.get("href")``    — dict of element attributes
+      ``el.text``               — the FIRST descendant text node only
+                                  (see caveat below; NOT full textContent)
+      ``el.attrs.get("href")``  — dict of element attributes
       ``el.get_attribute("href")`` — fallback attribute read (async or sync,
                                      depending on the runtime version)
 
-   Because the helper library may return different handle types in
-   different contexts, always defensively try the most common APIs. A safe
-   helper pattern for reading text is:
+   IMPORTANT — ``el.text`` returns ONLY the first text node. zendriver
+   implements it as a depth-first search for the first ``node_type == 3``
+   descendant and returns that one node's value. On mixed-content
+   elements such as ``<div><span class="badge">Español</span> Resumen</div>``
+   it returns ``"Español"`` (the badge), NOT ``"Español Resumen"``. It is
+   ONLY safe on simple leaf elements whose entire text is one node.
 
-      async def get_text(el):
+   For any element whose meaningful label may be a later text node or
+   spread across children, use one of these instead, in priority order:
+
+   (a) An authoritative attribute on the element itself — single, whole
+       strings that cannot be confused with a badge or sibling text::
+
+           el.attrs.get("title")        # or "aria-label", "data-name"
+
+       This is the preferred source for repeated-card/list rows (download
+       menus, result cards) where a badge (language, count) sits next to
+       the label. The row's ``title``/``aria-label`` is the stable label.
+
+   (b) Full subtree text via CDP — the ONLY way to get ``textContent``
+       through zendriver's handle::
+
+           await tab.evaluate("(el => el.textContent || '')(...args)", el)
+
+       Use this when no attribute carries the label and you need the
+       concatenated text of the whole subtree.
+
+   (c) ``el.text`` — last resort, only on confirmed simple leaf elements.
+
+   A safe text helper that encodes this priority:
+
+      async def get_text(el, tab=None):
           if el is None:
               return ""
-          if hasattr(el, "text"):
-              value = el.text
-              if asyncio.iscoroutine(value):
-                  value = await value
-              return (value or "").strip()
-          return ""
+          # (a) authoritative attribute first
+          for attr in ("title", "aria-label"):
+              attrs = getattr(el, "attrs", None)
+              if attrs and attrs.get(attr):
+                  return (attrs[attr] or "").strip()
+          # (b) full subtree text via CDP
+          if tab is not None:
+              try:
+                  val = await tab.evaluate(
+                      "(el => (el.textContent || '').trim())(...)", el)
+                  if isinstance(val, str) and val:
+                      return val.strip()
+              except Exception:
+                  pass
+          # (c) first text node fallback (simple leaves only)
+          value = getattr(el, "text", None)
+          if asyncio.iscoroutine(value):
+              value = await value
+          return (value or "").strip()
 
    A safe helper pattern for reading an attribute is:
 
@@ -366,6 +420,23 @@ Script rules (HARD — every script you emit MUST follow these):
    If you use those names, verify the call succeeds in the validation
    script; otherwise the final script will crash with ``TypeError`` on the
    element handle.
+
+4b. Label-vs-badge verification for repeated-card extraction. When you
+   extract a label (document name, title, type) from a repeated card or
+   list row — e.g. a download menu item, a result card — the visible
+   text commonly mixes a badge (language, count, status) with the actual
+   label, and ``el.text`` returns only the badge. BEFORE you settle on a
+   source, print BOTH the row's ``title``/``aria-label`` attribute AND the
+   inner element text in the validation script and confirm the value you
+   keep actually identifies the document, not the badge::
+
+       # In the validation script, for each row type you extract a label from:
+       print("attr title:", get_attr(row, "title"))
+       print("inner text:", await get_text(row.querySelector("...")))
+       # If they differ and the attribute is the real label, use the attribute.
+
+   A label that reads like a language ("Español", "English") or a count
+   ("3", "1 de 5") is a badge, not the label — switch to the attribute.
 
 5. The script MUST be self-contained: no imports from this
    project, no relative file paths, no environment variables it
@@ -459,10 +530,27 @@ Script rules (HARD — every script you emit MUST follow these):
     pages, call save_record(url, {...}) per page AS IT IS SCRAPED — not
     collected in a list and saved at the end. source_url is the page
     URL (PRIMARY KEY — re-runs replace, not duplicate). data is a
-    JSON-serializable dict of metadata fields. This makes the scraper
-    crash-resilient: if it dies at page 3000, the first 2999 records
-    are already in SQLite. The validation script SHOULD also call
-    save_record at least once to verify persistence works end-to-end.
+    JSON-serializable dict of metadata fields, so multi-value fields
+    (e.g. countries, tags) MUST be a Python list of strings, never a
+    comma-joined string or a delimited blob. Uwazi's multiselect
+    properties expect ``[{value: ...}, ...]``; a single comma-joined
+    string becomes one unmatchable label in the thesaurus. Examples:
+
+        # CORRECT — list of strings, one per selected option
+        save_record(url, {"title": "...", "countries": ["Spain", "Argentina"]})
+
+        # WRONG — one opaque string, will not match the thesaurus
+        save_record(url, {"title": "...", "countries": "Spain, Argentina"})
+
+    Keep scalars as scalars (e.g. a single date stays a string). The
+    pipeline downstream (``step_2`` thesaurus matching and
+    ``step_3`` multiselect wrapping) relies on this shape — it expands
+    list values one element at a time, but a comma-joined string is
+    passed through unchanged. This makes the scraper crash-resilient:
+    if it dies at page 3000, the first 2999 records are already in
+    SQLite. The validation script SHOULD also call save_record at
+    least once with a list-shaped value when the task involves
+    multi-value fields, to verify persistence works end-to-end.
 
 12. Output paths — When you create a directory for downloaded files or
     any other output, compute the path relative to the script file's own
@@ -478,6 +566,60 @@ Script rules (HARD — every script you emit MUST follow these):
     ``"downloads"`` — it breaks when the operator runs the script from
     the ``scripts/`` directory.
 
+13. PDF file naming — one unique file per PDF, content-addressed by the
+    download URL. A label-based name ("Resumen.pdf", "Español_1.pdf")
+    collides the moment two pages each have a PDF with the same
+    label/language, silently overwriting earlier downloads. A
+    position-based name (``pdf_005_03.pdf``) is also wrong: it names
+    content by where it appeared in an enumeration, so a re-run whose
+    results arrive in a different order reuses a stale path and the
+    download helper silently skips the new PDF (the skip logic tests
+    path existence, NOT URL identity).
+
+    The on-disk filename MUST be a deterministic function of the PDF's
+    own download URL, so that "file exists at path" is equivalent to
+    "this exact PDF was already downloaded". The human label and
+    document type live in the DB row, not in the path.
+
+    Naming scheme — hash the download URL with a short, collision-safe
+    digest (sha1 truncated to 12 hex chars is plenty for one site) and
+    keep a short human-readable prefix for directory listing legibility::
+
+        import hashlib
+        _url_hash = hashlib.sha1(pdf_url.encode()).hexdigest()[:12]
+        pdf_id = f"pdf_{_url_hash}"                 # e.g. pdf_a1b2c3d4e5f6
+        save_path = out_dir / f"{pdf_id}.pdf"
+
+    Because the id is a pure function of the URL: same PDF -> same path
+    (so a re-run overwrites the same file, matching the ``INSERT OR
+    REPLACE`` semantics of save_record and making the helper's skip-by-path
+    correct), and different PDFs -> different paths (no collision, ever,
+    regardless of label reuse or result ordering).
+
+    DB row — store the id and the human-readable fields side by side so
+    downstream code joins file to metadata without parsing the filename::
+
+        save_record(f"{page_url}/pdf/{pdf_idx}", {
+            ...,
+            "pdf_id": pdf_id,            # content address: pdf_a1b2c3d4e5f6
+            "pdf_url": pdf_url,          # the URL the hash derives from
+            "pdf_filename": save_path.name,  # pdf_a1b2c3d4e5f6.pdf — unique
+            "pdf_name": pdf_name,        # human label: "Resumen" / "Voto de..."
+            "pdf_type": pdf_type,        # "Resumen" | "Voto" | ...
+        })
+
+    HARD RULES:
+    - NEVER use a human label, language, or type in the on-disk filename.
+    - NEVER use a position-based id (page_idx/pdf_idx) in the filename — it
+      breaks the download helper's skip-by-path when result order changes.
+    - The filename MUST be a deterministic function of the PDF download URL
+      (a hash), so existence-at-path == already-downloaded for that URL.
+    - The ``source_url`` passed to save_record MUST be unique per PDF
+      (e.g. ``f"{page_url}/pdf/{pdf_idx}"``), never the bare page URL, so
+      one row per PDF is guaranteed (rule 11 keys on source_url).
+    - The validation script MUST download at least 2 PDFs and print their
+      final paths to prove the naming produces unique, non-colliding files
+      derived from distinct URLs.
 Remember: explore the page first (navigate → extract → click filter
 → scroll → extract again), then write ONE validation script that
 tests the full strategy in a single run (you only get 3 attempts —

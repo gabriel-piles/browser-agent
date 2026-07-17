@@ -67,7 +67,7 @@ class ThesaurusLlmCaller:
 
     def _log_call(self, truncated_map: dict[str, int]) -> None:
         """Log the size of the truncated LLM-bound value set."""
-        print(f"    Calling LLM for {len(truncated_map)} unmatched value(s)...")
+        print(f"  Calling LLM for {len(truncated_map)} unmatched value(s)...")
 
     async def _run_match_agent(
         self,

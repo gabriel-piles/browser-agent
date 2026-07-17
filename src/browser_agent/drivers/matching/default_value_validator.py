@@ -9,6 +9,7 @@ token ``ok`` / ``MISSING`` line for every default value.
 
 from __future__ import annotations
 
+from browser_agent.drivers.console.section_printer import SectionPrinter
 from browser_agent.domain.field_type import FieldType
 from browser_agent.domain.thesauri_snapshot import ThesauriSnapshot
 from browser_agent.domain.uwazi_template import UwaziTemplate
@@ -27,7 +28,7 @@ class DefaultValueValidator:
         relevant = self._properties_with_default(properties)
         if not relevant:
             return
-        print("\n  Default values vs thesauri:")
+        SectionPrinter().heading("Default values vs thesauri")
         for prop in relevant:
             self._print_field(prop, template, thesauri_by_id)
 
@@ -46,14 +47,14 @@ class DefaultValueValidator:
         """Print the per-token report for one property, or a status note when empty."""
         template_prop = template.property_by_name(prop.name)
         if template_prop is None:
-            print(f"    {prop.name!r}: no such property on the Uwazi template")
+            print(f"  {prop.name!r}: no such property on the Uwazi template")
             return
         thesaurus, found, missing = self._value_status(prop, template, thesauri_by_id)
         if thesaurus is None:
-            print(f"    {prop.name!r}: no thesaurus on the Uwazi property")
+            print(f"  {prop.name!r}: no thesaurus on the Uwazi property")
             return
         if not found and not missing:
-            print(f"    {prop.name!r}: empty default_value")
+            print(f"  {prop.name!r}: empty default_value")
             return
         self._print_tokens(prop.name, thesaurus, found, "ok")
         self._print_tokens(prop.name, thesaurus, missing, "MISSING")
@@ -111,4 +112,4 @@ class DefaultValueValidator:
     ) -> None:
         """Print one line per token in ``tokens`` against the thesaurus."""
         for token in tokens:
-            print(f"    {field_target!r} -> {token!r}: " f"{status} (thesaurus: {thesaurus.name!r})")
+            print(f"  {field_target!r} -> {token!r}: " f"{status} (thesaurus: {thesaurus.name!r})")

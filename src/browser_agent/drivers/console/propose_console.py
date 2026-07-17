@@ -61,3 +61,8 @@ class ProposeConsole:
             f"path_placeholder={identity.path_placeholder!r} "
             f"source_url_property={identity.source_url_property!r}"
         )
+        if identity.select_filtering_name or identity.select_filtering_options:
+            print(
+                f"  identity filter: select_filtering_name={identity.select_filtering_name!r} "
+                f"select_filtering_options={list(identity.select_filtering_options)!r}"
+            )

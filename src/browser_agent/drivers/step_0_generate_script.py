@@ -21,7 +21,6 @@ from pathlib import Path
 
 from browser_agent.adapters.runs_config_loader import RunsConfigLoader
 from browser_agent.domain.run_config import RunConfig
-from browser_agent.drivers.generation.emitted_script_smoke_runner import EmittedScriptSmokeRunner
 from browser_agent.drivers.generation.script_emitter import ScriptEmitter
 from browser_agent.drivers.generation.script_generator import ScriptGenerator
 from browser_agent.drivers.generation.script_path_builder import ScriptPathBuilder
@@ -36,14 +35,13 @@ DEFAULT_PROMPT = "Visit https://quotes.toscrape.com and print every quote on the
 
 
 class GenerateScriptDriver:
-    """End-to-end driver: task -> LLM agent -> emitted script -> smoke run."""
+    """End-to-end driver: task -> LLM agent -> emitted script."""
 
     def __init__(self) -> None:
         self._task_reader = TaskReader(DEFAULT_PROMPT)
         self._path_builder: ScriptPathBuilder | None = None
         self._generator = ScriptGenerator()
         self._emitter: ScriptEmitter | None = None
-        self._smoke = EmittedScriptSmokeRunner()
 
     def run(self, argv: list[str]) -> int:
         """Configure logging, run the async pipeline, return the process exit code."""
@@ -51,7 +49,7 @@ class GenerateScriptDriver:
         return asyncio.run(self._run_async(argv))
 
     async def _run_async(self, argv: list[str]) -> int:
-        """Run the async pipeline: load run, build task, generate, emit, smoke."""
+        """Run the async pipeline: load run, build task, generate, emit."""
         run = RunsConfigLoader.load_active()
         run_path = RunsConfigLoader.load_active_path()
         self._wire_run(run_path)
@@ -63,7 +61,7 @@ class GenerateScriptDriver:
         )
         script = await self._generator.generate(task, run_path)
         script_path = self._emitter.emit(task, script, run_path)
-        await self._smoke.run(script_path)
+        logger.info("emitted script at {path}", path=script_path)
         return 0
 
     def _wire_run(self, run_path: Path) -> None:

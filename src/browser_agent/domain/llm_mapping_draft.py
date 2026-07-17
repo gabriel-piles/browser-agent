@@ -18,6 +18,8 @@ class LlmMappingDraft(BaseModel):
     key_property: str | None = None
     path_placeholder: str | None = None
     source_url_property: str | None = None
+    select_filtering_name: str | None = None
+    select_filtering_options: list[str] = Field(default_factory=list)
     publish: bool = False
     upload_pdf: bool = False
     skipped: list[dict] = Field(default_factory=list)

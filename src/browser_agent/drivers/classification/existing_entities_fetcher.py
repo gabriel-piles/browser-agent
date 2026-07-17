@@ -4,7 +4,9 @@ Hides the paginated search-by-filter call, the metadata scalar
 coercion, the ``key_property -> shared_id`` index build, and the
 "has any value" predicate behind one object. The match driver
 calls :meth:`fetch` once and gets back a dict the row
-classifier can probe with ``O(1)`` lookups.
+classifier can probe with ``O(1)`` lookups. When ``select_filter_name``
+and ``select_filter_values`` are supplied, the download is narrowed
+to entities whose value on the named select property is in the list.
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ from __future__ import annotations
 from browser_agent.domain.identity_config import KeySource
 from browser_agent.domain.uwazi_mapping import UwaziMapping
 from uwazi_api.client import UwaziClient
-from uwazi_api.domain.search_filters import SearchFilters
+from uwazi_api.domain.search_filters import SearchFilters, SelectFilter
 
 # Page size used when iterating Uwazi's search-by-filter results.
 _PAGE_BATCH = 100
@@ -29,28 +31,62 @@ class ExistingEntitiesFetcher:
         template_name: str,
         language: str,
         key_property: str,
+        *,
+        select_filter_name: str | None = None,
+        select_filter_values: tuple[str, ...] | list[str] = (),
     ) -> list:
-        """Return every Uwazi entity for ``template_name`` indexed by ``key_property``."""
-        entities = self._fetch_all(template_name, language)
+        """Return every Uwazi entity for ``template_name`` indexed by ``key_property``.
+
+        When ``select_filter_name`` and ``select_filter_values`` are
+        both set, the download is restricted to entities whose value
+        on the named select property is in ``select_filter_values``;
+        otherwise the unfiltered template download runs.
+        """
+        filters = self._build_filters(select_filter_name, select_filter_values)
+        entities = self._fetch_all(template_name, language, filters)
         return self._index_by_key(entities, key_property)
 
-    def _fetch_all(self, template_name: str, language: str) -> list:
+    @staticmethod
+    def _build_filters(
+        select_filter_name: str | None,
+        select_filter_values: tuple[str, ...] | list[str],
+    ) -> SearchFilters | None:
+        """Return a :class:`SearchFilters` narrowed to the named select values, or None."""
+        if not select_filter_name or not select_filter_values:
+            return None
+        return SearchFilters(
+            filters={select_filter_name: SelectFilter(values=list(select_filter_values))},
+        )
+
+    def _fetch_all(
+        self,
+        template_name: str,
+        language: str,
+        filters: SearchFilters | None = None,
+    ) -> list:
         """Fetch every entity for ``template_name`` via paginated search."""
         out: list = []
         start = 0
         while True:
-            page = self._fetch_page(template_name, language, start, _PAGE_BATCH)
+            page = self._fetch_page(template_name, language, filters, start, _PAGE_BATCH)
             out.extend(page)
             if len(page) < _PAGE_BATCH:
                 break
             start += _PAGE_BATCH
         return out
 
-    def _fetch_page(self, template_name: str, language: str, start: int, batch: int) -> list:
+    def _fetch_page(
+        self,
+        template_name: str,
+        language: str,
+        filters: SearchFilters | None,
+        start: int,
+        batch: int,
+    ) -> list:
         """Fetch one page of entities for ``template_name`` starting at ``start``."""
         return (
             self._client.search.search_by_filter(
-                filters=SearchFilters(filters={}),
+                filters=filters or SearchFilters(filters={}),
                 template_name=template_name,
                 start_from=start,
                 batch_size=batch,

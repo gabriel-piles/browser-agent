@@ -386,7 +386,7 @@ def _coerce_metadata_value(
     if value is None or value == "":
         return None
     if prop.type in _THESAURUS_TYPES:
-        parents_map = thesaurus_parents.get(prop.thesaurus_id) if prop.thesaurus_id else None
+        parents_map = thesaurus_parents.get(prop.thesaurus_id) if (thesaurus_parents and prop.thesaurus_id) else None
         return _wrap_select_value(value, parents_map)
     if prop.type is FieldType.LINK:
         text = str(value)
@@ -405,6 +405,8 @@ def _fetch_existing_entities(client: UwaziClient, mapping: UwaziMapping) -> dict
         template_name=mapping.template,
         language=mapping.default_language,
         key_property=mapping.identity.key_property or "",
+        select_filter_name=mapping.identity.select_filtering_name,
+        select_filter_values=mapping.identity.select_filtering_options,
     )
 
 
