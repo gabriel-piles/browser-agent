@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse
 
+import yaml
+
 from browser_agent.domain.apply_result import ApplyResult
 from browser_agent.domain.field_type import FieldType
 from browser_agent.domain.identity_config import KeySource

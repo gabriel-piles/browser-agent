@@ -3,6 +3,8 @@ from __future__ import annotations
 from bs4 import BeautifulSoup, Comment, Tag
 from pydantic import BaseModel
 
+from browser_agent.configuration import SNAPSHOT_MAX_CHARS
+
 
 class HtmlSnippet(BaseModel):
     """A token-optimised, structural view of a web page.
@@ -31,7 +33,7 @@ class HtmlSnippet(BaseModel):
     )
 
     @classmethod
-    def from_raw(cls, url: str, raw_html: str, max_chars: int = 50_000) -> "HtmlSnippet":
+    def from_raw(cls, url: str, raw_html: str, max_chars: int = SNAPSHOT_MAX_CHARS) -> "HtmlSnippet":
         """Build a snippet from a raw HTML blob.
 
         Runs the stripping pipeline (drop non-structural tags, collapse

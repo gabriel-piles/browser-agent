@@ -13,7 +13,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 # LLM connection — consumed by ``adapters/llm/ollama_adapter.py``.
 OLLAMA_BASE_URL = "https://ollama.com/v1"
-ORCHESTRATOR_MODEL = "kimi-k2.7-code:cloud"
+ORCHESTRATOR_MODEL = "deepseek-v4-pro:cloud"
 
 # YAML file that defines every run: ``active_run`` (the name to
 # execute) plus a list of ``runs`` each with ``name`` and ``prompt``.
@@ -39,6 +39,13 @@ UWAZI_PASSWORD = os.environ.get("UWAZI_PASSWORD", "admin")
 UWAZI_DEFAULT_LANGUAGE = os.environ.get("UWAZI_DEFAULT_LANGUAGE", "en")
 
 MAX_LLM_CALLS = 25
+SNAPSHOT_MAX_CHARS = 6_000
+COMPACT_KEEP_RECENT_SNAPSHOTS = 2
+COMPACT_KEEP_RECENT_VALIDATIONS = 1
+COMPACT_TRUNCATED_PLACEHOLDER = "[trimmed — see latest snapshot]"
+COMPACT_MIN_TRIM_CHARS = 1_000
+COMPACT_HEAD_LINES = 6
+COMPACT_MAX_EXTRACTED_LINES = 10
 MAX_VALIDATION_ATTEMPTS = 3
 
 # ``headless`` defaults to False — the operator can watch Chrome
