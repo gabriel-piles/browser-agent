@@ -38,7 +38,7 @@ UWAZI_PASSWORD = os.environ.get("UWAZI_PASSWORD", "admin")
 # Default language code sent to Uwazi when a mapping does not pin one.
 UWAZI_DEFAULT_LANGUAGE = os.environ.get("UWAZI_DEFAULT_LANGUAGE", "en")
 
-MAX_LLM_CALLS = 25
+MAX_LLM_CALLS = 50
 SNAPSHOT_MAX_CHARS = 6_000
 COMPACT_KEEP_RECENT_SNAPSHOTS = 2
 COMPACT_KEEP_RECENT_VALIDATIONS = 1
