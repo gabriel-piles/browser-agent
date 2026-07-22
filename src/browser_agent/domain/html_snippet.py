@@ -43,9 +43,9 @@ class HtmlSnippet(BaseModel):
         result so a single tool call never blows the context window.
         """
         cleaned = cls._clean(raw_html)
-        truncated = cleaned[:max_chars]
-        suffix = "" if len(cleaned) <= max_chars else f"\n... (truncated, total={len(cleaned)} chars)"
-        summary = cls._summarise(url, raw_html, len(cleaned), max_chars, bool(suffix))
+        truncated, was_truncated = cls._truncate(cleaned, max_chars)
+        suffix = "" if not was_truncated else f"\n... (truncated, total={len(cleaned)} chars)"
+        summary = cls._summarise(url, raw_html, len(cleaned), max_chars, was_truncated)
         return cls(url=url, cleaned_html=truncated + suffix, summary=summary)
 
     @classmethod
@@ -57,6 +57,25 @@ class HtmlSnippet(BaseModel):
         cls._prune_empty(soup)
         body = soup.body or soup
         return body.decode_contents()
+
+    @staticmethod
+    def _truncate(text: str, max_chars: int) -> tuple[str, bool]:
+        """Cut at a tag boundary before ``max_chars``.
+
+        A hard character cut can split a tag mid-attribute, leaving
+        the agent with malformed HTML and broken selectors.  We try
+        to cut after the last complete tag (``>``), or before the
+        last incomplete tag (``<``) if no closing ``>`` is found.
+        """
+        if len(text) <= max_chars:
+            return text, False
+        cut = text.rfind(">", 0, max_chars)
+        if cut > 0:
+            return text[: cut + 1], True
+        cut = text.rfind("<", 0, max_chars)
+        if cut > 0:
+            return text[:cut], True
+        return text[:max_chars], True
 
     @classmethod
     def _strip_non_structural(cls, soup: BeautifulSoup) -> None:

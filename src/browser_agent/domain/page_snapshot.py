@@ -49,7 +49,7 @@ class PageSnapshot(BaseModel):
     scroll_height: int = Field(
         default=0,
         description=(
-            "Current document.body.scrollHeight in pixels. " "Compare before/after scroll to detect lazy-loaded content."
+            "Current document.body.scrollHeight in pixels. Compare before/after scroll to detect lazy-loaded content."
         ),
     )
     previous_url: str = Field(

@@ -228,7 +228,7 @@ class _ValidationBrowser:
 
     def __getattr__(self, name: str) -> Any:
         if self._real_browser is None:
-            raise AttributeError(f"browser has no underlying zendriver instance; " f"cannot forward .{name}")
+            raise AttributeError(f"browser has no underlying zendriver instance; cannot forward .{name}")
         return getattr(self._real_browser, name)
 
 
@@ -269,7 +269,7 @@ def _build_save_record(db_path: Path, task_slug: str) -> Any:
                 "scraped_at TEXT NOT NULL, data TEXT NOT NULL)"
             )
             conn.execute(
-                "INSERT OR REPLACE INTO metadata " "(source_url, task_slug, scraped_at, data) VALUES (?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO metadata (source_url, task_slug, scraped_at, data) VALUES (?, ?, ?, ?)",
                 (
                     source_url,
                     task_slug,

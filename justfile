@@ -1,2 +1,2 @@
 formatter:
-	. .venv/bin/activate; command black --line-length 125 .
+	. .venv/bin/activate; command ruff format

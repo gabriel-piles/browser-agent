@@ -12,11 +12,12 @@ sent to the model, keeping only the most recent returns full. The
 underlying ``state.message_history`` is untouched, so the final
 agent result still has the full audit trail.
 
-For ``explore_page`` returns we keep the first 6 header lines
+For ``explore_page`` returns we keep all metadata header lines
 (Action, URL, Title, summary, URL CHANGED, scroll_height, ERROR)
-plus any extracted element lines (text + href) — the structural
-clues the agent needs to remember what each page looked like — and
-replace the HTML body with a single placeholder line.
+plus the ``# Extracted elements`` block (header + up to
+``COMPACT_MAX_EXTRACTED_LINES`` element lines with text + href) —
+the structural clues the agent needs to remember what each page
+looked like — and replace the HTML body with a single placeholder.
 
 For any other tool return over ``COMPACT_MIN_TRIM_CHARS`` we keep
 only the first few non-empty lines and drop the rest, with a
@@ -227,38 +228,48 @@ def _summarise_generic(content: str) -> str:
 
 
 class _ExploreState:
-    """Mutable state for parsing one explore_page output line at a time."""
+    """Parses one explore_page output, keeping headers + extracted elements.
 
-    __slots__ = ("extracted_seen", "extracted_count", "header_count")
+    The output has three sections: metadata headers (``#`` lines),
+    an optional extracted-elements block (``# Extracted elements``
+    header + ``  <`` element lines), and the HTML body.  We keep the
+    first two and stop at the HTML body.
+    """
+
+    _METADATA = "metadata"
+    _EXTRACTED = "extracted"
+
+    __slots__ = ("phase", "extracted_count")
 
     def __init__(self) -> None:
-        self.extracted_seen = False
+        self.phase = self._METADATA
         self.extracted_count = 0
-        self.header_count = 0
 
     def step(self, line: str, kept: list[str]) -> bool:
         """Process one line. Return True when the reader must stop."""
+        if self.phase == self._METADATA:
+            return self._step_metadata(line, kept)
+        return self._step_extracted(line, kept)
+
+    def _step_metadata(self, line: str, kept: list[str]) -> bool:
+        if not line.strip():
+            return False
         if line.startswith("# Extracted elements"):
-            self.extracted_seen = True
+            kept.append(line)
+            self.phase = self._EXTRACTED
+            return False
+        if line.startswith("#"):
             kept.append(line)
             return False
-        if self.extracted_seen:
-            return self._step_extracted(line, kept)
-        return self._step_header(line, kept)
+        return True
 
     def _step_extracted(self, line: str, kept: list[str]) -> bool:
-        if self.extracted_count >= COMPACT_MAX_EXTRACTED_LINES or not line.startswith("  <"):
+        if not line.strip():
+            return False
+        if not line.startswith("  <"):
+            return True
+        if self.extracted_count >= COMPACT_MAX_EXTRACTED_LINES:
             return True
         kept.append(line)
         self.extracted_count += 1
-        return False
-
-    def _step_header(self, line: str, kept: list[str]) -> bool:
-        if not line.strip():
-            return False
-        kept.append(line)
-        if line.startswith("#"):
-            self.header_count += 1
-            if self.header_count >= COMPACT_HEAD_LINES:
-                return True
         return False

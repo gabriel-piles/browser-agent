@@ -101,7 +101,7 @@ def make_history(n_snapshots: int = 20, n_validations: int = 2) -> list:
                     ToolReturnPart(
                         tool_name="run_validation_script",
                         content=(
-                            f"# Validation attempt {i+1}/3: SUCCESS\n\n"
+                            f"# Validation attempt {i + 1}/3: SUCCESS\n\n"
                             + ("stdout noise\n" * 2000)
                             + "Traceback (most recent call last):\n  File x"
                         ),
@@ -137,7 +137,7 @@ def main() -> int:
         if isinstance(p, ToolReturnPart)
     )
     print(f"compacted tool-return chars: {compacted_total:,}")
-    assert compacted_total < original_total * 0.2, f"expected <20% of original, got {compacted_total/original_total:.1%}"
+    assert compacted_total < original_total * 0.2, f"expected <20% of original, got {compacted_total / original_total:.1%}"
     snap_kept_recent = 0
     snap_trimmed_old = 0
     val_kept_recent = 0

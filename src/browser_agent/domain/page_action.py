@@ -50,13 +50,11 @@ class PageAction(BaseModel):
     )
     value: str | None = Field(
         default=None,
-        description=("Text to type (fill), option value to select (select), or " "ignored for other actions."),
+        description=("Text to type (fill), option value to select (select), or ignored for other actions."),
     )
     scroll_pixels: int | None = Field(
         default=None,
-        description=(
-            "Pixels to scroll down. If omitted, scrolls to the bottom " "of the page (document.body.scrollHeight)."
-        ),
+        description=("Pixels to scroll down. If omitted, scrolls to the bottom of the page (document.body.scrollHeight)."),
     )
     wait_seconds: float | None = Field(
         default=None,

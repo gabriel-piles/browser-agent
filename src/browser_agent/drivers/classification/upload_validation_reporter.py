@@ -26,12 +26,7 @@ class UploadValidationReporter:
         print(f"  template:  {mapping.template!r}")
         label = "entity" if existing_count == 1 else "entities"
         print(f"  existing:  {existing_count} {label} on Uwazi")
-        print(
-            "  plan: "
-            f"create={counts.get('create', 0)}, "
-            f"update={counts.get('update', 0)}, "
-            f"skip={counts.get('skip', 0)}"
-        )
+        print(f"  plan: create={counts.get('create', 0)}, update={counts.get('update', 0)}, skip={counts.get('skip', 0)}")
         if not issues:
             print("  no issues found in new entities")
             return

@@ -129,7 +129,7 @@ class MetadataCatalogBuilder:
         """Build a single :class:`MetadataField` from accumulated stats."""
         return MetadataField(
             name=name,
-            description=(f"Field observed on {page_count[name]}/{total_rows} row(s) " f"in metadata.db."),
+            description=(f"Field observed on {page_count[name]}/{total_rows} row(s) in metadata.db."),
             value_type=self._value_type.infer(list(samples)),
             examples=tuple(samples),
             export_to_uwazi=True,

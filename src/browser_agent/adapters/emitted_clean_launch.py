@@ -159,7 +159,7 @@ def with_emitted_inject_profile_path(python_code: str, profile_path: str) -> str
         from loguru import logger
 
         logger.info(
-            "emitted-script injector wrote user_data_dir into {n} start_browser() call(s) " "pointing at {path}",
+            "emitted-script injector wrote user_data_dir into {n} start_browser() call(s) pointing at {path}",
             n=rewritten,
             path=profile_path,
         )

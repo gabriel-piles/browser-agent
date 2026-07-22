@@ -112,4 +112,4 @@ class DefaultValueValidator:
     ) -> None:
         """Print one line per token in ``tokens`` against the thesaurus."""
         for token in tokens:
-            print(f"  {field_target!r} -> {token!r}: " f"{status} (thesaurus: {thesaurus.name!r})")
+            print(f"  {field_target!r} -> {token!r}: {status} (thesaurus: {thesaurus.name!r})")
