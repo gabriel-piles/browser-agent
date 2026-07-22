@@ -75,8 +75,19 @@ def with_emitted_all_pdf_downloads(python_code: str) -> str:
 # a real download helper without importing from this project.
 EMITTED_CURL_CFFI_BLOCK = '''\
 # ── BEGIN emitted curl_cffi pdf-download helper (vendored from browser_agent) ──
+import hashlib
 import os as _os
 from pathlib import Path
+
+
+def _pdf_filename_for(url):
+    """Deterministic, collision-safe on-disk filename for ``url``.
+
+    Returns ``pdf_<sha1(url)[:12]>.pdf`` — a pure function of the
+    download URL, so "file exists at path" == "this exact PDF was
+    already downloaded" regardless of page order or label reuse.
+    """
+    return f"pdf_{hashlib.sha1(url.encode()).hexdigest()[:12]}.pdf"
 
 
 def _pdf_existing_size(path):
@@ -117,30 +128,46 @@ def _pdf_write_atomic(path, data):
 
 
 async def download_pdf_curl_cffi(url, save_path, tab=None):
-    """Download ``url`` to ``save_path`` via curl_cffi.
+    """Download ``url`` into directory ``save_path`` via curl_cffi.
+
+    The on-disk filename is a deterministic function of ``url``
+    (``pdf_<sha1(url)[:12]>.pdf``), NOT the caller-supplied name —
+    so re-runs in a different order produce the same path and the
+    skip-by-path check stays correct.
+
+    ``save_path`` is the downloads DIRECTORY (e.g. ``out_dir``).
+    If a filename is passed instead, its parent directory is used.
 
     Uses Chrome TLS fingerprint impersonation.  When ``tab`` is
     provided, cookies are extracted from the active browser session
     so cookie-gated / authenticated downloads work.
 
-    Idempotent: if ``save_path`` already exists and is non-empty, the
-    download is skipped and the existing file size is returned in
-    the result dict (``skipped=True``).  Writes are atomic
+    Idempotent: if the target file already exists and is non-empty,
+    the download is skipped (``skipped=True``).  Writes are atomic
     (temp + rename) so a crash mid-download never leaves a partial
-    file at ``save_path``.
+    file.
 
-    Returns a dict ``{"size": int, "skipped": bool, "reason": str}``.
+    Returns a dict with ``saved_path`` (the absolute path written)
+    so the caller can store the exact ``pdf_filename`` in the DB:
+
+        result = await download_pdf_curl_cffi(pdf_url, out_dir, tab)
+        save_record(..., {"pdf_filename": Path(result["saved_path"]).name, ...})
+
     Raises ``RuntimeError`` on failure (HTTP error, network error,
     empty response).
     """
     from curl_cffi import AsyncSession
 
-    save_path = Path(save_path)
-    save_path.parent.mkdir(parents=True, exist_ok=True)
+    save_dir = Path(save_path)
+    if not save_dir.is_dir():
+        save_dir = save_dir.parent
+    save_dir.mkdir(parents=True, exist_ok=True)
+    save_path = save_dir / _pdf_filename_for(url)
 
     existing = _pdf_existing_size(save_path)
     if existing > 0:
-        return {"size": existing, "skipped": True, "reason": "already_downloaded"}
+        return {"size": existing, "skipped": True, "reason": "already_downloaded",
+                "saved_path": str(save_path)}
 
     cookies = {}
     if tab is not None:
@@ -167,7 +194,8 @@ async def download_pdf_curl_cffi(url, save_path, tab=None):
         raise RuntimeError(f"empty response for {url}")
 
     _pdf_write_atomic(save_path, body)
-    return {"size": len(body), "skipped": False, "reason": "downloaded"}
+    return {"size": len(body), "skipped": False, "reason": "downloaded",
+            "saved_path": str(save_path)}
 # ── END emitted curl_cffi pdf-download helper ──
 
 '''
@@ -179,6 +207,7 @@ EMITTED_BROWSER_FETCH_BLOCK = '''\
 # ── BEGIN emitted browser-fetch pdf-download helper (vendored from browser_agent) ──
 import asyncio
 import base64
+import hashlib
 import json
 import os as _os
 from pathlib import Path
@@ -186,6 +215,16 @@ from pathlib import Path
 _PDF_DOWNLOAD_TIMEOUT_S = 90.0
 _PDF_DOWNLOAD_RETRIES = 3
 _PDF_DOWNLOAD_RETRY_DELAY_S = 1.5
+
+
+def _pdf_filename_for(url):
+    """Deterministic, collision-safe on-disk filename for ``url``.
+
+    Returns ``pdf_<sha1(url)[:12]>.pdf`` — a pure function of the
+    download URL, so "file exists at path" == "this exact PDF was
+    already downloaded" regardless of page order or label reuse.
+    """
+    return f"pdf_{hashlib.sha1(url.encode()).hexdigest()[:12]}.pdf"
 
 
 def _pdf_existing_size(path):
@@ -258,8 +297,8 @@ async def _fetch_pdf_once(tab, url):
 async def _try_browser_fetch(tab, url, save_path):
     """Retry the browser fetch, write ``save_path`` atomically.
 
-    Returns a result dict ``{"size": int, "skipped": bool, "reason": str}``.
-    Raises ``RuntimeError`` on final failure.
+    Returns a result dict with ``saved_path``. Raises ``RuntimeError``
+    on final failure.
     """
     last_exc = None
     for attempt in range(1, _PDF_DOWNLOAD_RETRIES + 1):
@@ -269,7 +308,8 @@ async def _try_browser_fetch(tab, url, save_path):
                 raise RuntimeError(f"empty response for {url}")
             body = base64.b64decode(result)
             _pdf_write_atomic(save_path, body)
-            return {"size": len(body), "skipped": False, "reason": "downloaded"}
+            return {"size": len(body), "skipped": False, "reason": "downloaded",
+                    "saved_path": str(save_path)}
         except RuntimeError as exc:
             last_exc = exc
             if attempt < _PDF_DOWNLOAD_RETRIES:
@@ -280,8 +320,8 @@ async def _try_browser_fetch(tab, url, save_path):
 async def _try_curl_cffi(url, save_path):
     """Fallback: download via curl_cffi with Chrome TLS impersonation.
 
-    Returns a result dict ``{"size": int, "skipped": bool, "reason": str}``.
-    Raises ``RuntimeError`` on failure.
+    Returns a result dict with ``saved_path``. Raises ``RuntimeError``
+    on failure.
     """
     try:
         from curl_cffi import AsyncSession
@@ -297,11 +337,20 @@ async def _try_curl_cffi(url, save_path):
     if not r.content:
         raise RuntimeError(f"empty response for {url}")
     _pdf_write_atomic(save_path, r.content)
-    return {"size": len(r.content), "skipped": False, "reason": "downloaded"}
+    return {"size": len(r.content), "skipped": False, "reason": "downloaded",
+            "saved_path": str(save_path)}
 
 
 async def download_pdf_browser(tab, url, save_path):
-    """Download ``url`` to ``save_path``.
+    """Download ``url`` into directory ``save_path``.
+
+    The on-disk filename is a deterministic function of ``url``
+    (``pdf_<sha1(url)[:12]>.pdf``), NOT the caller-supplied name —
+    so re-runs in a different order produce the same path and the
+    skip-by-path check stays correct.
+
+    ``save_path`` is the downloads DIRECTORY (e.g. ``out_dir``).
+    If a filename is passed instead, its parent directory is used.
 
     Primary: the browser's native ``fetch()`` from the current tab,
     which routes through Chrome's real network stack (TLS fingerprint,
@@ -314,20 +363,29 @@ async def download_pdf_browser(tab, url, save_path):
 
     HTTP URLs are upgraded to HTTPS to avoid mixed-content blocking.
 
-    Idempotent: when ``save_path`` already exists and is non-empty,
-    the download is skipped and the existing size is returned in the
-    result dict (``skipped=True``).  Writes are atomic (temp + rename).
+    Idempotent: when the target file already exists and is non-empty,
+    the download is skipped (``skipped=True``).  Writes are atomic
+    (temp + rename).
 
-    Returns a result dict ``{"size": int, "skipped": bool, "reason": str}``.
+    Returns a dict with ``saved_path`` (the absolute path written)
+    so the caller can store the exact ``pdf_filename`` in the DB:
+
+        result = await download_pdf_browser(tab, pdf_url, out_dir)
+        save_record(..., {"pdf_filename": Path(result["saved_path"]).name, ...})
+
     Raises ``RuntimeError`` if both strategies fail.
     """
     if url.startswith("http://"):
         url = "https://" + url[7:]
-    save_path = Path(save_path)
-    save_path.parent.mkdir(parents=True, exist_ok=True)
+    save_dir = Path(save_path)
+    if not save_dir.is_dir():
+        save_dir = save_dir.parent
+    save_dir.mkdir(parents=True, exist_ok=True)
+    save_path = save_dir / _pdf_filename_for(url)
     existing = _pdf_existing_size(save_path)
     if existing > 0:
-        return {"size": existing, "skipped": True, "reason": "already_downloaded"}
+        return {"size": existing, "skipped": True, "reason": "already_downloaded",
+                "saved_path": str(save_path)}
     try:
         return await _try_browser_fetch(tab, url, save_path)
     except RuntimeError:

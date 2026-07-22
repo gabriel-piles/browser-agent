@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import time
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +15,11 @@ _DEFAULT_DOWNLOADS_PATH = PROJECT_ROOT / "data" / "downloads"
 _IMPERSONATE = "chrome"
 _TIMEOUT_S = 60.0
 _MAX_SIZE_BYTES = 100 * 1024 * 1024
+
+
+def _pdf_filename_for(url: str) -> str:
+    """Deterministic, collision-safe on-disk filename for ``url``."""
+    return f"pdf_{hashlib.sha1(url.encode()).hexdigest()[:12]}.pdf"
 
 
 class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
@@ -99,13 +104,14 @@ class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
         return {c["name"]: c["value"] for c in cookies if c.get("name") and c.get("value")}
 
     def _resolve_save_path(self, save_path: str | None, url: str) -> Path:
-        """Derive a safe filename, stripping any directory components."""
-        if save_path:
-            return self._downloads_path / Path(save_path).name
-        tail = url.rstrip("/").split("/")[-1]
-        if "." in tail and not tail.startswith("?"):
-            return self._downloads_path / Path(tail).name
-        return self._downloads_path / f"download_{int(time.time())}.pdf"
+        """Derive the on-disk path from a content-addressed filename.
+
+        The filename is a deterministic function of ``url``
+        (``pdf_<sha1(url)[:12]>.pdf``) so the probe download uses the
+        same naming as the emitted helpers, making existence-at-path
+        equivalent to "this URL was already downloaded".
+        """
+        return self._downloads_path / _pdf_filename_for(url)
 
     @staticmethod
     def _existing_size(path: Path) -> int:

@@ -79,18 +79,17 @@ class MatchDriver:
         asyncio.run(self._run_async())
 
     async def _run_async(self) -> None:
-        """Load the context, run default-value + upload validation, then process thesauri."""
+        """Load the context, run thesaurus matching, then print the upload-validation report."""
         context_loader = self._build_context_loader()
         context = context_loader.load(self._paths.default_mapping_path())
         self._print_setup_summary(len(context.thesauri_by_id), len(context.field_counters))
         self._default_validator.print_report(context.mapping.properties, context.template, context.thesauri_by_id)
-        self._run_upload_validation(context)
         SectionPrinter().heading("Thesaurus matching")
         groups = self._build_groups(context)
-        if not groups:
-            return
-        self._paths.thesauri_mappings_dir()
-        await self._process_all_thesauri(groups, context)
+        if groups:
+            self._paths.thesauri_mappings_dir()
+            await self._process_all_thesauri(groups, context)
+        self._run_upload_validation(context)
 
     def _build_context_loader(self) -> MatchContextLoader:
         """Return a fresh :class:`MatchContextLoader` wired to the live Uwazi client."""

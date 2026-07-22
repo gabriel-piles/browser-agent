@@ -13,7 +13,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 # LLM connection — consumed by ``adapters/llm/ollama_adapter.py``.
 OLLAMA_BASE_URL = "https://ollama.com/v1"
-ORCHESTRATOR_MODEL = "deepseek-v4-pro:cloud"
+ORCHESTRATOR_MODEL = "kimi-k2.7-code:cloud"
 
 # YAML file that defines every run: ``active_run`` (the name to
 # execute) plus a list of ``runs`` each with ``name`` and ``prompt``.

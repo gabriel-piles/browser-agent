@@ -17,14 +17,15 @@ idempotent on re-runs (no duplicates).
 When the task downloads multiple files (PDFs, images) per page, the
 script MUST call ``save_record`` once per FILE with a unique
 ``source_url`` (e.g. ``f"{page_url}/pdf/{pdf_idx}"``) so each file
-gets its own row. The on-disk filename MUST be a deterministic
-function of the file's download URL (a short hash:
-``pdf_{sha1(url)[:12]}.pdf``), never a human label or a position
-index — labels collide across pages, and position indices break the
-download helper's skip-by-path when result order changes. Store the
-human-readable name and document type inside the ``data`` dict
-(``pdf_name``, ``pdf_type``, ``pdf_id``, ``pdf_url``,
-``pdf_filename``) so downstream code joins file to metadata without
+gets its own row. The on-disk filename is derived by the download
+helper from the file's download URL (``pdf_{sha1(url)[:12]}.pdf``),
+never a human label or a position index — labels collide across
+pages, and position indices break the download helper's skip-by-path
+when result order changes. The caller reads the actual filename from
+the helper's result dict (``result["saved_path"]``) and stores it in
+the ``data`` dict (``pdf_filename``), alongside the human-readable
+name and document type (``pdf_name``, ``pdf_type``, ``pdf_id``,
+``pdf_url``) so downstream code joins file to metadata without
 parsing the path.
 Path resolution:
 
@@ -91,13 +92,14 @@ def save_record(source_url: str, data: dict) -> None:
 
     When downloading multiple files per page (PDFs, images), call this
     once per FILE with a unique source_url (e.g. ``f"{page_url}/pdf/{i}"``)
-    so each file gets its own row. The on-disk filename MUST be a hash of
-    the file's download URL (``pdf_{sha1(url)[:12]}.pdf``), stored in
-    ``data`` as ``pdf_id`` / ``pdf_filename``; keep the human label and
-    type in ``pdf_name`` / ``pdf_type``. Never derive the filename from
-    the label (collides) or a position index (breaks skip-by-path on
-    reorder) — the path must be a pure function of the URL so the
-    download helper's existence check means "already downloaded this URL".
+    so each file gets its own row. The on-disk filename is derived by
+    the download helper from the file's download URL
+    (``pdf_{sha1(url)[:12]}.pdf``); read it from the helper's result
+    dict (``result["saved_path"]``) and store it in ``data`` as
+    ``pdf_id`` / ``pdf_filename``. Keep the human label and type in
+    ``pdf_name`` / ``pdf_type``. The path is a pure function of the URL
+    so the download helper's existence check means "already downloaded
+    this URL".
     """
     conn = sqlite3.connect(_SAVE_RECORD_DB_PATH)
     try:

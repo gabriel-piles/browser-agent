@@ -9,6 +9,7 @@ to create entities for new rows and skip rows that already exist.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import datetime
@@ -48,15 +49,21 @@ def _parse_row_data(raw: str | None) -> dict:
     return loaded if isinstance(loaded, dict) else {}
 
 
+def _pdf_filename_for(url: str) -> str:
+    """Deterministic, collision-safe on-disk filename for ``url``."""
+    return f"pdf_{hashlib.sha1(url.encode()).hexdigest()[:12]}.pdf"
+
+
 def resolve_pdf_filename(record: dict, source_url: str, downloads_dir: Path | None) -> str | None:
     """Return the absolute local PDF path for one record, or ``None``.
 
     The scraper stores the on-disk filename in the record's
-    ``pdf_filename`` field (e.g. ``pdf_001_01.pdf``); the file lands in
-    ``<run>/downloads/``. The record's ``pdf_url`` is an opaque
-    download token whose tail is NOT the saved filename, so it is only
-    used as a fallback when ``pdf_filename`` is missing. Returns the
-    absolute path string when the file exists on disk, else ``None``.
+    ``pdf_filename`` field (e.g. ``pdf_a1b2c3d4e5f6.pdf``); the file
+    lands in ``<run>/downloads/``. When ``pdf_filename`` is missing,
+    the filename is derived from ``pdf_url`` (or ``source_url``) using
+    the same ``pdf_<sha1(url)[:12]>.pdf`` scheme the download helper
+    uses. Returns the absolute path string when the file exists on
+    disk, else ``None``.
     """
     if downloads_dir is None:
         return None
@@ -65,9 +72,7 @@ def resolve_pdf_filename(record: dict, source_url: str, downloads_dir: Path | No
         url = record.get("pdf_url") or source_url
         if not isinstance(url, str) or not url:
             return None
-        name = url.rstrip("/").split("/")[-1]
-        if not name or "." not in name or name.startswith("?"):
-            return None
+        name = _pdf_filename_for(url)
     candidate = downloads_dir / name
     if candidate.is_file():
         return str(candidate)

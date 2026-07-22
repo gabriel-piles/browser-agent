@@ -490,14 +490,21 @@ Script rules (HARD — every script you emit MUST follow these):
   renders them as a viewer page instead of downloading them.
   NEVER use ``requests``, ``httpx``, ``aiohttp``, ``urllib`` or
   any other HTTP library — only the two vendored helpers above.
-  Call the chosen helper for each download (wrap in
+
+  ``save_path`` is the downloads DIRECTORY (``out_dir``), NOT a
+  filename — the helper derives the on-disk filename from the URL
+  hash (``pdf_<sha1(url)[:12]>.pdf``) so naming is deterministic and
+  order-independent. The helper returns a dict with ``saved_path``
+  (the absolute path it wrote); extract the filename from it for the
+  DB row. Call the chosen helper for each download (wrap in
   ``try / except RuntimeError as e`` to keep going after a
   failure):
 
       # curl_cffi strategy
-      await download_pdf_curl_cffi(pdf_url, save_path, tab)
+      result = await download_pdf_curl_cffi(pdf_url, out_dir, tab)
       # — or — browser_fetch strategy
-      await download_pdf_browser(tab, pdf_url, save_path)
+      result = await download_pdf_browser(tab, pdf_url, out_dir)
+      pdf_filename = Path(result["saved_path"]).name  # for save_record
 
 9. ``tab.evaluate`` return types — when you call
    ``tab.evaluate('(...) => { ... return obj; }')`` the return
@@ -566,54 +573,57 @@ Script rules (HARD — every script you emit MUST follow these):
     ``"downloads"`` — it breaks when the operator runs the script from
     the ``scripts/`` directory.
 
-13. PDF file naming — one unique file per PDF, content-addressed by the
-    download URL. A label-based name ("Resumen.pdf", "Español_1.pdf")
-    collides the moment two pages each have a PDF with the same
-    label/language, silently overwriting earlier downloads. A
-    position-based name (``pdf_005_03.pdf``) is also wrong: it names
-    content by where it appeared in an enumeration, so a re-run whose
-    results arrive in a different order reuses a stale path and the
-    download helper silently skips the new PDF (the skip logic tests
+13. PDF file naming — the download helper derives the on-disk
+    filename from the PDF's download URL; you do NOT name the file.
+    This is enforced in the helper code, so you cannot get it wrong
+    by passing a label-based or position-based name.
+
+    Why this matters: a label-based name ("Resumen.pdf",
+    "Español_1.pdf") collides the moment two pages each have a PDF
+    with the same label/language, silently overwriting earlier
+    downloads. A position-based name (``pdf_005_03.pdf``) names
+    content by where it appeared in an enumeration, so a re-run
+    whose results arrive in a different order reuses a stale path
+    and the helper silently skips the new PDF (the skip logic tests
     path existence, NOT URL identity).
 
-    The on-disk filename MUST be a deterministic function of the PDF's
-    own download URL, so that "file exists at path" is equivalent to
-    "this exact PDF was already downloaded". The human label and
-    document type live in the DB row, not in the path.
+    The helper computes ``pdf_<sha1(url)[:12]>.pdf`` — a pure
+    function of the URL. Same PDF -> same path (so a re-run
+    overwrites the same file, matching ``INSERT OR REPLACE``
+    semantics and making skip-by-path correct); different PDFs ->
+    different paths (no collision, ever, regardless of label reuse
+    or result ordering).
 
-    Naming scheme — hash the download URL with a short, collision-safe
-    digest (sha1 truncated to 12 hex chars is plenty for one site) and
-    keep a short human-readable prefix for directory listing legibility::
+    How to use it — pass ``out_dir`` as ``save_path`` and read the
+    actual filename from the result dict's ``saved_path``::
 
-        import hashlib
-        _url_hash = hashlib.sha1(pdf_url.encode()).hexdigest()[:12]
-        pdf_id = f"pdf_{_url_hash}"                 # e.g. pdf_a1b2c3d4e5f6
-        save_path = out_dir / f"{pdf_id}.pdf"
+        result = await download_pdf_curl_cffi(pdf_url, out_dir, tab)
+        # — or —
+        result = await download_pdf_browser(tab, pdf_url, out_dir)
+        pdf_filename = Path(result["saved_path"]).name
+        pdf_id = pdf_filename[:-4]  # strip ".pdf" -> pdf_a1b2c3d4e5f6
 
-    Because the id is a pure function of the URL: same PDF -> same path
-    (so a re-run overwrites the same file, matching the ``INSERT OR
-    REPLACE`` semantics of save_record and making the helper's skip-by-path
-    correct), and different PDFs -> different paths (no collision, ever,
-    regardless of label reuse or result ordering).
-
-    DB row — store the id and the human-readable fields side by side so
-    downstream code joins file to metadata without parsing the filename::
+    DB row — store the id and the human-readable fields side by side
+    so downstream code joins file to metadata without parsing the
+    filename::
 
         save_record(f"{page_url}/pdf/{pdf_idx}", {
             ...,
             "pdf_id": pdf_id,            # content address: pdf_a1b2c3d4e5f6
             "pdf_url": pdf_url,          # the URL the hash derives from
-            "pdf_filename": save_path.name,  # pdf_a1b2c3d4e5f6.pdf — unique
+            "pdf_filename": pdf_filename,  # pdf_a1b2c3d4e5f6.pdf — unique
             "pdf_name": pdf_name,        # human label: "Resumen" / "Voto de..."
             "pdf_type": pdf_type,        # "Resumen" | "Voto" | ...
         })
 
     HARD RULES:
+    - NEVER pass a filename as ``save_path`` — pass the downloads
+      DIRECTORY (``out_dir``). The helper derives the filename.
     - NEVER use a human label, language, or type in the on-disk filename.
     - NEVER use a position-based id (page_idx/pdf_idx) in the filename — it
       breaks the download helper's skip-by-path when result order changes.
-    - The filename MUST be a deterministic function of the PDF download URL
-      (a hash), so existence-at-path == already-downloaded for that URL.
+    - Always read ``pdf_filename`` from ``result["saved_path"]`` so the
+      DB row matches the actual file on disk exactly.
     - The ``source_url`` passed to save_record MUST be unique per PDF
       (e.g. ``f"{page_url}/pdf/{pdf_idx}"``), never the bare page URL, so
       one row per PDF is guaranteed (rule 11 keys on source_url).
