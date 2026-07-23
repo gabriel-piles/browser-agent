@@ -116,30 +116,10 @@ class CdpPageTracker:
         timeout: float,
         poll_interval: float = 0.02,
     ) -> bool:
-        """Block until ``loadingFinished`` (or ``loadingFailed``) fires for ``request_id``.
-
-        ``Network.getResponseBody`` is officially only valid after the
-        request has finished loading; calling it earlier returns
-        ``No data found for resource with given identifier``. The
-        capture path uses this wait before reading the main-frame body.
-        """
+        """Block until ``loadingFinished`` (or ``loadingFailed``) fires for ``request_id``."""
         if not request_id:
             return False
-        deadline = self._loop.time() + timeout
-        while True:
-            if request_id in self._finished_requests:
-                return True
-            remaining = deadline - self._loop.time()
-            if remaining <= 0:
-                return False
-            self._last_event_signal.clear()
-            try:
-                await asyncio.wait_for(
-                    self._last_event_signal.wait(),
-                    timeout=min(remaining, poll_interval),
-                )
-            except asyncio.TimeoutError:
-                pass
+        return await self._poll_until(lambda: request_id in self._finished_requests, timeout, poll_interval)
 
     @property
     def main_document_status(self) -> int | None:
@@ -174,19 +154,44 @@ class CdpPageTracker:
     ) -> bool:
         """Block until a readiness event fires for the active navigation.
 
-        ``name`` is kept as ``"load"`` / ``"networkIdle"`` for caller
-        compatibility, but the underlying signal is now frame-level:
-        ``Page.frameStoppedLoading`` (≈ "load") and
-        ``Page.domContentEventFired`` (≈ "DOMContentLoaded"). The
-        ``Page.lifecycleEvent`` stream is not delivered by this
-        Chrome/zendriver build, so it cannot be used.
-
-        Returns ``True`` if the event fired within ``timeout`` seconds,
-        ``False`` otherwise.
+        ``name`` is kept for caller compatibility; the underlying signal
+        is frame-level (``frameStoppedLoading`` / ``domContentEventFired``).
+        Returns ``True`` if the event fired within ``timeout`` seconds.
         """
+        return await self._poll_until(lambda: self._navigation_started and bool(self._frame_events), timeout, poll_interval)
+
+    def has_pending_requests_for_active_navigation(self) -> bool:
+        """Return ``True`` if any request is currently in-flight for the active loader."""
+        return self._has_pending_requests_for_active_loader()
+
+    async def wait_for_network_idle(
+        self,
+        quiet_window_ms: int,
+        timeout: float,
+        poll_interval: float = 0.05,
+    ) -> bool:
+        """Wait until no requests are in-flight for ``quiet_window_ms``.
+
+        Returns ``True`` if the network reached idle within ``timeout``
+        seconds, ``False`` otherwise.
+        """
+        quiet_seconds = quiet_window_ms / 1000.0
+        last_active_at = self._loop.time()
+
+        def _is_idle() -> bool:
+            nonlocal last_active_at
+            if self._has_pending_requests_for_active_loader():
+                last_active_at = self._loop.time()
+                return False
+            return self._loop.time() - last_active_at >= quiet_seconds
+
+        return await self._poll_until(_is_idle, timeout, poll_interval)
+
+    async def _poll_until(self, condition, timeout: float, poll_interval: float) -> bool:
+        """Poll ``condition`` until it returns True or ``timeout`` elapses."""
         deadline = self._loop.time() + timeout
         while True:
-            if self._navigation_started and self._frame_events:
+            if condition():
                 return True
             remaining = deadline - self._loop.time()
             if remaining <= 0:
@@ -196,41 +201,6 @@ class CdpPageTracker:
                 await asyncio.wait_for(self._last_event_signal.wait(), timeout=min(remaining, poll_interval))
             except asyncio.TimeoutError:
                 pass
-
-    async def wait_for_network_idle(
-        self,
-        quiet_window_ms: int,
-        timeout: float,
-        poll_interval: float = 0.05,
-    ) -> bool:
-        """Wait until no requests are in-flight for the active loader for ``quiet_window_ms``.
-
-        Returns ``True`` if the network reached idle within ``timeout`` seconds,
-        ``False`` otherwise. ``networkQuietWindowMs`` is honoured by Chrome to
-        emit the ``networkIdle`` lifecycle event; this method is the
-        fallback for cases where the event is missed.
-        """
-        quiet_seconds = quiet_window_ms / 1000.0
-        deadline = self._loop.time() + timeout
-        last_active_at = self._loop.time()
-        while True:
-            if self._has_pending_requests_for_active_loader():
-                last_active_at = self._loop.time()
-            else:
-                if self._loop.time() - last_active_at >= quiet_seconds:
-                    return True
-            remaining = deadline - self._loop.time()
-            if remaining <= 0:
-                return False
-            self._last_event_signal.clear()
-            try:
-                await asyncio.wait_for(self._last_event_signal.wait(), timeout=min(remaining, poll_interval))
-            except asyncio.TimeoutError:
-                pass
-
-    def has_pending_requests_for_active_navigation(self) -> bool:
-        """Return ``True`` if any request is currently in-flight for the active loader."""
-        return self._has_pending_requests_for_active_loader()
 
     @property
     def loader_id(self) -> str | None:

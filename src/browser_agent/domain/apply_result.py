@@ -29,15 +29,3 @@ class ApplyResult(BaseModel):
         default_factory=tuple,
         description="(language, source_url, message) tuples for rows that failed mid-flight.",
     )
-
-    def per_language(self) -> dict[str, dict[str, int]]:
-        """Return the per-language action counts (alias for the field)."""
-        return self.per_language_counts
-
-    def skip_reasons_list(self) -> list[tuple[str, str, str]]:
-        """Return the skip reasons as a list (tier 3+ compat)."""
-        return list(self.skip_reasons)
-
-    def errors(self) -> list[tuple[str, str, str]]:
-        """Return the error rows as a list (tier 3+ compat)."""
-        return list(self.error_rows)

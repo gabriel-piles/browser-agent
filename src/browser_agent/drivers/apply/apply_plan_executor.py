@@ -11,7 +11,7 @@ or just simulated locally.
 from __future__ import annotations
 
 from browser_agent.domain.apply_result import ApplyResult
-from browser_agent.use_cases.apply_mapping_use_case import push_plan
+from browser_agent.use_cases.uwazi_pusher import push_plan
 from uwazi_api.client import UwaziClient
 
 

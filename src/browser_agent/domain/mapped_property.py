@@ -23,6 +23,7 @@ from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from browser_agent.domain.field_type import FieldType
+from browser_agent.domain.llm_field_draft import LlmFieldDraft
 
 
 class MappedProperty(BaseModel):
@@ -61,3 +62,29 @@ class MappedProperty(BaseModel):
         if isinstance(value, date):
             return value.isoformat()
         return value
+
+    @classmethod
+    def from_template_and_draft(cls, template_prop, draft: LlmFieldDraft | None) -> MappedProperty:
+        """Merge a live template property with an optional LLM draft.
+
+        When ``draft`` is ``None`` the entry is a source-less default
+        placeholder. The ``type`` and ``required`` come from the live
+        template so the YAML always reflects the real Uwazi shape.
+        """
+        return cls(
+            name=template_prop.name,
+            label=template_prop.label,
+            type=template_prop.type,
+            required=template_prop.required,
+            source=draft.source if draft is not None else None,
+            thesaurus=draft.thesaurus if draft is not None else None,
+            parse_formats=tuple(draft.parse_formats or ()) if draft is not None else (),
+            default_value=draft.default_value if draft is not None else None,
+            notes=draft.notes if draft is not None else None,
+        )
+
+    @classmethod
+    def title_from_draft(cls, title_prop, draft: LlmFieldDraft | None) -> MappedProperty:
+        """Build the title entry: forced to :attr:`FieldType.TITLE`, thesaurus dropped."""
+        entry = cls.from_template_and_draft(title_prop, draft)
+        return entry.model_copy(update={"type": FieldType.TITLE, "thesaurus": None})

@@ -1,27 +1,22 @@
 """Apply post-LLM fallbacks to a drafted :class:`UwaziMapping`.
 
-The :class:`ProposeMappingUseCase` delegates here to patch the
-identity placeholder, default the link-key property, and append
+The :class:`ProposeMappingUseCase` delegates here to append
 ``source=None`` default entries for template properties the LLM
-left uncovered. The filler receives the live Uwazi template so it
-can synthesise the missing entries from real template metadata.
+left uncovered and to correct parent-group default values to leaf
+labels. The filler receives the live Uwazi template so it can
+synthesise the missing entries from real template metadata.
 """
 
 from __future__ import annotations
 
-import re
 
 from browser_agent.domain.field_type import FieldType
-from browser_agent.domain.identity_config import KeySource
 from browser_agent.domain.mapped_property import MappedProperty
-from browser_agent.domain.metadata_field_catalog import MetadataFieldCatalog
 from browser_agent.domain.thesauri_snapshot import ThesauriSnapshot
 from browser_agent.domain.thesauri_value import ThesauriValue
 from browser_agent.domain.uwazi_mapping import UwaziMapping
 from browser_agent.domain.uwazi_property import UwaziProperty
 from browser_agent.domain.uwazi_template import UwaziTemplate
-
-_URL_PATTERN_PLACEHOLDER_RE = re.compile(r"<[A-Za-z_][A-Za-z0-9_]*>")
 
 
 def _find_tree_node(tree: tuple[ThesauriValue, ...], label: str) -> ThesauriValue | None:
@@ -76,30 +71,12 @@ class MappingFallbackFiller:
     def apply(
         self,
         mapping: UwaziMapping,
-        catalog: MetadataFieldCatalog,
         template: UwaziTemplate,
         thesauri_by_id: dict[str, ThesauriSnapshot] | None = None,
     ) -> None:
-        """Patch the identity (frozen-safe) and append missing default entries."""
+        """Append missing default entries and correct parent-group defaults."""
         self._fill_missing_defaults(mapping, template, thesauri_by_id or {})
         mapping.properties = tuple(_correct_one(p, thesauri_by_id or {}, template) for p in mapping.properties)
-
-    def _patch_identity(
-        self,
-        mapping: UwaziMapping,
-        catalog: MetadataFieldCatalog,
-        template: UwaziTemplate,
-    ) -> None:
-        """Replace the frozen identity with placeholder + link-key defaults filled."""
-        updates: dict = {}
-        if mapping.identity.path_placeholder is None:
-            updates["path_placeholder"] = self._placeholder(catalog.pattern)
-        if mapping.identity.key_source is KeySource.KEY_FIELD_AND_PROPERTY and not mapping.identity.key_property:
-            link_prop = self._first_link_property(template)
-            if link_prop is not None:
-                updates["key_property"] = link_prop.name
-        if updates:
-            mapping.identity = mapping.identity.model_copy(update=updates)
 
     def _fill_missing_defaults(
         self,
@@ -138,7 +115,7 @@ class MappingFallbackFiller:
             required=prop.required,
             source=None,
             thesaurus=None,
-            default_value=default_value,
+            default_value=self._default_value_for(prop, thesauri_by_id),
             notes="unmapped template property; no matching scraped field",
         )
 
@@ -155,15 +132,3 @@ class MappingFallbackFiller:
             if thesaurus and thesaurus.values:
                 return thesaurus.values[0]
         return None
-
-    def _first_link_property(self, template: UwaziTemplate) -> UwaziProperty | None:
-        """Return the first ``link``-type property on the template, or None."""
-        for prop in template.properties:
-            if prop.type is FieldType.LINK:
-                return prop
-        return None
-
-    def _placeholder(self, pattern: str) -> str | None:
-        """Extract the first ``<name>`` placeholder from a URL pattern, or None."""
-        match = _URL_PATTERN_PLACEHOLDER_RE.search(pattern)
-        return match.group(0).strip("<>") if match else None

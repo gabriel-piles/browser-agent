@@ -48,7 +48,7 @@ from browser_agent.drivers.matching.thesaurus_processor import ThesaurusProcesso
 from browser_agent.drivers.matching.thesaurus_yaml_writer import ThesaurusYamlWriter
 from browser_agent.drivers.classification.upload_validation_reporter import UploadValidationReporter
 from browser_agent.drivers.clients.uwazi_client_factory import UwaziClientFactory
-from browser_agent.use_cases.apply_mapping_use_case import load_thesauri_mappings
+from browser_agent.use_cases.metadata_value_transformer import load_thesauri_mappings
 
 
 class MatchDriver:

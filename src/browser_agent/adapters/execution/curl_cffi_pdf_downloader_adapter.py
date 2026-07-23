@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
+from browser_agent.adapters.execution.file_ops import existing_size, pdf_filename_for, write_atomic
 from browser_agent.configuration import PROJECT_ROOT
 from browser_agent.domain.download_result import DownloadResult
 from browser_agent.ports.pdf_downloader_port import PdfDownloaderPort
@@ -15,11 +15,6 @@ _DEFAULT_DOWNLOADS_PATH = PROJECT_ROOT / "data" / "downloads"
 _IMPERSONATE = "chrome"
 _TIMEOUT_S = 60.0
 _MAX_SIZE_BYTES = 100 * 1024 * 1024
-
-
-def _pdf_filename_for(url: str) -> str:
-    """Deterministic, collision-safe on-disk filename for ``url``."""
-    return f"pdf_{hashlib.sha1(url.encode()).hexdigest()[:12]}.pdf"
 
 
 class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
@@ -60,7 +55,7 @@ class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        existing = self._existing_size(path)
+        existing = existing_size(path)
         if existing > 0:
             return DownloadResult(
                 success=True,
@@ -85,7 +80,7 @@ class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
             return DownloadResult(
                 success=False, saved_path=str(path), url=url, content_type="", file_size_bytes=0, error=error
             )
-        self._write_atomic(path, r.content)
+        write_atomic(path, r.content)
         return DownloadResult(
             success=True,
             saved_path=str(path),
@@ -111,41 +106,7 @@ class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
         same naming as the emitted helpers, making existence-at-path
         equivalent to "this URL was already downloaded".
         """
-        return self._downloads_path / _pdf_filename_for(url)
-
-    @staticmethod
-    def _existing_size(path: Path) -> int:
-        """Return existing on-disk size in bytes, or 0 when missing/empty."""
-        try:
-            st = path.stat()
-        except (FileNotFoundError, OSError):
-            return 0
-        return st.st_size if st.st_size > 0 else 0
-
-    @staticmethod
-    def _write_atomic(path: Path, data: bytes) -> None:
-        """Write ``data`` to ``path`` atomically (temp + rename)."""
-        import os as _os
-
-        part = path.with_name(path.name + ".part")
-        try:
-            if part.exists():
-                try:
-                    part.unlink()
-                except OSError:
-                    pass
-            with open(part, "wb") as f:
-                f.write(data)
-                f.flush()
-                _os.fsync(f.fileno())
-            _os.replace(part, path)
-        except Exception:
-            try:
-                if part.exists():
-                    part.unlink()
-            except OSError:
-                pass
-            raise
+        return self._downloads_path / pdf_filename_for(url)
 
     @staticmethod
     def _validate_response(r: Any, body_len: int) -> str:

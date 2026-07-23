@@ -25,6 +25,7 @@ from browser_agent.domain.field_type import FieldType
 from browser_agent.domain.thesauri_snapshot import ThesauriSnapshot
 from browser_agent.domain.uwazi_mapping import UwaziMapping
 from browser_agent.domain.uwazi_template import UwaziTemplate
+from browser_agent.drivers.matching.thesaurus_lookup import split_default_tokens
 
 
 class ThesaurusGroupsBuilder:
@@ -87,9 +88,7 @@ class ThesaurusGroupsBuilder:
 
     def _default_tokens(self, prop) -> list[str]:
         """Split ``prop.default_value`` into individual tokens for select/multiselect."""
-        if prop.default_value is None:
-            return []
-        return [token for token in (t.strip() for t in str(prop.default_value).split(",")) if token]
+        return split_default_tokens(prop)
 
     def _build_one(
         self,

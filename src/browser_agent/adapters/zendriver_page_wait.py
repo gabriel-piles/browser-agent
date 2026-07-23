@@ -47,44 +47,6 @@ class ZendriverPageWait:
         self._default_load_timeout = default_load_timeout
         self._quiet_window_ms = quiet_window_ms
 
-    @property
-    def http_status(self) -> int | None:
-        """HTTP status code of the main document response, or ``None`` if not yet received."""
-        return self._tracker.main_document_status
-
-    @property
-    def main_document_mime_type(self) -> str | None:
-        """Mime type of the main document response, or ``None`` if not yet received."""
-        return self._tracker.main_document_mime_type
-
-    @property
-    def main_document_final_url(self) -> str | None:
-        """Final URL of the main document response after redirects, or ``None``."""
-        return self._tracker.main_document_final_url
-
-    @property
-    def main_document_request_id(self) -> str | None:
-        """CDP request id of the main document response, or ``None`` if not yet received."""
-        return self._tracker.main_document_request_id
-
-    def main_document_is_pdf(self) -> bool:
-        """Return ``True`` when the main document response advertises a PDF body."""
-        return self._tracker.main_document_is_pdf()
-
-    async def wait_for_request_finished(
-        self,
-        request_id: str,
-        timeout: float = 30.0,
-    ) -> bool:
-        """Block until ``Network.loadingFinished`` (or ``loadingFailed``) fires for ``request_id``.
-
-        Required before calling ``Network.getResponseBody``: the CDP
-        call returns ``No data found for resource with given identifier``
-        if the request has not finished loading. The PDF capture use
-        case waits on the main document's request id here.
-        """
-        return await self._tracker.wait_for_request_finished(request_id, timeout)
-
     async def wait_until_ready(
         self,
         strategy: WaitStrategy | None = None,

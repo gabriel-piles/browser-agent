@@ -36,6 +36,7 @@ to anti-bot systems:
 from __future__ import annotations
 
 import re
+from browser_agent.adapters.browser.clean_browser_launcher import _STEALTH_JS
 
 # Match a call to zendriver's start() that the LLM emitted. Captures
 # any preceding ``await`` / argument list (including multiline). The
@@ -179,32 +180,7 @@ def with_emitted_clean_launch(python_code: str) -> str:
     return f"{EMITTED_CLEAN_LAUNCH_BLOCK}{python_code}"
 
 
-EMITTED_CLEAN_LAUNCH_BLOCK = '''\
-# ── BEGIN emitted clean-launch helper (vendored from browser_agent) ──
-import os
-import shutil
-import socket
-import subprocess
-import tempfile
-from pathlib import Path
-
-import zendriver as zd
-
-_STEALTH_JS = """
-Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-window.chrome = {runtime: {}};
-if (window.CDC_adoQpoasnfa76pfcZLmcfl_Promise) {
-    window.CDC_adoQpoasnfa76pfcZLmcfl_Promise = undefined;
-}
-if (window.cdc_adoQpoasnfa76pfcZLmcfl_Promise) {
-    window.cdc_adoQpoasnfa76pfcZLmcfl_Promise = undefined;
-}
-Object.defineProperty(window, 'outerWidth', {get: () => window.innerWidth});
-Object.defineProperty(window, 'outerHeight', {get: () => window.innerHeight});
-"""
-
+_EMITTED_CLEAN_LAUNCH_SUFFIX = '''
 # Same default the agent uses (see ``configuration.ZENDRIVER_HEADLESS``).
 _EMITTED_HEADLESS = os.environ.get("ZENDRIVER_HEADLESS", "false").lower() in {"1", "true", "yes"}
 _CHROMIUM_BIN = "/usr/bin/chromium"
@@ -310,3 +286,17 @@ async def start_browser(headless=None, user_data_dir=None):
 # ── END emitted clean-launch helper ──
 
 '''
+
+EMITTED_CLEAN_LAUNCH_BLOCK = (
+    "# ── BEGIN emitted clean-launch helper (vendored from browser_agent) ──\n"
+    "import os\n"
+    "import shutil\n"
+    "import socket\n"
+    "import subprocess\n"
+    "import tempfile\n"
+    "from pathlib import Path\n"
+    "\n"
+    "import zendriver as zd\n"
+    "\n"
+    f'_STEALTH_JS = """{_STEALTH_JS}"""\n'
+) + _EMITTED_CLEAN_LAUNCH_SUFFIX

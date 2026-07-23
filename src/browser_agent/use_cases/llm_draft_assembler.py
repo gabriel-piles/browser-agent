@@ -14,8 +14,6 @@ the metadata builder skips it (title is not part of the Uwazi
 
 from __future__ import annotations
 
-from browser_agent.domain.field_type import FieldType
-from browser_agent.domain.identity_config import IdentityConfig, KeySource
 from browser_agent.domain.llm_mapping_draft import LlmMappingDraft
 from browser_agent.domain.mapped_property import MappedProperty
 from browser_agent.domain.skipped_field import SkippedField
@@ -30,64 +28,24 @@ class LlmDraftAssembler:
         """Build the :class:`UwaziMapping` from ``draft`` + ``template``."""
         by_target = {raw.target: raw for raw in draft.fields}
         title_entry = self._title_entry(template, by_target)
-        domain_entries = tuple(self._mapped_property(prop, by_target.get(prop.name)) for prop in template.properties)
+        domain_entries = tuple(MappedProperty.from_template_and_draft(p, by_target.get(p.name)) for p in template.properties)
         properties = (title_entry,) + domain_entries if title_entry is not None else domain_entries
         return UwaziMapping(
             template=template.name,
             default_language=template.default_language,
-            identity=self._identity(draft),
+            identity=draft.to_identity(),
             properties=properties,
             skipped=self._skipped(draft),
             publish=draft.publish,
             upload_pdf=draft.upload_pdf,
         )
 
-    def _title_entry(
-        self,
-        template: UwaziTemplate,
-        by_target: dict,
-    ) -> MappedProperty | None:
-        """Build the title :class:`MappedProperty` for ``mapping.properties``.
-
-        Returns ``None`` when the template has no title common property.
-        The returned entry has :attr:`FieldType.TITLE` and the
-        source/default the LLM picked; the apply step consumes it as
-        ``Entity.title`` (the Uwazi metadata blob does NOT carry the
-        title).
-        """
+    def _title_entry(self, template: UwaziTemplate, by_target: dict) -> MappedProperty | None:
+        """Build the title :class:`MappedProperty`, or None when the template has no title."""
         title_prop = template.title
         if title_prop is None:
             return None
-        draft = by_target.get(title_prop.name)
-        return MappedProperty(
-            name=title_prop.name,
-            label=title_prop.label,
-            type=FieldType.TITLE,
-            required=title_prop.required,
-            source=draft.source if draft is not None else None,
-            thesaurus=None,
-            parse_formats=tuple(draft.parse_formats or ()) if draft is not None else (),
-            default_value=draft.default_value if draft is not None else None,
-            notes=draft.notes if draft is not None else None,
-        )
-
-    def _mapped_property(
-        self,
-        template_prop,
-        draft,
-    ) -> MappedProperty:
-        """Merge one live template property with the LLM draft, if any."""
-        return MappedProperty(
-            name=template_prop.name,
-            label=template_prop.label,
-            type=template_prop.type,
-            required=template_prop.required,
-            source=draft.source if draft is not None else None,
-            thesaurus=draft.thesaurus if draft is not None else None,
-            parse_formats=tuple(draft.parse_formats or ()) if draft is not None else (),
-            default_value=draft.default_value if draft is not None else None,
-            notes=draft.notes if draft is not None else None,
-        )
+        return MappedProperty.title_from_draft(title_prop, by_target.get(title_prop.name))
 
     def _skipped(self, draft: LlmMappingDraft) -> tuple[SkippedField, ...]:
         """Coerce every LLM-emitted skipped dict into a :class:`SkippedField`."""
@@ -100,24 +58,3 @@ class LlmDraftAssembler:
             reason=str(raw.get("reason", "no_match")),
             notes=(str(raw.get("notes")) if raw.get("notes") is not None else None),
         )
-
-    def _identity(self, draft: LlmMappingDraft) -> IdentityConfig:
-        """Build an :class:`IdentityConfig` from the LLM draft."""
-        return IdentityConfig(
-            key_source=self._key_source(draft.key_source),
-            key_field=draft.key_field,
-            key_property=draft.key_property,
-            path_placeholder=draft.path_placeholder,
-            source_url_property=draft.source_url_property,
-            select_filtering_name=draft.select_filtering_name,
-            select_filtering_options=tuple(draft.select_filtering_options),
-        )
-
-    def _key_source(self, raw: str | None) -> KeySource:
-        """Map an LLM-emitted key_source string to a :class:`KeySource`."""
-        if not raw:
-            return KeySource.PATH_PLACEHOLDER
-        try:
-            return KeySource(raw)
-        except ValueError:
-            return KeySource.PATH_PLACEHOLDER

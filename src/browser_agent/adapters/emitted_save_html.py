@@ -19,78 +19,23 @@ which the PDF was downloaded.
 
 from __future__ import annotations
 
+from browser_agent.adapters.emitted_snippets import (
+    ATOMIC_WRITE_SNIPPET,
+    EXISTING_SIZE_SNIPPET,
+    HTML_FILENAME_SNIPPET,
+)
 
-def with_emitted_save_html(python_code: str) -> str:
-    """Prepend the vendored save-page-html helper to ``python_code``.
+_HELPERS = (
+    "import hashlib\n"
+    "import os as _os\n"
+    "from pathlib import Path\n"
+    "\n\n"
+    f"{HTML_FILENAME_SNIPPET}\n\n"
+    f"{EXISTING_SIZE_SNIPPET}\n\n"
+    f"{ATOMIC_WRITE_SNIPPET}"
+)
 
-    Both the in-process validation runner and the final-script emit
-    path call this so the helper appears at the top of every script
-    that runs. Idempotent: if the script already contains the block
-    marker it is returned unchanged.
-    """
-    if "BEGIN emitted save-page-html helper" in python_code:
-        return python_code
-    return f"{EMITTED_SAVE_HTML_BLOCK}{python_code}"
-
-
-# This block is intentionally a single literal string. The
-# in-process validation runner and the ``generate_script`` driver
-# concatenate it in front of the LLM's emitted code so the script gets a
-# real HTML-capture helper without importing from this project.
-EMITTED_SAVE_HTML_BLOCK = '''\
-# ── BEGIN emitted save-page-html helper (vendored from browser_agent) ──
-import hashlib
-import os as _os
-from pathlib import Path
-
-
-def _html_filename_for(url):
-    """Deterministic, collision-safe on-disk filename for ``url``.
-
-    Returns ``html_<sha1(url)[:12]>.html`` — a pure function of the
-    source URL, so "file exists at path" == "this exact page HTML was
-    already saved" regardless of page order. Mirrors the PDF naming
-    scheme so the two never collide (different prefix + extension).
-    """
-    return f"html_{hashlib.sha1(url.encode()).hexdigest()[:12]}.html"
-
-
-def _html_existing_size(path):
-    """Return existing on-disk size in bytes, or 0 when missing/empty."""
-    try:
-        st = path.stat()
-    except FileNotFoundError:
-        return 0
-    except OSError:
-        return 0
-    return st.st_size if st.st_size > 0 else 0
-
-
-def _html_write_atomic(path, data):
-    """Write ``data`` to ``path`` atomically (temp + rename). On any
-    failure, remove the temp file. Renames are atomic on POSIX so a
-    crash mid-write never leaves a partial file at ``path``. ``path``
-    may be ``str`` or ``Path``."""
-    path = Path(path)
-    part = path.with_name(path.name + ".part")
-    try:
-        if part.exists():
-            try:
-                part.unlink()
-            except OSError:
-                pass
-        with open(part, "wb") as f:
-            f.write(data)
-            f.flush()
-            _os.fsync(f.fileno())
-        _os.replace(part, path)
-    except Exception:
-        try:
-            if part.exists():
-                part.unlink()
-        except OSError:
-            pass
-        raise
+_SAVE_HTML = '''\
 
 
 async def save_page_html(tab, save_path, source_url, filename=None):
@@ -124,7 +69,7 @@ async def save_page_html(tab, save_path, source_url, filename=None):
     name = filename if filename else _html_filename_for(source_url)
     save_path = save_dir / name
 
-    existing = _html_existing_size(save_path)
+    existing = _existing_size(save_path)
     if existing > 0:
         return {"size": existing, "skipped": True, "reason": "already_saved",
                 "saved_path": str(save_path)}
@@ -138,9 +83,27 @@ async def save_page_html(tab, save_path, source_url, filename=None):
     if not html:
         raise RuntimeError(f"empty HTML content for {source_url}")
     body = html.encode("utf-8")
-    _html_write_atomic(save_path, body)
+    _write_atomic(save_path, body)
     return {"size": len(body), "skipped": False, "reason": "saved",
-            "saved_path": str(save_path)}
-# ── END emitted save-page-html helper ──
+            "saved_path": str(save_path)}'''
 
-'''
+
+EMITTED_SAVE_HTML_BLOCK = (
+    "# ── BEGIN emitted save-page-html helper (vendored from browser_agent) ──\n"
+    f"{_HELPERS}"
+    f"{_SAVE_HTML}\n"
+    "# ── END emitted save-page-html helper ──\n\n"
+)
+
+
+def with_emitted_save_html(python_code: str) -> str:
+    """Prepend the vendored save-page-html helper to ``python_code``.
+
+    Both the in-process validation runner and the final-script emit
+    path call this so the helper appears at the top of every script
+    that runs. Idempotent: if the script already contains the block
+    marker it is returned unchanged.
+    """
+    if "BEGIN emitted save-page-html helper" in python_code:
+        return python_code
+    return f"{EMITTED_SAVE_HTML_BLOCK}{python_code}"

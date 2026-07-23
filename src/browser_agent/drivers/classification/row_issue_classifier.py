@@ -18,10 +18,7 @@ from browser_agent.drivers.classification.existing_entities_fetcher import Exist
 from browser_agent.drivers.classification.row_issue_detector import RowIssueDetector
 from browser_agent.domain.uwazi_mapping import UwaziMapping
 from browser_agent.domain.uwazi_template import UwaziTemplate
-from browser_agent.use_cases.apply_mapping_use_case import (
-    resolve_key_value,
-    resolve_pdf_filename,
-)
+from browser_agent.use_cases.sync_plan_builder import resolve_key_value, resolve_pdf_filename
 from pathlib import Path
 
 

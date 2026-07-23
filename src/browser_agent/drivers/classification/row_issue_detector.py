@@ -11,10 +11,8 @@ from __future__ import annotations
 from browser_agent.drivers.classification.existing_entities_fetcher import ExistingEntitiesFetcher
 from browser_agent.domain.uwazi_mapping import UwaziMapping
 from browser_agent.domain.uwazi_template import UwaziTemplate
-from browser_agent.use_cases.apply_mapping_use_case import (
-    build_metadata_for_row,
-    resolve_key_value,
-)
+from browser_agent.use_cases.metadata_value_transformer import build_metadata_for_row
+from browser_agent.use_cases.sync_plan_builder import resolve_key_value
 
 
 class RowIssueDetector:

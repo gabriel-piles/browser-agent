@@ -14,6 +14,8 @@ load_dotenv(PROJECT_ROOT / ".env")
 # LLM connection — consumed by ``adapters/llm/ollama_adapter.py``.
 OLLAMA_BASE_URL = "https://ollama.com/v1"
 ORCHESTRATOR_MODEL = "deepseek-v4-pro:cloud"
+VALIDATION_MODEL = "minimax-m3:cloud"
+VALIDATION_PDF_COUNT = 10
 
 # YAML file that defines the active run: only ``active_run`` (the name to
 # execute). Per-run configuration (template, prompt, etc.) lives in

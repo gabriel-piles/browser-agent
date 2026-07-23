@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from browser_agent.domain.run_config import RunConfig
 from browser_agent.domain.uwazi_mapping import UwaziMapping
-from browser_agent.use_cases.apply_mapping_use_case import execute as build_plan
+from browser_agent.use_cases.sync_plan_builder import execute as build_plan
 from uwazi_api.client import UwaziClient
 
 

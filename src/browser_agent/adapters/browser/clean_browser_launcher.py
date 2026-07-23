@@ -58,6 +58,25 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
+def seed_profile_if_empty(profile_dir: Path) -> None:
+    """Copy the real Chromium profile into ``profile_dir`` if it has no Cookies.
+
+    A fresh profile looks like a brand-new browser to Cloudflare.
+    Seeding it with the real profile's cookies and local state gives
+    the browser a real-world fingerprint from the first run.
+    Subsequent runs reuse the now-warm profile.
+    """
+    default_dir = profile_dir / "Default"
+    if (default_dir / "Cookies").exists():
+        return
+    real_profile = Path.home() / ".config" / "chromium"
+    if not (real_profile / "Default" / "Cookies").exists():
+        logger.info("no real Chromium profile to seed from")
+        return
+    logger.info("seeding empty profile {} from real Chromium {}", profile_dir, real_profile)
+    shutil.copytree(real_profile, profile_dir, dirs_exist_ok=True, symlinks=True)
+
+
 def launch_chromium(
     port: int,
     user_data_dir: str | Path,

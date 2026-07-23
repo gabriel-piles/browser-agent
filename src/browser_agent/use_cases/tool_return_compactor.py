@@ -233,8 +233,6 @@ def _is_analyze_return(content: str) -> bool:
     """Detect if the explore_page output is a structured analysis return."""
     first = (content.splitlines() or [""])[0]
     return "analyzed page structure" in first
-    kept.append(COMPACT_TRUNCATED_PLACEHOLDER)
-    return "\n".join(kept)
 
 
 def _summarise_generic(content: str) -> str:

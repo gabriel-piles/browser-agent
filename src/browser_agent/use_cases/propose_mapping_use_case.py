@@ -59,7 +59,7 @@ class ProposeMappingUseCase:
         prompt = self._renderer.user_prompt(template, catalog, thesauri_by_id)
         draft = await self._run_llm(agent, prompt)
         mapping = self._assembler.assemble(draft, template)
-        self._filler.apply(mapping, catalog, template, thesauri_by_id)
+        self._filler.apply(mapping, template, thesauri_by_id)
         self._write_yaml(mapping, output_path)
         return mapping
 

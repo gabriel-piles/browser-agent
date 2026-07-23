@@ -7,14 +7,13 @@ of a stack of free functions in the script.
 
 from __future__ import annotations
 
-import json
-import sqlite3
 from collections import Counter
 from pathlib import Path
 
 from browser_agent.domain.metadata_field import MetadataField
 from browser_agent.domain.metadata_field_catalog import MetadataFieldCatalog
 from browser_agent.domain.run_config import RunConfig
+from browser_agent.use_cases.metadata_db import parse_row_data, query_rows
 from browser_agent.use_cases.metadata_value_type_heuristic import MetadataValueTypeHeuristic
 
 
@@ -44,11 +43,7 @@ class MetadataCatalogBuilder:
 
     def _query_rows(self, db_path: Path) -> list[tuple[str, str, str]]:
         """Return ``(source_url, task_slug, data_json)`` rows from ``metadata.db``."""
-        conn = sqlite3.connect(str(db_path))
-        try:
-            return conn.execute("SELECT source_url, task_slug, data FROM metadata").fetchall()
-        finally:
-            conn.close()
+        return query_rows(db_path)
 
     def _aggregate(self, rows) -> tuple[dict, Counter, int]:
         """Walk every row, building per-field distinct samples + a page count."""
@@ -66,27 +61,16 @@ class MetadataCatalogBuilder:
 
     def _parse_row(self, raw: str | None) -> dict:
         """Decode a single ``metadata.data`` JSON blob (``{}`` on failure)."""
-        if not raw:
-            return {}
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            return {}
+        return parse_row_data(raw)
 
     def _record(self, name, value, distinct: dict, page_count: Counter) -> None:
-        """Update the per-field stats for one (name, value) pair from a row.
+        """Record per-field stats; lists are expanded one element at a time.
 
-        List/tuple values (multi-value fields such as multiselect or
-        tag lists, stored as JSON arrays in ``metadata.data``) are
-        expanded one element at a time so the LLM sees individual
-        samples (e.g. ``Spain``, ``Argentina``) rather than the
-        single ``"['Spain', 'Argentina']"`` blob that ``str(list)``
-        would yield. ``page_count`` stays row-level (one row = one
-        page observed with the field) so the field's per-page
-        statistic is unaffected by how many values a row carries.
-        ``None`` and empty-string elements inside the list are
-        skipped. Scalars and other JSON shapes fall through to the
-        original single-record path.
+        ``page_count`` stays row-level (one row = one page observed
+        with the field) so the field's per-page statistic is
+        unaffected by how many values a row carries. ``None`` and
+        empty-string elements inside the list are skipped. Scalars
+        and other JSON shapes fall through to the single-record path.
         """
         if not isinstance(name, str) or not name:
             return

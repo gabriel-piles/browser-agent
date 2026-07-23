@@ -127,12 +127,8 @@ def _format_structure(structure: PageStructure, lines: list[str]) -> list[str]:
     return lines
 
 
-def _append_section(
-    lines: list[str],
-    header: str,
-    items: list[ElementInfo],
-    formatter,
-) -> None:
+def _append_section(lines: list[str], header: str, items: list[ElementInfo], formatter) -> None:
+    """Append a section header + one formatted line per item."""
     if not items:
         return
     lines.append("")
@@ -141,36 +137,38 @@ def _append_section(
         formatter(lines, item)
 
 
+def _selector_suffix(el: ElementInfo) -> str:
+    """Return the selector suffix string for an element, or empty."""
+    return f" {el.selector}" if el.selector else ""
+
+
 def _fmt_link(lines: list[str], el: ElementInfo) -> None:
-    sel = f" {el.selector}" if el.selector else ""
-    text = el.text[:120]
+    """Format one link element."""
     href = el.href[:200]
-    lines.append(f"  <a{sel}> href={href!r} text={text!r}")
+    lines.append(f"  <a{_selector_suffix(el)}> href={href!r} text={el.text[:120]!r}")
 
 
 def _fmt_element(lines: list[str], el: ElementInfo) -> None:
-    sel = f" {el.selector}" if el.selector else ""
-    text = el.text[:120]
-    lines.append(f"  <{el.tag}{sel}> text={text!r}")
+    """Format one generic element (button, filter)."""
+    lines.append(f"  <{el.tag}{_selector_suffix(el)}> text={el.text[:120]!r}")
 
 
 def _fmt_input(lines: list[str], el: ElementInfo) -> None:
-    sel = f" {el.selector}" if el.selector else ""
+    """Format one form input element with its extra attrs."""
     extra = " ".join(f"{k}={v!r}" for k, v in sorted(el.extra.items()) if v)
     suffix = f" ({extra})" if extra else ""
-    text = el.text[:120]
-    lines.append(f"  <{el.tag}{sel}>{suffix} text={text!r}")
+    lines.append(f"  <{el.tag}{_selector_suffix(el)}>{suffix} text={el.text[:120]!r}")
 
 
 def _fmt_heading(lines: list[str], el: ElementInfo) -> None:
-    text = el.text[:120]
+    """Format one heading element with its level."""
     level = el.extra.get("level", "")
-    lines.append(f"  {el.tag}{level}: {text!r}")
+    lines.append(f"  {el.tag}{level}: {el.text[:120]!r}")
 
 
 def _fmt_table(lines: list[str], el: ElementInfo) -> None:
-    sel = f" {el.selector}" if el.selector else ""
+    """Format one table element with row/column counts."""
     rows = el.extra.get("rows", "?")
     cols = el.extra.get("columns", "")
     suffix = f" | columns: {cols}" if cols else ""
-    lines.append(f"  <table{sel}> {rows} rows{suffix}")
+    lines.append(f"  <table{_selector_suffix(el)}> {rows} rows{suffix}")

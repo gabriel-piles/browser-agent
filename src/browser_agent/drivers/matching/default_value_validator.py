@@ -13,6 +13,7 @@ from browser_agent.drivers.console.section_printer import SectionPrinter
 from browser_agent.domain.field_type import FieldType
 from browser_agent.domain.thesauri_snapshot import ThesauriSnapshot
 from browser_agent.domain.uwazi_template import UwaziTemplate
+from browser_agent.drivers.matching.thesaurus_lookup import split_default_tokens, thesaurus_for_property
 
 
 class DefaultValueValidator:
@@ -86,19 +87,16 @@ class DefaultValueValidator:
         relationships_by_id: dict[str, ThesauriSnapshot] | None = None,
     ) -> ThesauriSnapshot | None:
         """Return the live :class:`ThesauriSnapshot` backing ``prop.name``, or ``None``."""
-        template_prop = template.property_by_name(prop.name)
-        if template_prop is None or not template_prop.thesaurus_id:
-            return None
         if prop.type is FieldType.RELATIONSHIP and relationships_by_id is not None:
-            return relationships_by_id.get(template_prop.thesaurus_id)
-        return thesauri_by_id.get(template_prop.thesaurus_id)
+            template_prop = template.property_by_name(prop.name)
+            if template_prop and template_prop.thesaurus_id:
+                return relationships_by_id.get(template_prop.thesaurus_id)
+            return None
+        return thesaurus_for_property(prop, template, thesauri_by_id)
 
     def _tokens(self, prop) -> list[str]:
         """Split ``prop.default_value`` into individual tokens for validation."""
-        raw = prop.default_value
-        if raw is None:
-            return []
-        return [token for token in (t.strip() for t in raw.split(",")) if token]
+        return split_default_tokens(prop)
 
     def _partition_tokens(
         self,

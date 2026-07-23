@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -30,28 +29,23 @@ from loguru import logger
 
 from zendriver.cdp import network
 from zendriver.core.connection import ProtocolException as _ProtocolException
-from bs4 import BeautifulSoup, Tag
 
 from browser_agent.adapters.browser.clean_browser_launcher import (
     connect_and_prepare,
     free_port,
     launch_chromium,
+    seed_profile_if_empty,
     stop_browser,
 )
 from browser_agent.adapters.cdp_page_tracker import CdpPageTracker
+from browser_agent.adapters.browser.page_analyzer import PageAnalyzer
 from browser_agent.adapters.human_challenge_detector import (
     BypassConfig,
     HumanChallengeBypass,
     UnsolvedChallengeError,
-    HumanChallengeBypass as _HumanChallengeBypass,
 )
 from browser_agent.adapters.zendriver_page_wait import ZendriverPageWait
 from browser_agent.configuration import (
-    ANALYZE_MAX_BUTTONS,
-    ANALYZE_MAX_HEADINGS,
-    ANALYZE_MAX_INPUTS,
-    ANALYZE_MAX_LINKS,
-    ANALYZE_MAX_TABLES,
     BROWSER_TAB_LOAD_TIMEOUT_SECONDS,
     BROWSER_TAB_OPEN_TIMEOUT_SECONDS,
     PAGE_LOAD_NETWORK_QUIET_WINDOW_MS,
@@ -59,11 +53,9 @@ from browser_agent.configuration import (
     PAGE_LOAD_WAIT_UNTIL,
 )
 
-from browser_agent.domain.element_info import ElementInfo
 from browser_agent.domain.page_action import PageAction
 from browser_agent.domain.html_snippet import HtmlSnippet
 from browser_agent.domain.page_snapshot import ExtractedElement, PageSnapshot
-from browser_agent.domain.page_structure import PageStructure
 from browser_agent.ports.browser_session_port import BrowserSessionPort
 from browser_agent.zendriver_patch import apply as _apply_zendriver_patch
 
@@ -72,214 +64,6 @@ _apply_zendriver_patch()
 _DEFAULT_SETTLE_SECONDS = 3.0
 _DEFAULT_WAIT_SECONDS = 1.0
 _EXTRACT_MAX_ELEMENTS = 50
-
-
-def _build_selector(tag_name: str, attrs: dict[str, Any]) -> str:
-    """Build a simple CSS selector from tag + attributes (BS4 attrs)."""
-    raw_id = attrs.get("id") or ""
-    el_id: str = raw_id if isinstance(raw_id, str) else ""
-    if el_id:
-        return f"{tag_name}#{el_id}"
-    raw_class = attrs.get("class")
-    if raw_class:
-        classes = raw_class if isinstance(raw_class, list) else raw_class.split()
-        if classes:
-            return f"{tag_name}.{'.'.join(classes[:2])}"
-    raw_name = attrs.get("name")
-    el_name: str = raw_name if isinstance(raw_name, str) else ""
-    if el_name:
-        return f"{tag_name}[name={el_name}]"
-    return tag_name
-
-
-def _get_text(el: Tag, max_len: int = 200) -> str:
-    """Get stripped text from a BeautifulSoup tag, truncated."""
-    return (el.get_text(strip=True) or "")[:max_len]
-
-
-def _extract_links(soup: BeautifulSoup, limit: int) -> list[ElementInfo]:
-    """Extract <a href=...> elements, skipping anchors and javascript:."""
-    results: list[ElementInfo] = []
-    for a in soup.find_all("a", href=True)[:limit]:
-        href = a["href"]
-        if href.startswith("#") or href.startswith("javascript:"):
-            continue
-        results.append(
-            ElementInfo(
-                tag="a",
-                text=_get_text(a),
-                href=href,
-                selector=_build_selector("a", a.attrs),
-            )
-        )
-    return results
-
-
-def _extract_buttons(soup: BeautifulSoup, limit: int) -> list[ElementInfo]:
-    """Extract <button> and input[type=submit/button] elements."""
-    results: list[ElementInfo] = []
-    for btn in soup.find_all(["button", "input"])[:limit]:
-        tag = btn.name or "button"
-        if tag == "input" and btn.get("type", "").lower() not in ("submit", "button", ""):
-            continue
-        text = _get_text(btn) or (btn.get("value") or "")
-        extra: dict[str, str] = {}
-        if tag == "input":
-            btn_type = btn.get("type") or "submit"
-            extra["type"] = str(btn_type)
-        results.append(
-            ElementInfo(
-                tag=tag,
-                text=text,
-                selector=_build_selector(tag, btn.attrs),
-                extra=extra,
-            )
-        )
-    return results
-
-
-def _extract_inputs(soup: BeautifulSoup, limit: int) -> list[ElementInfo]:
-    """Extract <input>, <select>, <textarea> form elements."""
-    results: list[ElementInfo] = []
-    for el in soup.find_all(["input", "select", "textarea"])[:limit]:
-        tag = el.name or "input"
-        if tag == "input" and el.get("type", "").lower() in ("submit", "button", "hidden"):
-            continue
-        extra: dict[str, str] = {}
-        el_type = el.get("type")
-        if el_type:
-            extra["type"] = str(el_type)
-        el_name = el.get("name")
-        if el_name:
-            extra["name"] = str(el_name)
-        results.append(
-            ElementInfo(
-                tag=tag,
-                text=_get_text(el),
-                selector=_build_selector(tag, el.attrs),
-                extra=extra,
-            )
-        )
-    return results
-
-
-def _extract_headings(soup: BeautifulSoup, limit: int) -> list[ElementInfo]:
-    """Extract <h1> through <h6> elements."""
-    results: list[ElementInfo] = []
-    for h in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"])[:limit]:
-        results.append(
-            ElementInfo(
-                tag=h.name or "h",
-                text=_get_text(h),
-                selector=_build_selector(h.name or "h", h.attrs),
-                extra={"level": (h.name or "h")[1]},
-            )
-        )
-    return results
-
-
-def _extract_tables(soup: BeautifulSoup, limit: int) -> list[ElementInfo]:
-    """Extract <table> elements with row count and column headers."""
-    results: list[ElementInfo] = []
-    for tbl in soup.find_all("table")[:limit]:
-        rows = len(tbl.find_all("tr"))
-        headers = [th.get_text(strip=True) for th in tbl.find_all("th")[:10]]
-        col_desc = ", ".join(headers) if headers else f"{rows} rows"
-        results.append(
-            ElementInfo(
-                tag="table",
-                text=col_desc,
-                selector=_build_selector("table", tbl.attrs),
-                extra={"rows": str(rows), "columns": (", ".join(headers)) if headers else ""},
-            )
-        )
-    return results
-
-
-_PAGINATION_TEXTS = {"next", "prev", "previous", "page", "more", "»", "«", ">>", "<<"}
-
-
-def _is_pagination(el: Tag) -> bool:
-    """Heuristic: text, class, or href contains pagination keywords."""
-    text = (el.get_text(strip=True) or "").lower()
-    if text in _PAGINATION_TEXTS or any(t in text for t in ("page", "next", "prev")):
-        return True
-    for attr in ("class", "id"):
-        raw = el.get(attr)
-        if raw is None:
-            continue
-        val = " ".join(raw) if isinstance(raw, list) else str(raw)
-        if any(t in val.lower() for t in ("page", "pagination", "pager", "next", "prev")):
-            return True
-    href = el.get("href", "")
-    if isinstance(href, str) and ("page=" in href or "?page" in href or "&page" in href):
-        return True
-    return False
-
-
-def _is_filter(el: Tag) -> bool:
-    """Heuristic: select, checkbox, or class/text contains filter keywords."""
-    if el.name == "select":
-        return True
-    if el.name == "input" and el.get("type", "").lower() in ("checkbox", "radio"):
-        return True
-    for attr in ("class", "id"):
-        raw = el.get(attr)
-        if raw is None:
-            continue
-        val = " ".join(raw) if isinstance(raw, list) else str(raw)
-        if "filter" in val.lower() or "sort" in val.lower():
-            return True
-    text = (el.get_text(strip=True) or "").lower()
-    if text in ("filter", "sort", "filter by", "sort by"):
-        return True
-    return False
-
-
-def _selectors_summary(infos: list[ElementInfo]) -> str:
-    """Join selector strings for the filters/pagination lines."""
-    return ", ".join(info.selector for info in infos[:5])
-
-
-def _analyze_page_structure(raw_html: str, url: str, title: str) -> PageStructure:
-    """Parse HTML and build a structured :class:`PageStructure`."""
-    soup = BeautifulSoup(raw_html or "", "html.parser")
-    all_links = _extract_links(soup, ANALYZE_MAX_LINKS)
-    all_buttons = _extract_buttons(soup, ANALYZE_MAX_BUTTONS)
-    all_inputs = _extract_inputs(soup, ANALYZE_MAX_INPUTS)
-    all_headings = _extract_headings(soup, ANALYZE_MAX_HEADINGS)
-    all_tables = _extract_tables(soup, ANALYZE_MAX_TABLES)
-    pagination: list[ElementInfo] = []
-    filters: list[ElementInfo] = []
-    for info in all_links:
-        a_tag = soup.find("a", href=info.href) if info.href else None
-        if a_tag and _is_pagination(a_tag):
-            pagination.append(info)
-    for info in all_buttons:
-        btn = soup.find(info.tag, text=info.text) if info.tag != "input" else None
-        if btn and (_is_pagination(btn) or _is_filter(btn)):
-            (_pagination if _is_pagination(btn) else filters).append(info)
-    for el in soup.find_all(["select", "input"])[:ANALYZE_MAX_INPUTS]:
-        if _is_filter(el):
-            filters.append(
-                ElementInfo(
-                    tag=el.name or "select",
-                    text=_get_text(el),
-                    selector=_build_selector(el.name or "select", el.attrs),
-                    extra={"type": el.get("type", "") or "select", "name": el.get("name", "") or ""},
-                )
-            )
-    return PageStructure(
-        url=url,
-        title=title,
-        links=all_links,
-        buttons=all_buttons,
-        inputs=all_inputs,
-        headings=all_headings,
-        tables=all_tables,
-        pagination=pagination,
-        filters=filters,
-    )
 
 
 class ZendriverBrowserSession(BrowserSessionPort):
@@ -304,6 +88,7 @@ class ZendriverBrowserSession(BrowserSessionPort):
                 interactive_timeout_seconds=120.0,
             )
         )
+        self._analyzer = PageAnalyzer()
 
     async def start(self) -> None:
         if self._browser is not None:
@@ -311,7 +96,7 @@ class ZendriverBrowserSession(BrowserSessionPort):
         self._port = free_port()
         if self._user_data_dir is not None:
             self._user_data_dir.mkdir(parents=True, exist_ok=True)
-            self._seed_profile_if_empty(self._user_data_dir)
+            seed_profile_if_empty(self._user_data_dir)
             user_data_dir = str(self._user_data_dir)
             logger.info("launching clean Chromium (headless={}, profile={})", self._headless, user_data_dir)
         else:
@@ -325,25 +110,6 @@ class ZendriverBrowserSession(BrowserSessionPort):
         self._browser, self._tab = await connect_and_prepare(port=self._port)
         self._tracker = CdpPageTracker(self._tab)
         await self._tracker.attach()
-
-    @staticmethod
-    def _seed_profile_if_empty(profile_dir: Path) -> None:
-        """Copy the real Chromium profile into ``profile_dir`` if it has no Cookies file.
-
-        A fresh profile looks like a brand-new browser to Cloudflare.
-        Seeding it with the real profile's cookies and local state
-        gives the browser a real-world fingerprint from the first run.
-        Subsequent runs reuse the now-warm profile.
-        """
-        default_dir = profile_dir / "Default"
-        if (default_dir / "Cookies").exists():
-            return
-        real_profile = Path.home() / ".config" / "chromium"
-        if not (real_profile / "Default" / "Cookies").exists():
-            logger.info("no real Chromium profile to seed from")
-            return
-        logger.info("seeding empty profile {} from real Chromium {}", profile_dir, real_profile)
-        shutil.copytree(real_profile, profile_dir, dirs_exist_ok=True, symlinks=True)
 
     async def close(self) -> None:
         browser = self._browser
@@ -569,7 +335,7 @@ class ZendriverBrowserSession(BrowserSessionPort):
 
     async def _do_analyze(self, action: PageAction) -> PageSnapshot:
         raw_html = await self._tab.get_content()
-        structure = _analyze_page_structure(
+        structure = self._analyzer.analyze(
             raw_html=raw_html or "",
             url=self._tab.url or "",
             title=await self._tab_title(),

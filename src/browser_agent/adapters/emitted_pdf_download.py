@@ -34,101 +34,23 @@ get the helper — see
 
 from __future__ import annotations
 
+from browser_agent.adapters.emitted_snippets import (
+    ATOMIC_WRITE_SNIPPET,
+    EXISTING_SIZE_SNIPPET,
+    PDF_FILENAME_SNIPPET,
+)
 
-def with_emitted_pdf_download(
-    python_code: str,
-    strategy: str = "browser_fetch",
-) -> str:
-    """Prepend the vendored pdf-download helper to ``python_code``.
+_SHARED_HELPERS = (
+    "import hashlib\n"
+    "import os as _os\n"
+    "from pathlib import Path\n"
+    "\n\n"
+    f"{PDF_FILENAME_SNIPPET}\n\n"
+    f"{EXISTING_SIZE_SNIPPET}\n\n"
+    f"{ATOMIC_WRITE_SNIPPET}"
+)
 
-    ``strategy`` is either ``"curl_cffi"`` or ``"browser_fetch"``.
-    The matching helper block is prepended.  Idempotent: if the
-    script already contains the block marker it is returned
-    unchanged.
-    """
-    if strategy == "curl_cffi":
-        if "BEGIN emitted curl_cffi pdf-download helper" in python_code:
-            return python_code
-        return f"{EMITTED_CURL_CFFI_BLOCK}{python_code}"
-    # Default: browser_fetch
-    if "BEGIN emitted browser-fetch pdf-download helper" in python_code:
-        return python_code
-    return f"{EMITTED_BROWSER_FETCH_BLOCK}{python_code}"
-
-
-def with_emitted_all_pdf_downloads(python_code: str) -> str:
-    """Prepend BOTH pdf-download helpers to ``python_code``.
-
-    Used by the in-process validation runner so the LLM's validation
-    script can test either strategy before deciding which one the
-    final script should use.
-    """
-    if "BEGIN emitted curl_cffi pdf-download helper" not in python_code:
-        python_code = f"{EMITTED_CURL_CFFI_BLOCK}{python_code}"
-    if "BEGIN emitted browser-fetch pdf-download helper" not in python_code:
-        python_code = f"{EMITTED_BROWSER_FETCH_BLOCK}{python_code}"
-    return python_code
-
-
-# ──────────────────────────────────────────────────────────────────
-# curl_cffi strategy
-# ──────────────────────────────────────────────────────────────────
-# This block is intentionally a single literal string.  The
-# in-process validation runner and the ``generate_script`` driver
-# concatenate it in front of the LLM's emitted code so the script gets
-# a real download helper without importing from this project.
-EMITTED_CURL_CFFI_BLOCK = '''\
-# ── BEGIN emitted curl_cffi pdf-download helper (vendored from browser_agent) ──
-import hashlib
-import os as _os
-from pathlib import Path
-
-
-def _pdf_filename_for(url):
-    """Deterministic, collision-safe on-disk filename for ``url``.
-
-    Returns ``pdf_<sha1(url)[:12]>.pdf`` — a pure function of the
-    download URL, so "file exists at path" == "this exact PDF was
-    already downloaded" regardless of page order or label reuse.
-    """
-    return f"pdf_{hashlib.sha1(url.encode()).hexdigest()[:12]}.pdf"
-
-
-def _pdf_existing_size(path):
-    """Return existing on-disk size in bytes, or 0 when missing/empty/corrupt."""
-    try:
-        st = path.stat()
-    except FileNotFoundError:
-        return 0
-    except OSError:
-        return 0
-    return st.st_size if st.st_size > 0 else 0
-
-
-def _pdf_write_atomic(path, data):
-    """Write ``data`` to ``path`` atomically (temp + rename). On any failure,
-    remove the temp file. Renames are atomic on POSIX so a crash mid-write
-    never leaves a partial file at ``path``. ``path`` may be ``str`` or ``Path``."""
-    path = Path(path)
-    part = path.with_name(path.name + ".part")
-    try:
-        if part.exists():
-            try:
-                part.unlink()
-            except OSError:
-                pass
-        with open(part, "wb") as f:
-            f.write(data)
-            f.flush()
-            _os.fsync(f.fileno())
-        _os.replace(part, path)
-    except Exception:
-        try:
-            if part.exists():
-                part.unlink()
-        except OSError:
-            pass
-        raise
+_CURL_CFFI_DOWNLOAD = '''\
 
 
 async def download_pdf_curl_cffi(url, save_path, tab=None):
@@ -168,7 +90,7 @@ async def download_pdf_curl_cffi(url, save_path, tab=None):
     save_dir.mkdir(parents=True, exist_ok=True)
     save_path = save_dir / _pdf_filename_for(url)
 
-    existing = _pdf_existing_size(save_path)
+    existing = _existing_size(save_path)
     if existing > 0:
         return {"size": existing, "skipped": True, "reason": "already_downloaded",
                 "saved_path": str(save_path)}
@@ -197,18 +119,19 @@ async def download_pdf_curl_cffi(url, save_path, tab=None):
     if not body:
         raise RuntimeError(f"empty response for {url}")
 
-    _pdf_write_atomic(save_path, body)
+    _write_atomic(save_path, body)
     return {"size": len(body), "skipped": False, "reason": "downloaded",
-            "saved_path": str(save_path)}
-# ── END emitted curl_cffi pdf-download helper ──
+            "saved_path": str(save_path)}'''
 
-'''
 
-# ──────────────────────────────────────────────────────────────────
-# browser_fetch strategy
-# ──────────────────────────────────────────────────────────────────
-EMITTED_BROWSER_FETCH_BLOCK = '''\
-# ── BEGIN emitted browser-fetch pdf-download helper (vendored from browser_agent) ──
+EMITTED_CURL_CFFI_BLOCK = (
+    "# ── BEGIN emitted curl_cffi pdf-download helper (vendored from browser_agent) ──\n"
+    f"{_SHARED_HELPERS}"
+    f"{_CURL_CFFI_DOWNLOAD}\n"
+    "# ── END emitted curl_cffi pdf-download helper ──\n\n"
+)
+
+_BROWSER_FETCH_HELPERS = """\
 import asyncio
 import base64
 import hashlib
@@ -218,54 +141,11 @@ from pathlib import Path
 
 _PDF_DOWNLOAD_TIMEOUT_S = 90.0
 _PDF_DOWNLOAD_RETRIES = 3
-_PDF_DOWNLOAD_RETRY_DELAY_S = 1.5
+_PDF_DOWNLOAD_RETRY_DELAY_S = 1.5"""
 
 
-def _pdf_filename_for(url):
-    """Deterministic, collision-safe on-disk filename for ``url``.
+_BROWSER_FETCH_CDP = '''\
 
-    Returns ``pdf_<sha1(url)[:12]>.pdf`` — a pure function of the
-    download URL, so "file exists at path" == "this exact PDF was
-    already downloaded" regardless of page order or label reuse.
-    """
-    return f"pdf_{hashlib.sha1(url.encode()).hexdigest()[:12]}.pdf"
-
-
-def _pdf_existing_size(path):
-    """Return existing on-disk size in bytes, or 0 when missing/empty/corrupt."""
-    try:
-        st = path.stat()
-    except FileNotFoundError:
-        return 0
-    except OSError:
-        return 0
-    return st.st_size if st.st_size > 0 else 0
-
-
-def _pdf_write_atomic(path, data):
-    """Write ``data`` to ``path`` atomically (temp + rename). On any failure,
-    remove the temp file. Renames are atomic on POSIX so a crash mid-write
-    never leaves a partial file at ``path``. ``path`` may be ``str`` or ``Path``."""
-    path = Path(path)
-    part = path.with_name(path.name + ".part")
-    try:
-        if part.exists():
-            try:
-                part.unlink()
-            except OSError:
-                pass
-        with open(part, "wb") as f:
-            f.write(data)
-            f.flush()
-            _os.fsync(f.fileno())
-        _os.replace(part, path)
-    except Exception:
-        try:
-            if part.exists():
-                part.unlink()
-        except OSError:
-            pass
-        raise
 
 async def _fetch_pdf_via_cdp_navigation(tab, url):
     """Fetch ``url`` via CDP Network.loadNetworkResource, bypassing CORS/CSP.
@@ -314,7 +194,11 @@ async def _fetch_pdf_via_cdp_navigation(tab, url):
     body = b"".join(chunks)
     if not body:
         raise RuntimeError(f"empty CDP stream for {url}")
-    return body
+    return body'''
+
+
+_BROWSER_FETCH_TAB = '''\
+
 
 async def _fetch_pdf_once(tab, url):
     """Single attempt: fetch ``url`` in ``tab``, return base64 body or raise RuntimeError."""
@@ -343,7 +227,10 @@ async def _fetch_pdf_once(tab, url):
         # re-challenges, network resets) as ProtocolException with
         # "TypeError: Failed to fetch" in the message. Convert to
         # RuntimeError so the caller can retry/handle uniformly.
-        raise RuntimeError(f"fetch failed for {url}: {exc}") from exc
+        raise RuntimeError(f"fetch failed for {url}: {exc}") from exc'''
+
+
+_BROWSER_FETCH_TRY = '''\
 
 
 async def _try_browser_fetch(tab, url, save_path):
@@ -367,14 +254,17 @@ async def _try_browser_fetch(tab, url, save_path):
                 if not result:
                     raise RuntimeError(f"empty response for {url}")
                 body = base64.b64decode(result) if _decode else result
-                _pdf_write_atomic(save_path, body)
+                _write_atomic(save_path, body)
                 return {"size": len(body), "skipped": False,
                         "reason": "downloaded", "saved_path": str(save_path)}
             except RuntimeError as exc:
                 last_exc = exc
                 if attempt < _PDF_DOWNLOAD_RETRIES:
                     await asyncio.sleep(_PDF_DOWNLOAD_RETRY_DELAY_S * attempt)
-    raise last_exc
+    raise last_exc'''
+
+
+_BROWSER_FETCH_CURL_FALLBACK = '''\
 
 
 async def _try_curl_cffi(url, save_path):
@@ -396,9 +286,12 @@ async def _try_curl_cffi(url, save_path):
         raise RuntimeError(f"HTTP {r.status_code} for {url}")
     if not r.content:
         raise RuntimeError(f"empty response for {url}")
-    _pdf_write_atomic(save_path, r.content)
+    _write_atomic(save_path, r.content)
     return {"size": len(r.content), "skipped": False, "reason": "downloaded",
-            "saved_path": str(save_path)}
+            "saved_path": str(save_path)}'''
+
+
+_BROWSER_FETCH_MAIN = '''\
 
 
 async def download_pdf_browser(tab, url, save_path):
@@ -448,7 +341,7 @@ async def download_pdf_browser(tab, url, save_path):
         save_dir = save_dir.parent
     save_dir.mkdir(parents=True, exist_ok=True)
     save_path = save_dir / _pdf_filename_for(url)
-    existing = _pdf_existing_size(save_path)
+    existing = _existing_size(save_path)
     if existing > 0:
         return {"size": existing, "skipped": True, "reason": "already_downloaded",
                 "saved_path": str(save_path)}
@@ -456,7 +349,54 @@ async def download_pdf_browser(tab, url, save_path):
         return await _try_browser_fetch(tab, url, save_path)
     except RuntimeError:
         pass
-    return await _try_curl_cffi(url, save_path)
-# ── END emitted browser-fetch pdf-download helper ──
+    return await _try_curl_cffi(url, save_path)'''
 
-'''
+
+EMITTED_BROWSER_FETCH_BLOCK = (
+    "# ── BEGIN emitted browser-fetch pdf-download helper (vendored from browser_agent) ──\n"
+    f"{_BROWSER_FETCH_HELPERS}\n\n"
+    f"{PDF_FILENAME_SNIPPET}\n\n"
+    f"{EXISTING_SIZE_SNIPPET}\n\n"
+    f"{ATOMIC_WRITE_SNIPPET}"
+    f"{_BROWSER_FETCH_CDP}"
+    f"{_BROWSER_FETCH_TAB}"
+    f"{_BROWSER_FETCH_TRY}"
+    f"{_BROWSER_FETCH_CURL_FALLBACK}"
+    f"{_BROWSER_FETCH_MAIN}\n"
+    "# ── END emitted browser-fetch pdf-download helper ──\n\n"
+)
+
+
+def with_emitted_pdf_download(
+    python_code: str,
+    strategy: str = "browser_fetch",
+) -> str:
+    """Prepend the vendored pdf-download helper to ``python_code``.
+
+    ``strategy`` is either ``"curl_cffi"`` or ``"browser_fetch"``.
+    The matching helper block is prepended.  Idempotent: if the
+    script already contains the block marker it is returned
+    unchanged.
+    """
+    if strategy == "curl_cffi":
+        if "BEGIN emitted curl_cffi pdf-download helper" in python_code:
+            return python_code
+        return f"{EMITTED_CURL_CFFI_BLOCK}{python_code}"
+    # Default: browser_fetch
+    if "BEGIN emitted browser-fetch pdf-download helper" in python_code:
+        return python_code
+    return f"{EMITTED_BROWSER_FETCH_BLOCK}{python_code}"
+
+
+def with_emitted_all_pdf_downloads(python_code: str) -> str:
+    """Prepend BOTH pdf-download helpers to ``python_code``.
+
+    Used by the in-process validation runner so the LLM's validation
+    script can test either strategy before deciding which one the
+    final script should use.
+    """
+    if "BEGIN emitted curl_cffi pdf-download helper" not in python_code:
+        python_code = f"{EMITTED_CURL_CFFI_BLOCK}{python_code}"
+    if "BEGIN emitted browser-fetch pdf-download helper" not in python_code:
+        python_code = f"{EMITTED_BROWSER_FETCH_BLOCK}{python_code}"
+    return python_code

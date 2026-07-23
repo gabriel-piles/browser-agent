@@ -6,7 +6,6 @@ import yaml
 
 from browser_agent.configuration import RUNS_FILE, RUNS_PATH, RUN_CONFIG_FILENAME
 from browser_agent.domain.run_config import RunConfig
-from browser_agent.domain.runs_config import RunsConfig
 
 
 class RunsConfigLoader:
@@ -36,7 +35,9 @@ def _load_active_name() -> str:
     if not RUNS_FILE.is_file():
         raise FileNotFoundError(f"runs config not found at {RUNS_FILE}")
     data = yaml.safe_load(RUNS_FILE.read_text(encoding="utf-8"))
-    return RunsConfig.model_validate(data).active_run
+    if not isinstance(data, dict) or "active_run" not in data:
+        raise ValueError(f"runs.yaml must contain an 'active_run' key (got {data!r})")
+    return str(data["active_run"])
 
 
 def _load_run_config(name: str) -> RunConfig:

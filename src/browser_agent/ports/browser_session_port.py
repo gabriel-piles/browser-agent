@@ -18,6 +18,7 @@ from abc import ABC, abstractmethod
 
 from browser_agent.domain.page_action import PageAction
 from browser_agent.domain.page_snapshot import PageSnapshot
+from typing import Any
 
 
 class BrowserSessionPort(ABC):

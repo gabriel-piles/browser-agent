@@ -23,7 +23,7 @@ class ApplyResultPrinter:
     def print_apply_result(self, result) -> None:
         """Print the per-language action counts, skip rows, and errors."""
         print("\nApply result:")
-        for language, counts in result.per_language().items():
+        for language, counts in result.per_language_counts.items():
             print(f"  {language}: {counts}")
         self._print_skips(result)
         self._print_errors(result)
@@ -37,7 +37,7 @@ class ApplyResultPrinter:
         to make the trade-off (skip-by-pdf vs skip-by-duplicate)
         scannable in a few characters.
         """
-        skip_rows = result.skip_reasons_list()
+        skip_rows = list(result.skip_reasons)
         if not skip_rows:
             return
         print(f"  skips: {len(skip_rows)}")
@@ -51,7 +51,7 @@ class ApplyResultPrinter:
 
     def _print_errors(self, result) -> None:
         """Print the per-row errors when the result has any."""
-        error_rows = result.errors()
+        error_rows = list(result.error_rows)
         if not error_rows:
             return
         print(f"  errors: {len(error_rows)}")
