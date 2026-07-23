@@ -27,7 +27,7 @@ _UWAZI_TO_FIELD_TYPE: dict[str, FieldType] = {
     "multiselect": FieldType.MULTI_SELECT,
     "markdown": FieldType.MARKDOWN,
     "link": FieldType.LINK,
-    "media": FieldType.FILE,
+    "relationship": FieldType.RELATIONSHIP,
 }
 
 

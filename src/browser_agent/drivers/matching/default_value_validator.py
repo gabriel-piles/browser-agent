@@ -23,6 +23,7 @@ class DefaultValueValidator:
         properties,
         template: UwaziTemplate,
         thesauri_by_id: dict[str, ThesauriSnapshot],
+        relationships_by_id: dict[str, ThesauriSnapshot] | None = None,
     ) -> None:
         """Print the default-value report for the properties that have a default_value set."""
         relevant = self._properties_with_default(properties)
@@ -30,12 +31,14 @@ class DefaultValueValidator:
             return
         SectionPrinter().heading("Default values vs thesauri")
         for prop in relevant:
-            self._print_field(prop, template, thesauri_by_id)
+            self._print_field(prop, template, thesauri_by_id, relationships_by_id)
 
     def _properties_with_default(self, properties) -> list:
-        """Return the select/multiselect properties that have a non-None ``default_value``."""
+        """Return the select/multiselect/relationship properties that have a non-None ``default_value``."""
         return [
-            p for p in properties if p.type in (FieldType.SELECT, FieldType.MULTI_SELECT) and p.default_value is not None
+            p
+            for p in properties
+            if p.type in (FieldType.SELECT, FieldType.MULTI_SELECT, FieldType.RELATIONSHIP) and p.default_value is not None
         ]
 
     def _print_field(
@@ -43,13 +46,14 @@ class DefaultValueValidator:
         prop,
         template: UwaziTemplate,
         thesauri_by_id: dict[str, ThesauriSnapshot],
+        relationships_by_id: dict[str, ThesauriSnapshot] | None = None,
     ) -> None:
         """Print the per-token report for one property, or a status note when empty."""
         template_prop = template.property_by_name(prop.name)
         if template_prop is None:
             print(f"  {prop.name!r}: no such property on the Uwazi template")
             return
-        thesaurus, found, missing = self._value_status(prop, template, thesauri_by_id)
+        thesaurus, found, missing = self._value_status(prop, template, thesauri_by_id, relationships_by_id)
         if thesaurus is None:
             print(f"  {prop.name!r}: no thesaurus on the Uwazi property")
             return
@@ -64,9 +68,10 @@ class DefaultValueValidator:
         prop,
         template: UwaziTemplate,
         thesauri_by_id: dict[str, ThesauriSnapshot],
+        relationships_by_id: dict[str, ThesauriSnapshot] | None = None,
     ) -> tuple[ThesauriSnapshot | None, list[str], list[str]]:
         """Return ``(thesaurus, found, missing)`` for ``prop.default_value``."""
-        thesaurus = self._thesaurus_for_property(prop, template, thesauri_by_id)
+        thesaurus = self._thesaurus_for_property(prop, template, thesauri_by_id, relationships_by_id)
         tokens = self._tokens(prop)
         if thesaurus is None or not tokens:
             return thesaurus, [], []
@@ -78,11 +83,14 @@ class DefaultValueValidator:
         prop,
         template: UwaziTemplate,
         thesauri_by_id: dict[str, ThesauriSnapshot],
+        relationships_by_id: dict[str, ThesauriSnapshot] | None = None,
     ) -> ThesauriSnapshot | None:
         """Return the live :class:`ThesauriSnapshot` backing ``prop.name``, or ``None``."""
         template_prop = template.property_by_name(prop.name)
         if template_prop is None or not template_prop.thesaurus_id:
             return None
+        if prop.type is FieldType.RELATIONSHIP and relationships_by_id is not None:
+            return relationships_by_id.get(template_prop.thesaurus_id)
         return thesauri_by_id.get(template_prop.thesaurus_id)
 
     def _tokens(self, prop) -> list[str]:

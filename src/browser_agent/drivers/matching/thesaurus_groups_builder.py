@@ -36,16 +36,17 @@ class ThesaurusGroupsBuilder:
         template: UwaziTemplate,
         thesauri_by_id: dict[str, ThesauriSnapshot],
         field_counters: dict[str, Counter],
+        relationships_by_id: dict[str, ThesauriSnapshot] | None = None,
     ) -> list[dict]:
-        """Return one group dict per select/multiselect property with values to map."""
+        """Return one group dict per select/multiselect/relationship property with values to map."""
         groups: list[dict] = []
         skips: list[str] = []
         for prop in mapping.properties:
-            if prop.type not in (FieldType.SELECT, FieldType.MULTI_SELECT):
+            if prop.type not in (FieldType.SELECT, FieldType.MULTI_SELECT, FieldType.RELATIONSHIP):
                 continue
             extracted = field_counters.get(prop.source, Counter()) if prop.source else Counter()
             counter = self._merge_with_default(extracted, prop)
-            group, skip = self._build_one(prop, template, thesauri_by_id, counter)
+            group, skip = self._build_one(prop, template, thesauri_by_id, counter, relationships_by_id)
             if group is not None:
                 groups.append(group)
             elif skip:
@@ -96,15 +97,30 @@ class ThesaurusGroupsBuilder:
         template: UwaziTemplate,
         thesauri_by_id: dict[str, ThesauriSnapshot],
         counter: Counter,
+        relationships_by_id: dict[str, ThesauriSnapshot] | None = None,
     ) -> tuple[dict | None, str]:
         """Return ``(group, skip_reason)``; exactly one is non-empty."""
         template_prop = template.property_by_name(prop.name)
-        thesaurus = thesauri_by_id.get(template_prop.thesaurus_id) if template_prop and template_prop.thesaurus_id else None
+        thesaurus = self._resolve_snapshot(prop, template_prop, thesauri_by_id, relationships_by_id)
         if thesaurus is None:
             return None, f"{prop.source} -> {prop.name}: no thesaurus on the Uwazi property"
         if not counter:
             return None, f"{prop.source} -> {prop.name}: no extracted values and no default_value"
         return {"property": prop, "thesaurus": thesaurus, "counter": counter}, ""
+
+    def _resolve_snapshot(
+        self,
+        prop,
+        template_prop,
+        thesauri_by_id: dict[str, ThesauriSnapshot],
+        relationships_by_id: dict[str, ThesauriSnapshot] | None,
+    ) -> ThesauriSnapshot | None:
+        """Return the snapshot for a select/multiselect or relationship property."""
+        if template_prop is None or not template_prop.thesaurus_id:
+            return None
+        if prop.type is FieldType.RELATIONSHIP and relationships_by_id is not None:
+            return relationships_by_id.get(template_prop.thesaurus_id)
+        return thesauri_by_id.get(template_prop.thesaurus_id)
 
     def _print_skips(self, skips: list[str]) -> None:
         """Print the skipped-field subheading, or nothing when there are none."""

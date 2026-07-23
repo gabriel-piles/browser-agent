@@ -28,8 +28,8 @@ from typing import Any
 
 from loguru import logger
 
-import zendriver as zd
 from zendriver.cdp import network
+from zendriver.core.connection import ProtocolException as _ProtocolException
 from bs4 import BeautifulSoup, Tag
 
 from browser_agent.adapters.browser.clean_browser_launcher import (
@@ -399,6 +399,32 @@ class ZendriverBrowserSession(BrowserSessionPort):
             "inspect": self._do_inspect,
         }[action]
 
+    async def _query(self, selector: str) -> Any:
+        """Like ``tab.query_selector`` but returns ``None`` on a bad selector.
+
+        CDP's ``DOM.querySelector`` raises ``ProtocolException`` for a
+        non-standard CSS selector — jQuery pseudo-classes such as
+        ``:contains()`` and Playwright-only ones like ``:has-text()``,
+        ``:text=``, ``:visible`` (note: the relational ``:has()`` *is*
+        standard CSS and is fine; ``:contains()`` is not). The agent
+        sometimes emits those; we degrade to "no match" so the run stays
+        alive and the agent retries with a valid selector instead of
+        crashing.
+        """
+        try:
+            return await self._tab.query_selector(selector)
+        except _ProtocolException:
+            logger.warning("invalid selector, treating as no match: {s}", s=selector)
+            return None
+
+    async def _query_all(self, selector: str) -> list[Any]:
+        """Like ``tab.query_selector_all`` but returns ``[]`` on a bad selector."""
+        try:
+            return await self._tab.query_selector_all(selector)
+        except _ProtocolException:
+            logger.warning("invalid selector, treating as no matches: {s}", s=selector)
+            return []
+
     async def _do_navigate(self, action: PageAction) -> PageSnapshot:
         url = action.url or ""
         if not url:
@@ -414,7 +440,7 @@ class ZendriverBrowserSession(BrowserSessionPort):
             return self._error_snapshot("click requires selector")
         pre_url = self._tab.url or ""
         pre_height = await self._scroll_height()
-        element = await self._tab.query_selector(selector)
+        element = await self._query(selector)
         if element is None:
             return self._error_snapshot(f"click: no element matches {selector!r}")
         await element.click()
@@ -455,7 +481,7 @@ class ZendriverBrowserSession(BrowserSessionPort):
         if not selector:
             return self._error_snapshot("fill requires selector")
         pre_url = self._tab.url or ""
-        element = await self._tab.query_selector(selector)
+        element = await self._query(selector)
         if element is None:
             return self._error_snapshot(f"fill: no element matches {selector!r}")
         await element.clear_input()
@@ -472,17 +498,17 @@ class ZendriverBrowserSession(BrowserSessionPort):
         if not selector:
             return self._error_snapshot("select requires selector")
         pre_url = self._tab.url or ""
-        element = await self._tab.query_selector(selector)
+        element = await self._query(selector)
         if element is None:
             return self._error_snapshot(f"select: no element matches {selector!r}")
         # zendriver's select_option is parameterless and only works on an
         # OPTION element. For our API we select the option whose value/label
         # matches ``value`` and then click it (which fires change events).
         option_selector = f"{selector} option[value={json.dumps(value)}]"
-        option = await self._tab.query_selector(option_selector)
+        option = await self._query(option_selector)
         if option is None:
             # Fallback: match by text content.
-            option = await self._tab.query_selector(f"{selector} option")
+            option = await self._query(f"{selector} option")
             if option is not None and value.lower() not in (getattr(option, "text", "") or "").lower():
                 option = None
         if option is None:
@@ -498,7 +524,7 @@ class ZendriverBrowserSession(BrowserSessionPort):
         selector = action.selector or ""
         if not selector:
             return self._error_snapshot("extract requires selector")
-        elements = await self._tab.query_selector_all(selector)
+        elements = await self._query_all(selector)
         extracted = self._build_extracted(elements)
         snippet = await self._build_snippet()
         return PageSnapshot(

@@ -24,6 +24,7 @@ hand before running ``step_3_upload_to_uwazi.py``.
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 
 from browser_agent.adapters.llm.ollama_adapter import OllamaAdapter
@@ -82,8 +83,11 @@ class MatchDriver:
         """Load the context, run thesaurus matching, then print the upload-validation report."""
         context_loader = self._build_context_loader()
         context = context_loader.load(self._paths.default_mapping_path())
-        self._print_setup_summary(len(context.thesauri_by_id), len(context.field_counters))
-        self._default_validator.print_report(context.mapping.properties, context.template, context.thesauri_by_id)
+        self._print_setup_summary(len(context.thesauri_by_id), len(context.relationships_by_id), len(context.field_counters))
+        self._print_metadata_summary()
+        self._default_validator.print_report(
+            context.mapping.properties, context.template, context.thesauri_by_id, context.relationships_by_id
+        )
         SectionPrinter().heading("Thesaurus matching")
         groups = self._build_groups(context)
         if groups:
@@ -123,6 +127,7 @@ class MatchDriver:
             context.template,
             context.thesauri_by_id,
             context.field_counters,
+            context.relationships_by_id,
         )
         if not groups:
             print("No thesauri with extracted values to match.")
@@ -141,10 +146,11 @@ class MatchDriver:
             )
         print("\nDone. Review the YAML files in thesauri_mappings/ before running step_3_upload_to_uwazi.py.")
 
-    def _print_setup_summary(self, thesauri_count: int, field_count: int) -> None:
+    def _print_setup_summary(self, thesauri_count: int, relationships_count: int, field_count: int) -> None:
         """Print the section header + one-line summary of loaded data."""
         SectionPrinter().heading("Thesauri & source fields loaded")
         print(f"  thesauri:       {thesauri_count}")
+        print(f"  relationships:  {relationships_count}")
         print(f"  source fields:  {field_count} with extracted values")
 
     def _query_metadata_rows(self) -> list[tuple[str, str, str]]:
@@ -155,10 +161,26 @@ class MatchDriver:
         finally:
             conn.close()
 
+    def _print_metadata_summary(self) -> None:
+        """Print the per-row metadata fields available in the run's metadata.db."""
+        SectionPrinter().heading("Scraped metadata")
+        for source_url, task_slug, data_json in self._query_metadata_rows():
+            print(f"  {source_url} ({task_slug}): {_extract_field_names(data_json)}")
+
 
 def main() -> None:
     """Module entry: invoke the match driver."""
     MatchDriver().run()
+
+
+def _extract_field_names(data_json: str | None) -> str:
+    """Return a comma-separated list of field keys from a JSON data blob."""
+    if not data_json:
+        return "(no data)"
+    try:
+        return ", ".join(sorted(json.loads(data_json).keys()))
+    except (json.JSONDecodeError, AttributeError):
+        return "(parse error)"
 
 
 if __name__ == "__main__":

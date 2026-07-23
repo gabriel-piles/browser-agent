@@ -26,5 +26,6 @@ class MatchContext:
     mapping: UwaziMapping
     template: UwaziTemplate
     thesauri_by_id: dict[str, ThesauriSnapshot]
+    relationships_by_id: dict[str, ThesauriSnapshot]
     field_counters: dict[str, Counter]
     client: UwaziClient

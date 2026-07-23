@@ -28,12 +28,15 @@ from browser_agent.domain.uwazi_mapping import UwaziMapping
 from browser_agent.drivers.classification.existing_entities_fetcher import ExistingEntitiesFetcher
 from uwazi_api.client import UwaziClient
 from uwazi_api.domain.entity import Entity
+from uwazi_api.domain.search_filters import SearchFilters
 from uwazi_api.domain.thesauri_value import ThesauriValue
 
 # The set of field types whose value should be substituted via the
 # per-thesaurus mapping YAML. Kept module-level so the substitution
 # helpers and the field-type dispatch are easy to read.
-_THESAURUS_TYPES = (FieldType.SELECT, FieldType.MULTI_SELECT)
+_THESAURUS_TYPES = (FieldType.SELECT, FieldType.MULTI_SELECT, FieldType.RELATIONSHIP)
+# Page size used when paginating entity searches for relationship title→id mapping.
+_ENTITY_BATCH = 200
 
 # Default date formats tried in order when a :class:`FieldMapping` does
 # not pin its own ``parse_formats``. Operator overrides always win.
@@ -356,6 +359,7 @@ def build_metadata_for_row(
     mapping: UwaziMapping,
     thesaurus_lookup: dict[str, dict[str, str]],
     thesaurus_parents: dict[str, dict[str, str | None]] | None = None,
+    relationship_title_to_id: dict[str, dict[str, str]] | None = None,
 ) -> dict:
     """Build the post-transform metadata dict for one record.
 
@@ -374,21 +378,26 @@ def build_metadata_for_row(
     entry; absent or empty input means the rows are sent as bare
     labels (which the Uwazi validator accepts for top-level labels
     but rejects for child labels).
+
+    ``relationship_title_to_id`` is the ``{thesaurus_name: {title: shared_id}}``
+    map built by :func:`_fetch_relationship_entity_mapping`. When present,
+    relationship values are resolved to entity IDs before wrapping.
     """
     out: dict = {}
     for prop in mapping.properties:
         if prop.type in (FieldType.TITLE, FieldType.SKIPPED, FieldType.FILE):
             continue
         lookup = thesaurus_lookup.get(prop.thesaurus) if prop.thesaurus else None
+        rel_map = relationship_title_to_id.get(prop.thesaurus) if (relationship_title_to_id and prop.thesaurus) else None
         if prop.source is None:
             value = _default_metadata_value(prop, lookup)
             if value is not None:
-                out[prop.name] = _coerce_metadata_value(value, prop, thesaurus_parents)
+                out[prop.name] = _coerce_metadata_value(value, prop, thesaurus_parents, rel_map)
             continue
         if prop.source not in record:
             continue
         value = _format_metadata_field(record[prop.source], prop, lookup)
-        coerced = _coerce_metadata_value(value, prop, thesaurus_parents)
+        coerced = _coerce_metadata_value(value, prop, thesaurus_parents, rel_map)
         if coerced is not None:
             out[prop.name] = coerced
     if mapping.identity.source_url_property and _looks_like_url(source_url):
@@ -400,6 +409,7 @@ def _coerce_metadata_value(
     value,
     prop: MappedProperty,
     thesaurus_parents: dict[str, dict[str, str | None]] | None,
+    relationship_title_to_id: dict[str, str] | None = None,
 ) -> object:
     """Coerce a transformed value into the shape Uwazi's metadata expects.
 
@@ -408,12 +418,26 @@ def _coerce_metadata_value(
     Link values become ``{label, url}`` dicts. Plain string-typed
     properties are stringified because Uwazi's validator rejects
     non-string scalars (the scraper sometimes hands us integers from
-    JSON-decoded metadata blobs). Other property types pass through
-    unchanged.
+    JSON-decoded metadata blobs).
+
+    Relationship values are looked up in ``relationship_title_to_id``
+    (built by :func:`_fetch_relationship_entity_mapping`) and wrapped
+    as ``[{"value": "<entity_id>"}]`` so the Uwazi API receives entity
+    references instead of bare label strings. When the mapping is absent
+    or a title is not found, the raw string passes through unchanged
+    (the Uwazi validator will reject it with a clear error).
+
+    Other property types pass through unchanged.
     """
     if value is None or value == "":
         return None
-    if prop.type in _THESAURUS_TYPES:
+    if prop.type is FieldType.RELATIONSHIP:
+        if relationship_title_to_id is not None:
+            if isinstance(value, list):
+                return [{"value": relationship_title_to_id.get(v, v)} for v in value if v is not None]
+            return [{"value": relationship_title_to_id.get(value, value)}]
+        return value
+    if prop.type in (FieldType.SELECT, FieldType.MULTI_SELECT):
         parents_map = thesaurus_parents.get(prop.thesaurus_id) if (thesaurus_parents and prop.thesaurus_id) else None
         return _wrap_select_value(value, parents_map)
     if prop.type is FieldType.LINK:
@@ -436,6 +460,59 @@ def _fetch_existing_entities(client: UwaziClient, mapping: UwaziMapping) -> dict
         select_filter_name=mapping.identity.select_filtering_name,
         select_filter_values=mapping.identity.select_filtering_options,
     )
+
+
+def _fetch_relationship_entity_mapping(client: UwaziClient, mapping: UwaziMapping) -> dict[str, dict[str, str]]:
+    """Return ``{thesaurus_name: {entity_title: entity_shared_id}}`` for each relationship property.
+
+    Fetches every existing entity of the relationship's target template and
+    indexes them by title so :func:`_coerce_metadata_value` can look up
+    entity IDs for relationship values that were substituted as titles.
+    Skips properties that have no ``thesaurus_id`` or whose target template
+    cannot be resolved. Returns an empty dict (no lookup) when no
+    relationship property is found, which causes relationship values to
+    pass through as raw strings — the same error behaviour as before this
+    fix, so operators see a clear failure instead of silent wrong data.
+    """
+    result: dict[str, dict[str, str]] = {}
+    for prop in mapping.properties:
+        if prop.type is not FieldType.RELATIONSHIP or prop.thesaurus_id is None:
+            continue
+        if prop.thesaurus is None:
+            continue
+        target = client.templates.get_by_id(prop.thesaurus_id)
+        if target is None:
+            continue
+        entities = _fetch_all_entities_by_template(client, target.name, mapping.default_language)
+        title_to_id = {e.title: e.shared_id for e in entities if e.title and e.shared_id}
+        if title_to_id:
+            result[prop.thesaurus] = title_to_id
+    return result
+
+
+def _fetch_all_entities_by_template(
+    client: UwaziClient,
+    template_name: str,
+    language: str,
+) -> list[Entity]:
+    """Fetch every entity for ``template_name`` via paginated search, returning the full ``Entity`` objects."""
+    out: list[Entity] = []
+    start = 0
+    while True:
+        page = client.search.search_by_filter(
+            filters=SearchFilters(filters={}),
+            template_name=template_name,
+            start_from=start,
+            batch_size=_ENTITY_BATCH,
+            language=language,
+        )
+        if not page:
+            break
+        out.extend(page)
+        if len(page) < _ENTITY_BATCH:
+            break
+        start += _ENTITY_BATCH
+    return out
 
 
 def _row_action(record, source_url, mapping, entities_by_key) -> tuple[SyncAction, str | None]:
@@ -462,7 +539,14 @@ def _row_action(record, source_url, mapping, entities_by_key) -> tuple[SyncActio
 
 
 def _build_plan_row(
-    record, source_url, mapping, entities_by_key, thesaurus_lookup, thesaurus_parents, downloads_dir: Path | None = None
+    record,
+    source_url,
+    mapping,
+    entities_by_key,
+    thesaurus_lookup,
+    thesaurus_parents,
+    downloads_dir: Path | None = None,
+    relationship_title_to_id: dict[str, dict[str, str]] | None = None,
 ) -> SyncPlanRow:
     """Transform one record into one :class:`SyncPlanRow`."""
     pdf_path = resolve_pdf_filename(record, source_url, downloads_dir)
@@ -475,7 +559,9 @@ def _build_plan_row(
         language=language,
         source_url=source_url,
         title=_title_of_record(record, source_url, mapping),
-        metadata=build_metadata_for_row(record, source_url, mapping, thesaurus_lookup, thesaurus_parents),
+        metadata=build_metadata_for_row(
+            record, source_url, mapping, thesaurus_lookup, thesaurus_parents, relationship_title_to_id
+        ),
         pdf_path=pdf_path,
         html_path=html_path,
         key_value=resolve_key_value(record, source_url, mapping.identity, mapping),
@@ -501,6 +587,7 @@ def _plan_rows(records, mapping, client, thesaurus_lookup, downloads_dir: Path |
         mapping.default_language,
         _thesaurus_ids_from_mapping(mapping),
     )
+    relationship_title_to_id = _fetch_relationship_entity_mapping(client, mapping)
     return tuple(
         _build_plan_row(
             _parse_row_data(raw_data),
@@ -510,6 +597,7 @@ def _plan_rows(records, mapping, client, thesaurus_lookup, downloads_dir: Path |
             thesaurus_lookup,
             thesaurus_parents,
             downloads_dir,
+            relationship_title_to_id,
         )
         for source_url, _task_slug, raw_data in records
     )
@@ -628,13 +716,15 @@ def _create_entity_for_row(client: UwaziClient, row, mapping) -> str:
     return shared_id
 
 
-def _push_row(client: UwaziClient, out, row, mapping) -> None:
+def _push_row(client: UwaziClient, out, row, mapping, i: int, total: int) -> None:
     """Push one :class:`SyncPlanRow` to Uwazi and update ``out`` accordingly."""
     try:
         if row.action is SyncAction.CREATE:
-            _create_entity_for_row(client, row, mapping)
+            shared_id = _create_entity_for_row(client, row, mapping)
+            print(f"  [{i}/{total}] created {row.language} '{row.title}' -> {shared_id}")
         elif row.action is SyncAction.SKIP:
             _record_skip(out, row.language, row.source_url, row.skip_reason or "skipped_by_plan")
+            print(f"  [{i}/{total}] skipped {row.language} '{row.title}': {row.skip_reason}")
             return
         _record_result(out, row.language, row.action)
     except Exception as exc:  # noqa: BLE001 - any failure is recorded
@@ -648,6 +738,7 @@ def push_plan(
 ) -> ApplyResult:
     """Push the plan to Uwazi; no LLM, pure :class:`UwaziClient` calls."""
     out = empty_apply_result()
-    for row in plan.rows:
-        _push_row(client, out, row, plan.mapping)
+    total = len(plan.rows)
+    for i, row in enumerate(plan.rows, start=1):
+        _push_row(client, out, row, plan.mapping, i, total)
     return out

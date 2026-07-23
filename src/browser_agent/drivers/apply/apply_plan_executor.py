@@ -24,6 +24,7 @@ class ApplyPlanExecutor:
     def execute(self, plan, push: bool):
         """Push ``plan`` to Uwazi when ``push`` is True, else return a dry-run result."""
         if push:
+            print(f"Pushing {len(plan.rows)} rows to Uwazi...")
             return push_plan(plan=plan, client=self._client)
         print("push=False; skipping the actual Uwazi calls and printing the plan only.")
         return self._dry_run_result(plan)

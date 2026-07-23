@@ -21,6 +21,7 @@ class FieldType(str, Enum):
     SELECT = "select"
     MULTI_SELECT = "multiselect"
     MARKDOWN = "markdown"
+    RELATIONSHIP = "relationship"
     LINK = "link"
     FILE = "file"
     SKIPPED = "skipped"
