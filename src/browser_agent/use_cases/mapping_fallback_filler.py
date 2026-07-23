@@ -44,21 +44,17 @@ def _first_leaf_label(node: ThesauriValue) -> str | None:
     return current.label
 
 
-def _needs_correction(prop: MappedProperty) -> bool:
-    """Return True when ``prop`` is a select/multiselect with a default_value and a thesaurus."""
-    if prop.source is not None or prop.default_value is None:
-        return False
-    if prop.type not in (FieldType.SELECT, FieldType.MULTI_SELECT) or not prop.thesaurus_id:
-        return False
-    return True
-
-
 def _correct_one(
     prop: MappedProperty,
     thesauri_by_id: dict[str, ThesauriSnapshot],
+    template: UwaziTemplate,
 ) -> MappedProperty:
     """Return ``prop`` unchanged, or copy-corrected when its default_value is a parent group."""
-    thesaurus = thesauri_by_id.get(prop.thesaurus_id or "")
+    template_prop = template.property_by_name(prop.name) if template else None
+    thesaurus_id = template_prop.thesaurus_id if template_prop else None
+    if not thesaurus_id:
+        return prop
+    thesaurus = thesauri_by_id.get(thesaurus_id)
     if thesaurus is None:
         return prop
     if prop.default_value in thesaurus.values:
@@ -85,9 +81,8 @@ class MappingFallbackFiller:
         thesauri_by_id: dict[str, ThesauriSnapshot] | None = None,
     ) -> None:
         """Patch the identity (frozen-safe) and append missing default entries."""
-        self._patch_identity(mapping, catalog, template)
         self._fill_missing_defaults(mapping, template, thesauri_by_id or {})
-        mapping.properties = tuple(_correct_one(p, thesauri_by_id or {}) for p in mapping.properties)
+        mapping.properties = tuple(_correct_one(p, thesauri_by_id or {}, template) for p in mapping.properties)
 
     def _patch_identity(
         self,
@@ -136,13 +131,11 @@ class MappingFallbackFiller:
         thesauri_by_id: dict[str, ThesauriSnapshot],
     ) -> MappedProperty:
         """Build a ``source=None`` :class:`MappedProperty` placeholder for one property."""
-        default_value = self._default_value_for(prop, thesauri_by_id)
         return MappedProperty(
             name=prop.name,
             label=prop.label,
             type=prop.type,
             required=prop.required,
-            thesaurus_id=prop.thesaurus_id,
             source=None,
             thesaurus=None,
             default_value=default_value,

@@ -2,8 +2,11 @@
 
 This model is the single list the operator edits. It contains the
 live Uwazi template property metadata (``name``, ``label``, ``type``,
-``required``, ``thesaurus_id``) plus the mapping-specific choices
+``required``) plus the mapping-specific choices
 (``source``, ``thesaurus``, ``parse_formats``, ``default_value``, ``notes``).
+The thesaurus id is excluded from the YAML mapping — operators refer
+to the thesaurus by its name and the downstream scripts resolve the
+id from the live Uwazi template.
 
 Special ``type`` values that are NOT part of ``Entity.metadata``:
 - ``title`` (``FieldType.TITLE``) targets the Uwazi entity title. The
@@ -31,10 +34,6 @@ class MappedProperty(BaseModel):
     label: str | None = Field(default=None, description="UI label from the Uwazi template.")
     type: FieldType = Field(description="Normalised property type.")
     required: bool = Field(default=False, description="Whether the template requires this property.")
-    thesaurus_id: str | None = Field(
-        default=None,
-        description="Thesaurus id when the property is select/multiselect, else None.",
-    )
     source: str | None = Field(
         default=None,
         description="Source column name in the metadata.db row; None for a constant/default-only entry.",

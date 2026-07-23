@@ -21,6 +21,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "ruff",
+    "basedpyright"
 ]
 
 [tool.ruff]

@@ -42,8 +42,7 @@ class ExistingEntitiesFetcher:
         on the named select property is in ``select_filter_values``;
         otherwise the unfiltered template download runs.
         """
-        filters = self._build_filters(select_filter_name, select_filter_values)
-        entities = self._fetch_all(template_name, language, filters)
+        entities = self._fetch_all(template_name, language, select_filter_name, select_filter_values)
         return self._index_by_key(entities, key_property)
 
     @staticmethod
@@ -62,12 +61,20 @@ class ExistingEntitiesFetcher:
         self,
         template_name: str,
         language: str,
-        filters: SearchFilters | None = None,
+        select_filter_name: str | None,
+        select_filter_values: tuple[str, ...] | list[str],
     ) -> list:
-        """Fetch every entity for ``template_name`` via paginated search."""
+        """Fetch every entity for ``template_name`` via paginated search.
+
+        A fresh :class:`SearchFilters` is built per page because the
+        downstream ``search_by_filter`` resolves select labels to
+        thesaurus ids in place; reusing one filter object would feed
+        already-resolved ids back into the validator on the next page.
+        """
         out: list = []
         start = 0
         while True:
+            filters = self._build_filters(select_filter_name, select_filter_values)
             page = self._fetch_page(template_name, language, filters, start, _PAGE_BATCH)
             out.extend(page)
             if len(page) < _PAGE_BATCH:

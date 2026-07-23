@@ -24,6 +24,8 @@ from browser_agent.domain.field_type import FieldType
 from browser_agent.domain.identity_config import KeySource
 from browser_agent.domain.mapped_property import MappedProperty
 from browser_agent.domain.sync_plan import SyncAction, SyncPlan, SyncPlanRow
+from browser_agent.domain.uwazi_template import UwaziTemplate
+from browser_agent.use_cases.uwazi_mappers import to_template
 from browser_agent.domain.uwazi_mapping import UwaziMapping
 from browser_agent.drivers.classification.existing_entities_fetcher import ExistingEntitiesFetcher
 from uwazi_api.client import UwaziClient
@@ -264,8 +266,14 @@ def _looks_like_url(value: str) -> bool:
     return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
 
-def _thesauri_dict_from_yaml(path: Path) -> dict[str, str]:
-    """Load a single ``thesauri_mappings/*.yaml`` into a crawl -> uwazi dict."""
+def _thesauri_dict_from_yaml(path: Path) -> dict[str, str | None]:
+    """Load a single ``thesauri_mappings/*.yaml`` into a crawl -> uwazi dict.
+
+    Entries whose ``uwazi_value`` is ``null`` are included and map to
+    ``None``: the apply step treats a ``None`` substitution as "skip
+    this property" so the crawl value is not sent to Uwazi, and the
+    entity is still created without that property.
+    """
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except Exception:
@@ -273,17 +281,25 @@ def _thesauri_dict_from_yaml(path: Path) -> dict[str, str]:
     if not isinstance(data, dict):
         return {}
     entries = data.get("entries") or ()
-    return {e["crawl_value"]: e["uwazi_value"] for e in entries if isinstance(e, dict) and e.get("uwazi_value") is not None}
+    return {
+        e["crawl_value"]: e["uwazi_value"]
+        for e in entries
+        if isinstance(e, dict) and "crawl_value" in e and "uwazi_value" in e
+    }
 
 
-def load_thesauri_mappings(thesauri_dir: Path) -> dict[str, dict[str, str]]:
+def load_thesauri_mappings(thesauri_dir: Path) -> dict[str, dict[str, str | None]]:
     """Read every ``thesauri_mappings/*.yaml`` into a name -> {crawl: uwazi} dict.
 
     Public so :mod:`browser_agent.drivers.step_2_uwazi_match` can reuse
     the on-disk cache when it builds per-row metadata for the
     upload-validation report (no LLM is involved there).
+
+    Values may be ``None`` when the thesaurus mapping declares
+    ``uwazi_value: null``; the apply step treats those as "skip
+    this property" so the entity is still created without it.
     """
-    out: dict[str, dict[str, str]] = {}
+    out: dict[str, dict[str, str | None]] = {}
     if not thesauri_dir.is_dir():
         return out
     for path in sorted(thesauri_dir.glob("*.yaml")):
@@ -357,7 +373,7 @@ def build_metadata_for_row(
     record: dict,
     source_url: str,
     mapping: UwaziMapping,
-    thesaurus_lookup: dict[str, dict[str, str]],
+    thesaurus_lookup: dict[str, dict[str, str | None]],
     thesaurus_parents: dict[str, dict[str, str | None]] | None = None,
     relationship_title_to_id: dict[str, dict[str, str]] | None = None,
 ) -> dict:
@@ -372,9 +388,9 @@ def build_metadata_for_row(
     the per-row metadata for the upload-validation report without
     duplicating the thesaurus-substitution logic.
 
-    ``thesaurus_parents`` is the ``{thesaurus_id: {label: parent_label}}``
-    map built by :func:`build_thesaurus_parents`. It is only consulted
-    for select/multiselect properties whose ``thesaurus`` id has an
+    ``thesaurus_parents`` is the ``{property_name: {label: parent_label}}``
+    map built by :func:`_plan_rows` from the live Uwazi thesaurus. It is
+    only consulted for select/multiselect properties whose thesaurus has an
     entry; absent or empty input means the rows are sent as bare
     labels (which the Uwazi validator accepts for top-level labels
     but rejects for child labels).
@@ -436,9 +452,8 @@ def _coerce_metadata_value(
             if isinstance(value, list):
                 return [{"value": relationship_title_to_id.get(v, v)} for v in value if v is not None]
             return [{"value": relationship_title_to_id.get(value, value)}]
-        return value
     if prop.type in (FieldType.SELECT, FieldType.MULTI_SELECT):
-        parents_map = thesaurus_parents.get(prop.thesaurus_id) if (thesaurus_parents and prop.thesaurus_id) else None
+        parents_map = thesaurus_parents.get(prop.name) if thesaurus_parents else None
         return _wrap_select_value(value, parents_map)
     if prop.type is FieldType.LINK:
         text = str(value)
@@ -462,25 +477,30 @@ def _fetch_existing_entities(client: UwaziClient, mapping: UwaziMapping) -> dict
     )
 
 
-def _fetch_relationship_entity_mapping(client: UwaziClient, mapping: UwaziMapping) -> dict[str, dict[str, str]]:
+def _fetch_relationship_entity_mapping(
+    client: UwaziClient, mapping: UwaziMapping, template: UwaziTemplate
+) -> dict[str, dict[str, str]]:
     """Return ``{thesaurus_name: {entity_title: entity_shared_id}}`` for each relationship property.
 
     Fetches every existing entity of the relationship's target template and
     indexes them by title so :func:`_coerce_metadata_value` can look up
     entity IDs for relationship values that were substituted as titles.
-    Skips properties that have no ``thesaurus_id`` or whose target template
-    cannot be resolved. Returns an empty dict (no lookup) when no
-    relationship property is found, which causes relationship values to
-    pass through as raw strings — the same error behaviour as before this
-    fix, so operators see a clear failure instead of silent wrong data.
+    Skips properties whose target template cannot be resolved. Returns an
+    empty dict (no lookup) when no relationship property is found, which
+    causes relationship values to pass through as raw strings — the same
+    error behaviour as before this fix, so operators see a clear failure
+    instead of silent wrong data.
     """
     result: dict[str, dict[str, str]] = {}
     for prop in mapping.properties:
-        if prop.type is not FieldType.RELATIONSHIP or prop.thesaurus_id is None:
+        if prop.type is not FieldType.RELATIONSHIP:
             continue
         if prop.thesaurus is None:
             continue
-        target = client.templates.get_by_id(prop.thesaurus_id)
+        tprop = template.property_by_name(prop.name)
+        if tprop is None or tprop.thesaurus_id is None:
+            continue
+        target = client.templates.get_by_id(tprop.thesaurus_id)
         if target is None:
             continue
         entities = _fetch_all_entities_by_template(client, target.name, mapping.default_language)
@@ -570,24 +590,33 @@ def _build_plan_row(
     )
 
 
-def _thesaurus_ids_from_mapping(mapping: UwaziMapping) -> tuple[str, ...]:
-    """Return the distinct non-null thesaurus ids declared by select/multiselect props."""
+def _thesaurus_ids_from_mapping(template: UwaziTemplate, mapping: UwaziMapping) -> tuple[str, ...]:
+    """Return the distinct non-null thesaurus ids from the live template for select/multiselect props."""
     seen: set[str] = set()
     for prop in mapping.properties:
-        if prop.type in _THESAURUS_TYPES and prop.thesaurus_id:
-            seen.add(prop.thesaurus_id)
+        if prop.type in _THESAURUS_TYPES:
+            tprop = template.property_by_name(prop.name)
+            if tprop and tprop.thesaurus_id:
+                seen.add(tprop.thesaurus_id)
     return tuple(seen)
 
 
 def _plan_rows(records, mapping, client, thesaurus_lookup, downloads_dir: Path | None = None) -> tuple[SyncPlanRow, ...]:
     """Transform every metadata row into one :class:`SyncPlanRow`."""
+    template_raw = client.templates.get_by_name(mapping.template)
+    if template_raw is None:
+        raise ValueError(f"Uwazi template {mapping.template!r} not found")
+    template = to_template(template_raw)
     entities_by_key = _fetch_existing_entities(client, mapping)
-    thesaurus_parents = build_thesaurus_parents(
-        client,
-        mapping.default_language,
-        _thesaurus_ids_from_mapping(mapping),
-    )
-    relationship_title_to_id = _fetch_relationship_entity_mapping(client, mapping)
+    thesaurus_ids = _thesaurus_ids_from_mapping(template, mapping)
+    parents_by_id = build_thesaurus_parents(client, mapping.default_language, thesaurus_ids)
+    thesaurus_parents: dict[str, dict[str, str | None]] = {}
+    for prop in mapping.properties:
+        if prop.type in (FieldType.SELECT, FieldType.MULTI_SELECT):
+            tprop = template.property_by_name(prop.name)
+            if tprop and tprop.thesaurus_id and tprop.thesaurus_id in parents_by_id:
+                thesaurus_parents[prop.name] = parents_by_id[tprop.thesaurus_id]
+    relationship_title_to_id = _fetch_relationship_entity_mapping(client, mapping, template)
     return tuple(
         _build_plan_row(
             _parse_row_data(raw_data),
