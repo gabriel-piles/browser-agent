@@ -39,6 +39,17 @@ def _first_leaf_label(node: ThesauriValue) -> str | None:
     return current.label
 
 
+def _resolve_thesaurus_name(thesaurus_id: str | None, thesauri_by_id: dict[str, ThesauriSnapshot]) -> str | None:
+    """Return the canonical thesaurus name for ``thesaurus_id``, or None when absent."""
+    snapshot = thesauri_by_id.get(thesaurus_id) if thesaurus_id else None
+    return snapshot.name if snapshot else None
+
+
+def _with_thesaurus(prop: MappedProperty, name: str) -> MappedProperty:
+    """Return ``prop`` with ``thesaurus`` set to ``name`` when it is currently None."""
+    return prop if prop.thesaurus is not None else prop.model_copy(update={"thesaurus": name})
+
+
 def _correct_one(
     prop: MappedProperty,
     thesauri_by_id: dict[str, ThesauriSnapshot],
@@ -52,6 +63,7 @@ def _correct_one(
     thesaurus = thesauri_by_id.get(thesaurus_id)
     if thesaurus is None:
         return prop
+    prop = _with_thesaurus(prop, thesaurus.name)
     if prop.default_value in thesaurus.values:
         return prop
     node = _find_tree_node(thesaurus.tree, prop.default_value)
@@ -114,7 +126,7 @@ class MappingFallbackFiller:
             type=prop.type,
             required=prop.required,
             source=None,
-            thesaurus=None,
+            thesaurus=_resolve_thesaurus_name(prop.thesaurus_id, thesauri_by_id),
             default_value=self._default_value_for(prop, thesauri_by_id),
             notes="unmapped template property; no matching scraped field",
         )

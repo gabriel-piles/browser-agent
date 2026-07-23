@@ -78,7 +78,7 @@ class MetadataValueTransformer:
         lookup = thesaurus_lookup.get(prop.thesaurus) if prop.thesaurus else None
         rel_map = relationship_title_to_id.get(prop.thesaurus) if (relationship_title_to_id and prop.thesaurus) else None
         if prop.source is None:
-            value = self._default_value(prop, lookup)
+            value = self._default_value(prop)
             if value is None:
                 return None
             return self._coerce(value, prop, thesaurus_parents, rel_map)
@@ -95,11 +95,13 @@ class MetadataValueTransformer:
             return self._substitute_thesaurus(raw, prop.type, lookup)
         return raw
 
-    def _default_value(self, prop: MappedProperty, lookup) -> object:
-        """Coerce a constant ``default_value`` for a source=None entry."""
-        if prop.default_value is None:
-            return None
-        return self._format_field(prop.default_value, prop, lookup)
+    def _default_value(self, prop: MappedProperty) -> object:
+        """Return the constant ``default_value`` for a source=None entry.
+
+        Defaults are operator-curated canonical Uwazi values, not crawl
+        values, so they bypass thesaurus substitution and date parsing.
+        """
+        return prop.default_value
 
     def _coerce(self, value, prop, thesaurus_parents, relationship_title_to_id) -> object:
         """Coerce a transformed value into the shape Uwazi's metadata expects."""
@@ -145,20 +147,22 @@ class MetadataValueTransformer:
             return None
 
     def _substitute_thesaurus(self, value, field_type: FieldType, lookup: dict[str, str] | None) -> object:
-        """Substitute a crawl value with its canonical thesaurus form (or pass through)."""
-        if field_type not in _THESAURUS_TYPES or not lookup:
+        """Substitute a crawl value with its canonical thesaurus form, dropping unmapped values."""
+        if field_type not in _THESAURUS_TYPES:
             return value
+        if not lookup:
+            return None if not isinstance(value, list) else []
         if isinstance(value, list):
             return [self._substitute_one(item, lookup) for item in value]
         return self._substitute_one(value, lookup)
 
     @staticmethod
     def _substitute_one(value, lookup: dict[str, str]) -> object:
-        """Apply a single thesaurus lookup to one value, preserving ``None``."""
+        """Apply a single thesaurus lookup to one value, dropping unmapped values."""
         if value is None:
             return None
         text = str(value).strip()
-        return lookup.get(text, value)
+        return lookup.get(text)
 
     def _wrap_select_value(self, value, parents_map: dict[str, str | None] | None) -> list[dict] | None:
         """Wrap a select/multiselect value (scalar or list) as a list of items."""
