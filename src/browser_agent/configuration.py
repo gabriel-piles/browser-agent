@@ -15,11 +15,14 @@ load_dotenv(PROJECT_ROOT / ".env")
 OLLAMA_BASE_URL = "https://ollama.com/v1"
 ORCHESTRATOR_MODEL = "deepseek-v4-pro:cloud"
 
-# YAML file that defines every run: ``active_run`` (the name to
-# execute) plus a list of ``runs`` each with ``name`` and ``prompt``.
+# YAML file that defines the active run: only ``active_run`` (the name to
+# execute). Per-run configuration (template, prompt, etc.) lives in
+# ``data/runs/<active_run>/config.yaml``.
 RUNS_FILE = PROJECT_ROOT / "data" / "runs.yaml"
 # Per-run root: scripts, downloads and metadata.db all live under
 # ``data/runs/<active_run>/``.
+# Per-run config file name inside each ``data/runs/<name>/`` directory.
+RUN_CONFIG_FILENAME = "config.yaml"
 RUNS_PATH = PROJECT_ROOT / "data" / "runs"
 # Mappings and thesaurus-mappings for the three Uwazi drivers
 # (``uwazi_propose``, ``uwazi_match``, ``uwazi_apply``) are stored
@@ -39,13 +42,27 @@ UWAZI_PASSWORD = os.environ.get("UWAZI_PASSWORD", "admin")
 UWAZI_DEFAULT_LANGUAGE = os.environ.get("UWAZI_DEFAULT_LANGUAGE", "en")
 
 MAX_LLM_CALLS = 50
-SNAPSHOT_MAX_CHARS = 6_000
+SNAPSHOT_MAX_CHARS = 50_000
 COMPACT_KEEP_RECENT_SNAPSHOTS = 2
 COMPACT_KEEP_RECENT_VALIDATIONS = 1
 COMPACT_TRUNCATED_PLACEHOLDER = "[trimmed — see latest snapshot]"
 COMPACT_MIN_TRIM_CHARS = 1_000
 COMPACT_HEAD_LINES = 6
 COMPACT_MAX_EXTRACTED_LINES = 10
+
+# --- Analysis action limits ---
+# Maximum elements per category returned by ``explore_page(action='analyze')``
+ANALYZE_MAX_LINKS = 50
+ANALYZE_MAX_BUTTONS = 15
+ANALYZE_MAX_INPUTS = 15
+ANALYZE_MAX_HEADINGS = 20
+ANALYZE_MAX_TABLES = 5
+
+# --- Compactor — structured-analysis tuning ---
+# Keep more recent structured/summary returns full (they're small)
+COMPACT_KEEP_RECENT_STRUCTURED = 5
+# Max chars for structured-analysis content before compactor considers trimming
+COMPACT_STRUCTURED_MAX_TRIM_CHARS = 3_000
 MAX_VALIDATION_ATTEMPTS = 3
 
 # ``headless`` defaults to False — the operator can watch Chrome

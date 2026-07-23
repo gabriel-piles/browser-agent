@@ -35,9 +35,11 @@ from pydantic_ai.models import ModelRequestContext
 from browser_agent.configuration import (
     COMPACT_HEAD_LINES,
     COMPACT_KEEP_RECENT_SNAPSHOTS,
+    COMPACT_KEEP_RECENT_STRUCTURED,
     COMPACT_KEEP_RECENT_VALIDATIONS,
     COMPACT_MAX_EXTRACTED_LINES,
     COMPACT_MIN_TRIM_CHARS,
+    COMPACT_STRUCTURED_MAX_TRIM_CHARS,
     COMPACT_TRUNCATED_PLACEHOLDER,
 )
 from browser_agent.use_cases.agent_deps import AgentDeps
@@ -89,6 +91,11 @@ class ToolReturnCompactor(AbstractCapability[AgentDeps]):
 
 
 def _build_plan(messages: list[ModelMessage]) -> _CutPlan | None:
+    """Classify messages and decide which indices to trim.
+
+    Uses ``COMPACT_KEEP_RECENT_STRUCTURED`` for explore_page returns
+    so structured analysis (which is low-token) stays visible longer.
+    """
     snaps, vals, others = _classify_indices(messages)
     if not snaps and not vals and not others:
         return None
@@ -96,7 +103,7 @@ def _build_plan(messages: list[ModelMessage]) -> _CutPlan | None:
         snaps=snaps,
         vals=vals,
         others=others,
-        snap_cut=_cut_index(snaps, COMPACT_KEEP_RECENT_SNAPSHOTS),
+        snap_cut=_cut_index(snaps, COMPACT_KEEP_RECENT_STRUCTURED),
         val_cut=_cut_index(vals, COMPACT_KEEP_RECENT_VALIDATIONS),
         oth_cut=_cut_index(others, 0),
     )
@@ -204,12 +211,28 @@ def _maybe_rewrite_part(part, tool_name, summarise):
 
 
 def _summarise_explore(content: str) -> str:
-    """Keep header lines + extracted elements, drop the HTML body."""
+    """Keep header lines + extracted elements, drop the HTML body.
+
+    Structured ``analyze`` returns are kept full (they are small and
+    contain selectors the agent needs).  ``inspect`` returns lose the
+    HTML snippet but keep their metadata headers, which is fine — the
+    agent can call ``inspect`` again to re-fetch the snippet.
+    """
+    if _is_analyze_return(content):
+        return content
     kept: list[str] = []
     state = _ExploreState()
     for line in content.splitlines():
         if state.step(line, kept):
             break
+    kept.append(COMPACT_TRUNCATED_PLACEHOLDER)
+    return "\n".join(kept)
+
+
+def _is_analyze_return(content: str) -> bool:
+    """Detect if the explore_page output is a structured analysis return."""
+    first = (content.splitlines() or [""])[0]
+    return "analyzed page structure" in first
     kept.append(COMPACT_TRUNCATED_PLACEHOLDER)
     return "\n".join(kept)
 

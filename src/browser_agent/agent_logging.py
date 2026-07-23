@@ -20,7 +20,7 @@ agent_logger = logger.bind(component="agent")
 
 
 @asynccontextmanager
-async def traced_tool(name: str) -> AsyncIterator[None]:
+async def traced_tool(name: str, *, summary: str = "") -> AsyncIterator[None]:
     """Async context manager that logs the start, end and duration of a tool.
 
     Wrap any tool body with this to get consistent timing/exception lines
@@ -29,19 +29,23 @@ async def traced_tool(name: str) -> AsyncIterator[None]:
         async def my_tool(ctx, ...):
             async with traced_tool("my_tool"):
                 ...
+
+    When *summary* is given it is appended to the log line (e.g. the
+    :class:`PageAction` the LLM asked the browser to perform).
     """
     started = time.monotonic()
-    agent_logger.bind(tool=name).info("TOOL   start")
+    suffix = f"   {summary}" if summary else ""
+    agent_logger.bind(tool=name).info(f"TOOL   start{suffix}")
     try:
         yield
     except Exception:
         agent_logger.bind(tool=name).exception(
-            "TOOL   FAILED elapsed={elapsed:.1f}s",
+            f"TOOL   FAILED elapsed={{elapsed:.1f}}s{suffix}",
             elapsed=time.monotonic() - started,
         )
         raise
     else:
         agent_logger.bind(tool=name).info(
-            "TOOL   done   elapsed={elapsed:.1f}s",
+            f"TOOL   done   elapsed={{elapsed:.1f}}s{suffix}",
             elapsed=time.monotonic() - started,
         )

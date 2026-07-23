@@ -26,7 +26,9 @@ the helper's result dict (``result["saved_path"]``) and stores it in
 the ``data`` dict (``pdf_filename``), alongside the human-readable
 name and document type (``pdf_name``, ``pdf_type``, ``pdf_id``,
 ``pdf_url``) so downstream code joins file to metadata without
-parsing the path.
+parsing the path. When the task also captures the page HTML as a
+supporting file, the HTML basename is stored under ``html_filename``
+(read from the ``save_page_html`` helper's ``saved_path``).
 Path resolution:
 
 * For final scripts the DB path and task slug are computed from
@@ -100,6 +102,14 @@ def save_record(source_url: str, data: dict) -> None:
     ``pdf_name`` / ``pdf_type``. The path is a pure function of the URL
     so the download helper's existence check means "already downloaded
     this URL".
+
+    When the task also captures the source HTML of the page where each
+    PDF was found (supporting file), store the HTML helper's basename
+    in ``data`` as ``html_filename`` (read it from the
+    ``save_page_html`` result dict's ``saved_path``). Downstream
+    upload code reads ``html_filename`` to attach the HTML as a
+    supporting attachment on the same Uwazi entity. Omit the key
+    (or set it to ``None``) when no HTML was captured for a row.
     """
     conn = sqlite3.connect(_SAVE_RECORD_DB_PATH)
     try:

@@ -45,6 +45,7 @@ from loguru import logger
 
 from browser_agent.adapters.emitted_page_wait import with_emitted_page_wait
 from browser_agent.adapters.emitted_save_record import with_emitted_save_record
+from browser_agent.adapters.emitted_save_html import with_emitted_save_html
 from browser_agent.adapters.emitted_pdf_download import with_emitted_all_pdf_downloads
 from browser_agent.domain.script_execution_result import ScriptExecutionResult
 from browser_agent.ports.browser_session_port import BrowserSessionPort
@@ -87,6 +88,7 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
     async def run(self, python_code: str, timeout: float = _DEFAULT_TIMEOUT) -> ScriptExecutionResult:
         augmented = with_emitted_page_wait(python_code)
         augmented = with_emitted_save_record(augmented)
+        augmented = with_emitted_save_html(augmented)
         augmented = with_emitted_all_pdf_downloads(augmented)
         tab = await self._session.new_tab()
         namespace = self._build_namespace(tab)

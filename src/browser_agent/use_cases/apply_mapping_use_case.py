@@ -81,6 +81,28 @@ def resolve_pdf_filename(record: dict, source_url: str, downloads_dir: Path | No
     return None
 
 
+def resolve_html_filename(record: dict, downloads_dir: Path | None) -> str | None:
+    """Return the absolute local HTML path for one record, or ``None``.
+
+    The scraper stores the on-disk HTML filename in the record's
+    ``html_filename`` field (e.g. ``html_a1b2c3d4e5f6.html``); the file
+    lands in ``<run>/downloads/``. Unlike PDFs, no URL-based derivation
+    is attempted when ``html_filename`` is missing — the source URL of
+    the HTML page may differ from the PDF's source_url, so deriving
+    would guess the wrong file. Returns the absolute path string when
+    the file exists on disk, else ``None``.
+    """
+    if downloads_dir is None:
+        return None
+    name = record.get("html_filename")
+    if not isinstance(name, str) or not name:
+        return None
+    candidate = downloads_dir / name
+    if candidate.is_file():
+        return str(candidate)
+    return None
+
+
 def _query_metadata_rows(db_path: Path, run: str | None) -> list[tuple[str, str, str]]:
     """Return ``(source_url, task_slug, data_json)`` rows from ``metadata.db``."""
     conn = sqlite3.connect(str(db_path))
@@ -445,6 +467,7 @@ def _build_plan_row(
     """Transform one record into one :class:`SyncPlanRow`."""
     pdf_path = resolve_pdf_filename(record, source_url, downloads_dir)
     record["pdf_filename"] = pdf_path
+    html_path = resolve_html_filename(record, downloads_dir)
     language = mapping.default_language
     action, skip_reason = _row_action(record, source_url, mapping, entities_by_key)
     return SyncPlanRow(
@@ -454,6 +477,7 @@ def _build_plan_row(
         title=_title_of_record(record, source_url, mapping),
         metadata=build_metadata_for_row(record, source_url, mapping, thesaurus_lookup, thesaurus_parents),
         pdf_path=pdf_path,
+        html_path=html_path,
         key_value=resolve_key_value(record, source_url, mapping.identity, mapping),
         mapping_sha256=mapping.sha256,
         skip_reason=skip_reason,
@@ -556,6 +580,27 @@ def _upload_primary_file(client: UwaziClient, shared_id: str, pdf_path: str, lan
     )
 
 
+def _upload_supporting_html(client: UwaziClient, shared_id: str, html_path: str, language: str, title: str) -> None:
+    """Attach ``html_path`` as a supporting file (attachment) of the entity.
+
+    Uses ``/api/files/upload/attachment`` (not the document endpoint) so
+    the file lands as a supporting attachment next to the primary PDF.
+    Returns silently on upload failure — the entity and its primary
+    document are already created; a failed HTML attachment must not abort
+    the row. The operator sees the missing attachment in the library.
+    """
+    from uwazi_api.domain.FileType import FileType
+
+    payload = Path(html_path).read_bytes()
+    client.files.upload_file_from_bytes(
+        file_bytes=payload,
+        share_id=shared_id,
+        language=language,
+        title=f"{title} (source HTML)",
+        file_type=str(FileType.HTML),
+    )
+
+
 def _create_entity_for_row(client: UwaziClient, row, mapping) -> str:
     """Create a fresh Uwazi entity for one CREATE row, return the new shared id.
 
@@ -578,6 +623,8 @@ def _create_entity_for_row(client: UwaziClient, row, mapping) -> str:
     shared_id = client.entities.upload(entity=entity, language=row.language)
     if mapping.upload_pdf and row.pdf_path:
         _upload_primary_file(client, shared_id, row.pdf_path, row.language, row.title)
+    if mapping.upload_pdf and row.html_path:
+        _upload_supporting_html(client, shared_id, row.html_path, row.language, row.title)
     return shared_id
 
 

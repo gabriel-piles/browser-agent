@@ -22,14 +22,41 @@ from browser_agent.domain.page_snapshot import PageSnapshot
 from browser_agent.use_cases.agent_deps import AgentDeps
 
 
+def _action_summary(action: PageAction) -> str:
+    """Compact human-readable summary of a :class:`PageAction` for logging.
+
+    Examples::
+
+        navigate:  url=https://quotes.toscrape.com
+        click:     selector='.next a'
+        fill:      selector='#search' value='hello'
+        select:    selector='#sort' value='price'
+        scroll:    scroll=200px
+        wait:      wait=2.0s
+        extract:   selector='.quote'
+    """
+    parts: list[str] = []
+    if action.selector:
+        parts.append(f"selector={action.selector!r}")
+    if action.value is not None:
+        parts.append(f"value={action.value!r}")
+    if action.url:
+        parts.append(f"url={action.url}")
+    if action.scroll_pixels is not None:
+        parts.append(f"scroll={action.scroll_pixels}px")
+    if action.wait_seconds is not None:
+        parts.append(f"wait={action.wait_seconds}s")
+    return f"{action.action}:  {' '.join(parts)}" if parts else action.action
+
+
 async def explore_page(ctx: RunContext[AgentDeps], action: PageAction) -> str:
     """Perform ``action`` in the persistent browser tab and return the result.
 
     The browser stays open between calls — navigate first, then click
-    filters, scroll to load lazy content, extract links, etc. Each call
-    returns the page state *after* the action: the cleaned HTML snapshot,
-    the current URL, scroll height, whether the URL changed, and (for
-    extract) matching elements with text+href.
+    filters, scroll to load lazy content, fill inputs, extract links, etc.
+    Each call returns the page state *after* the action: the cleaned HTML
+    snapshot, the current URL, scroll height, whether the URL changed, and
+    (for extract) matching elements with text+href.
 
     Actions:
       navigate  — open ``action.url`` (first call must be navigate).
@@ -40,6 +67,11 @@ async def explore_page(ctx: RunContext[AgentDeps], action: PageAction) -> str:
       extract    — return elements matching ``action.selector`` (text+href)
                    plus the cleaned HTML so you can see surrounding context.
       wait       — sleep ``action.wait_seconds`` for AJAX to settle.
+      analyze    — return a compact structured summary of the page
+                   (links, buttons, inputs, headings, tables, filters)
+                   with CSS selectors for each element.
+      inspect    — return the HTML snippet around the element matching
+                   ``action.selector`` (respects ``action.context_chars``).
 
     The returned text includes:
       - url_changed: true if the URL changed after the action (filter click)
@@ -47,7 +79,8 @@ async def explore_page(ctx: RunContext[AgentDeps], action: PageAction) -> str:
       - error: present if the action failed (e.g. selector not found)
     """
     session = ctx.deps.browser_session
-    async with traced_tool("explore_page"):
+    summary = _action_summary(action)
+    async with traced_tool("explore_page", summary=summary):
         snapshot: PageSnapshot = await session.perform(action)
     return _format_snapshot(snapshot)
 
@@ -68,6 +101,8 @@ def _format_snapshot(snapshot: PageSnapshot) -> str:
     if snapshot.error:
         lines.append(f"# ERROR: {snapshot.error}")
         return "\n".join(lines)
+    if snapshot.structure is not None:
+        return "\n".join(_format_structure(snapshot.structure, lines))
     if snapshot.extracted:
         lines.append("")
         lines.append(f"# Extracted elements ({snapshot.extracted_count} total):")
@@ -78,3 +113,64 @@ def _format_snapshot(snapshot: PageSnapshot) -> str:
         lines.append("")
         lines.append(snapshot.cleaned_html)
     return "\n".join(lines)
+
+
+def _format_structure(structure: PageStructure, lines: list[str]) -> list[str]:
+    """Append structured analysis sections to ``lines`` and return it."""
+    _append_section(lines, "# Links", structure.links, _fmt_link)
+    _append_section(lines, "# Buttons", structure.buttons, _fmt_element)
+    _append_section(lines, "# Form inputs", structure.inputs, _fmt_input)
+    _append_section(lines, "# Headings", structure.headings, _fmt_heading)
+    _append_section(lines, "# Tables", structure.tables, _fmt_table)
+    _append_section(lines, "# Pagination", structure.pagination, _fmt_link)
+    _append_section(lines, "# Filters", structure.filters, _fmt_element)
+    return lines
+
+
+def _append_section(
+    lines: list[str],
+    header: str,
+    items: list[ElementInfo],
+    formatter,
+) -> None:
+    if not items:
+        return
+    lines.append("")
+    lines.append(f"{header} ({len(items)} total):")
+    for item in items:
+        formatter(lines, item)
+
+
+def _fmt_link(lines: list[str], el: ElementInfo) -> None:
+    sel = f" {el.selector}" if el.selector else ""
+    text = el.text[:120]
+    href = el.href[:200]
+    lines.append(f"  <a{sel}> href={href!r} text={text!r}")
+
+
+def _fmt_element(lines: list[str], el: ElementInfo) -> None:
+    sel = f" {el.selector}" if el.selector else ""
+    text = el.text[:120]
+    lines.append(f"  <{el.tag}{sel}> text={text!r}")
+
+
+def _fmt_input(lines: list[str], el: ElementInfo) -> None:
+    sel = f" {el.selector}" if el.selector else ""
+    extra = " ".join(f"{k}={v!r}" for k, v in sorted(el.extra.items()) if v)
+    suffix = f" ({extra})" if extra else ""
+    text = el.text[:120]
+    lines.append(f"  <{el.tag}{sel}>{suffix} text={text!r}")
+
+
+def _fmt_heading(lines: list[str], el: ElementInfo) -> None:
+    text = el.text[:120]
+    level = el.extra.get("level", "")
+    lines.append(f"  {el.tag}{level}: {text!r}")
+
+
+def _fmt_table(lines: list[str], el: ElementInfo) -> None:
+    sel = f" {el.selector}" if el.selector else ""
+    rows = el.extra.get("rows", "?")
+    cols = el.extra.get("columns", "")
+    suffix = f" | columns: {cols}" if cols else ""
+    lines.append(f"  <table{sel}> {rows} rows{suffix}")

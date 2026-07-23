@@ -13,7 +13,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ActionType = Literal["navigate", "click", "scroll", "fill", "select", "extract", "wait"]
+ActionType = Literal["navigate", "click", "scroll", "fill", "select", "extract", "wait", "analyze", "inspect"]
 
 
 class PageAction(BaseModel):
@@ -32,19 +32,27 @@ class PageAction(BaseModel):
       return matching elements' text + href. Use ``selector`` to
       extract links, counts, or verify filters reacted.
     - ``wait``      — sleep ``wait_seconds`` for AJAX to settle.
+    - ``analyze``   — return a structured, selector-oriented summary
+      of the page (links, buttons, inputs, headings, tables,
+      pagination, filters). Use instead of reading the full HTML.
+    - ``inspect``   — return a short HTML snippet around the element
+      matching ``selector`` (default 2000 chars context). Use to
+      examine the DOM structure near a specific element identified
+      by ``analyze``.
     """
 
     action: ActionType = Field(
-        description="What to do: navigate, click, scroll, fill, select, extract, or wait.",
+        description="What to do: navigate, click, scroll, fill, select, extract, wait, analyze, or inspect.",
     )
     url: str | None = Field(
         default=None,
-        description="URL to navigate to. Required for 'navigate'; ignored otherwise.",
+        description="URL to navigate to (required for 'navigate' action).",
     )
+
     selector: str | None = Field(
         default=None,
         description=(
-            "Standard CSS selector. Required for click/fill/select/extract; "
+            "Standard CSS selector. Required for click/fill/select/extract/inspect; "
             "ignored otherwise. Playwright-only pseudo-classes are NOT supported."
         ),
     )
@@ -59,4 +67,11 @@ class PageAction(BaseModel):
     wait_seconds: float | None = Field(
         default=None,
         description="Seconds to sleep. Defaults to 1.0 for 'wait' action.",
+    )
+    context_chars: int = Field(
+        default=2000,
+        description=(
+            "Characters of context to return around a matched element (inspect action). "
+            "Small values save tokens. Larger values give more DOM structure."
+        ),
     )

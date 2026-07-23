@@ -4,12 +4,13 @@ After the browser session performs the requested action it returns
 a :class:`PageSnapshot` so the agent can reason about the current
 state of the page: what URL it's on, what the cleaned HTML looks like,
 any extracted elements (links, counts, text), whether the URL changed
-after an action, the current scroll height, and any error that
-occurred.
+after an action, the current scroll height, any error that occurred,
+and — for ``analyze`` actions — the structured :class:`PageStructure`.
 """
 
 from __future__ import annotations
 
+from browser_agent.domain.page_structure import PageStructure
 from pydantic import BaseModel, Field
 
 
@@ -36,6 +37,14 @@ class PageSnapshot(BaseModel):
             "Token-optimised HTML snapshot (scripts, styles, svg stripped). "
             "Present for navigate/scroll/click/wait actions so the agent can "
             "read the DOM. May be empty for extract actions."
+        ),
+    )
+    structure: PageStructure | None = Field(
+        default=None,
+        description=(
+            "Structured page analysis (links, buttons, inputs, headings, etc.) — "
+            "set only for ``analyze`` actions. When present the agent should "
+            "use the provided selectors rather than reading raw HTML."
         ),
     )
     extracted: list[ExtractedElement] = Field(

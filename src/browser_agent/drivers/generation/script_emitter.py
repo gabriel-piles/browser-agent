@@ -29,6 +29,7 @@ from browser_agent.adapters.emitted_clean_launch import (
 )
 from browser_agent.adapters.emitted_page_wait import with_emitted_page_wait
 from browser_agent.adapters.emitted_pdf_download import with_emitted_pdf_download
+from browser_agent.adapters.emitted_save_html import with_emitted_save_html
 from browser_agent.adapters.emitted_save_record import with_emitted_save_record
 from browser_agent.domain.generated_script import GeneratedScript
 
@@ -54,6 +55,7 @@ class ScriptEmitter:
         code = with_emitted_clean_launch(code)
         code = with_emitted_page_wait(code)
         code = with_emitted_save_record(code)
+        code = with_emitted_save_html(code)
         return with_emitted_pdf_download(code, script.pdf_download_strategy)
 
     def _profile_path(self, run_path: Path) -> str:
