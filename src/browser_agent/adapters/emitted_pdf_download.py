@@ -12,9 +12,13 @@ Two strategies are supported:
   for sites without JS-challenge anti-bot protection.
 
 * **browser_fetch** — ``download_pdf_browser(tab, url, save_path)``
-  uses ``tab.evaluate()`` + the browser's native ``fetch()`` to route
-  the download through Chrome's real network stack, bypassing
-  Cloudflare / Akamai anti-bot that blocks non-browser HTTP clients.
+  tries, in order: a CDP ``Network.loadNetworkResource`` fetch
+  (:func:`_fetch_pdf_via_cdp_navigation`), which routes through
+  Chrome's network stack at the browser-process level and bypasses
+  renderer-enforced CORS/CSP; the in-tab ``fetch()``, which is faster
+  for same-origin, non-gated resources; and ``curl_cffi`` as the final
+  fallback.  Used for sites behind Cloudflare/Akamai WAF or where
+  cross-origin downloads are blocked.
 
 The agent determines which strategy to use by calling the
 ``download_pdf`` tool (which tries curl_cffi).  If curl_cffi succeeds,
@@ -263,6 +267,54 @@ def _pdf_write_atomic(path, data):
             pass
         raise
 
+async def _fetch_pdf_via_cdp_navigation(tab, url):
+    """Fetch ``url`` via CDP Network.loadNetworkResource, bypassing CORS/CSP.
+
+    Routes the request through Chrome's network stack at the browser-process
+    level, so renderer-enforced CORS/CSP does not apply and the real TLS
+    fingerprint + cookies are used. Returns raw bytes; raises RuntimeError
+    on any failure.
+    """
+    from zendriver.cdp import network as _net
+    from zendriver.cdp import io as _io
+    from zendriver.cdp import page as _pg
+    frame_id = None
+    try:
+        await tab.send(_pg.enable())
+        tree = await tab.send(_pg.get_frame_tree())
+        frame_id = tree.frame.id_
+    except Exception:
+        frame_id = None
+    res = await tab.send(_net.load_network_resource(
+        url=url,
+        options=_net.LoadNetworkResourceOptions(
+            disable_cache=True,
+            include_credentials=True,
+        ),
+        frame_id=frame_id,
+    ))
+    if not res.success:
+        raise RuntimeError(
+            f"CDP fetch failed net_error={res.net_error} "
+            f"({res.net_error_name}) for {url}"
+        )
+    if res.http_status_code and res.http_status_code >= 400:
+        raise RuntimeError(f"HTTP {int(res.http_status_code)} for {url}")
+    handle = res.stream
+    if handle is None:
+        raise RuntimeError(f"no stream handle for {url}")
+    chunks = []
+    offset = None
+    while True:
+        b64, data, eof = await tab.send(_io.read(handle, offset=offset, size=None))
+        if data:
+            chunks.append(base64.b64decode(data) if b64 else data.encode())
+        if eof:
+            break
+    body = b"".join(chunks)
+    if not body:
+        raise RuntimeError(f"empty CDP stream for {url}")
+    return body
 
 async def _fetch_pdf_once(tab, url):
     """Single attempt: fetch ``url`` in ``tab``, return base64 body or raise RuntimeError."""
@@ -295,25 +347,33 @@ async def _fetch_pdf_once(tab, url):
 
 
 async def _try_browser_fetch(tab, url, save_path):
-    """Retry the browser fetch, write ``save_path`` atomically.
+    """Try CDP-bypass fetch, then in-tab fetch; write ``save_path`` atomically.
 
-    Returns a result dict with ``saved_path``. Raises ``RuntimeError``
-    on final failure.
+    The CDP path (:func:`_fetch_pdf_via_cdp_navigation`) is CORS/CSP-proof
+    and uses the real TLS fingerprint + cookies, so it is tried first.
+    The in-tab ``fetch()`` (:func:`_fetch_pdf_once`) is faster for
+    same-origin, non-gated resources and is tried second.  Each path is
+    retried up to ``_PDF_DOWNLOAD_RETRIES`` times.  Returns a result
+    dict with ``saved_path``; raises ``RuntimeError`` on final failure.
     """
-    last_exc = None
-    for attempt in range(1, _PDF_DOWNLOAD_RETRIES + 1):
-        try:
-            result = await _fetch_pdf_once(tab, url)
-            if not result:
-                raise RuntimeError(f"empty response for {url}")
-            body = base64.b64decode(result)
-            _pdf_write_atomic(save_path, body)
-            return {"size": len(body), "skipped": False, "reason": "downloaded",
-                    "saved_path": str(save_path)}
-        except RuntimeError as exc:
-            last_exc = exc
-            if attempt < _PDF_DOWNLOAD_RETRIES:
-                await asyncio.sleep(_PDF_DOWNLOAD_RETRY_DELAY_S * attempt)
+    for _fetch, _decode in (
+        (_fetch_pdf_via_cdp_navigation, False),
+        (_fetch_pdf_once, True),
+    ):
+        last_exc = None
+        for attempt in range(1, _PDF_DOWNLOAD_RETRIES + 1):
+            try:
+                result = await _fetch(tab, url)
+                if not result:
+                    raise RuntimeError(f"empty response for {url}")
+                body = base64.b64decode(result) if _decode else result
+                _pdf_write_atomic(save_path, body)
+                return {"size": len(body), "skipped": False,
+                        "reason": "downloaded", "saved_path": str(save_path)}
+            except RuntimeError as exc:
+                last_exc = exc
+                if attempt < _PDF_DOWNLOAD_RETRIES:
+                    await asyncio.sleep(_PDF_DOWNLOAD_RETRY_DELAY_S * attempt)
     raise last_exc
 
 
@@ -352,14 +412,20 @@ async def download_pdf_browser(tab, url, save_path):
     ``save_path`` is the downloads DIRECTORY (e.g. ``out_dir``).
     If a filename is passed instead, its parent directory is used.
 
-    Primary: the browser's native ``fetch()`` from the current tab,
-    which routes through Chrome's real network stack (TLS fingerprint,
-    cookies, JS challenge clearance) and bypasses Cloudflare /
-    Akamai anti-bot.  Retries on transient failures.
+    Primary: ``CDP Network.loadNetworkResource`` via
+    :func:`_fetch_pdf_via_cdp_navigation`, which routes the request
+    through Chrome's network stack at the browser-process level.  This
+    bypasses renderer-enforced CORS/CSP and uses the real TLS
+    fingerprint + cookies, so cross-origin and anti-bot-gated PDFs
+    download without page-level fetch restrictions.
 
-    Fallback: ``curl_cffi`` with Chrome TLS impersonation for
-    cross-origin URLs where the in-tab fetch is blocked by the
-    page's CSP / CORS.
+    Secondary: the browser's in-tab ``fetch()`` (:func:`_fetch_pdf_once`),
+    which is faster for same-origin, non-gated resources and retries on
+    transient failures.
+
+    Fallback: ``curl_cffi`` with Chrome TLS impersonation when both
+    browser paths fail (e.g. the page is closed or the CDP stream is
+    unavailable).
 
     HTTP URLs are upgraded to HTTPS to avoid mixed-content blocking.
 
@@ -373,7 +439,7 @@ async def download_pdf_browser(tab, url, save_path):
         result = await download_pdf_browser(tab, pdf_url, out_dir)
         save_record(..., {"pdf_filename": Path(result["saved_path"]).name, ...})
 
-    Raises ``RuntimeError`` if both strategies fail.
+    Raises ``RuntimeError`` if all three strategies fail.
     """
     if url.startswith("http://"):
         url = "https://" + url[7:]
