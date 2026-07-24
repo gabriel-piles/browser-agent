@@ -191,6 +191,27 @@ class ZendriverBrowserSession(BrowserSessionPort):
             logger.warning("invalid selector, treating as no matches: {s}", s=selector)
             return []
 
+    async def _try_interact(self, coro: Any, selector: str, action: str) -> str | None:
+        """Await ``coro``; return ``None`` on success, error string on failure.
+
+        Zendriver raises when an element exists in the DOM but is not
+        interactable — hidden, zero-size, or in a collapsed dropdown (common
+        with "responsive" toggles such as ``#responsiveAccountMenuDropdown``).
+        Degrade to an error snapshot so the agent retries with a different
+        selector instead of crashing the run, mirroring ``_query``.
+        """
+        try:
+            await coro
+            return None
+        except Exception as exc:
+            logger.warning("interact failed for {sel}: {err}", sel=selector, err=str(exc)[:160])
+            return f"{action}: element not interactable {selector!r} ({exc.__class__.__name__})"
+
+    async def _fill_input(self, element: Any, value: str) -> None:
+        """Clear ``element`` and type ``value`` into it."""
+        await element.clear_input()
+        await element.send_keys(value)
+
     async def _do_navigate(self, action: PageAction) -> PageSnapshot:
         url = action.url or ""
         if not url:
@@ -209,13 +230,11 @@ class ZendriverBrowserSession(BrowserSessionPort):
         element = await self._query(selector)
         if element is None:
             return self._error_snapshot(f"click: no element matches {selector!r}")
-        await element.click()
+        err = await self._try_interact(element.click(), selector, "click")
+        if err:
+            return self._error_snapshot(err)
         await self._settle(_DEFAULT_SETTLE_SECONDS)
-        return await self._snapshot(
-            f"clicked {selector!r}",
-            previous_url=pre_url,
-            previous_height=pre_height,
-        )
+        return await self._snapshot(f"clicked {selector!r}", previous_url=pre_url, previous_height=pre_height)
 
     async def _do_scroll(self, action: PageAction) -> PageSnapshot:
         pre_url = self._tab.url or ""
@@ -250,13 +269,11 @@ class ZendriverBrowserSession(BrowserSessionPort):
         element = await self._query(selector)
         if element is None:
             return self._error_snapshot(f"fill: no element matches {selector!r}")
-        await element.clear_input()
-        await element.send_keys(value)
+        err = await self._try_interact(self._fill_input(element, value), selector, "fill")
+        if err:
+            return self._error_snapshot(err)
         await self._settle(_DEFAULT_SETTLE_SECONDS)
-        return await self._snapshot(
-            f"filled {selector!r} with {value!r}",
-            previous_url=pre_url,
-        )
+        return await self._snapshot(f"filled {selector!r} with {value!r}", previous_url=pre_url)
 
     async def _do_select(self, action: PageAction) -> PageSnapshot:
         selector = action.selector or ""
@@ -279,12 +296,11 @@ class ZendriverBrowserSession(BrowserSessionPort):
                 option = None
         if option is None:
             return self._error_snapshot(f"select: no option matches {value!r} in {selector!r}")
-        await option.click()
+        err = await self._try_interact(option.click(), selector, "select")
+        if err:
+            return self._error_snapshot(err)
         await self._settle(_DEFAULT_SETTLE_SECONDS)
-        return await self._snapshot(
-            f"selected {value!r} in {selector!r}",
-            previous_url=pre_url,
-        )
+        return await self._snapshot(f"selected {value!r} in {selector!r}", previous_url=pre_url)
 
     async def _do_extract(self, action: PageAction) -> PageSnapshot:
         selector = action.selector or ""
