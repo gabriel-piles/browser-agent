@@ -26,7 +26,9 @@ class ValidationRequest(BaseModel):
             f"---\n\n"
             f"## Scraping Coverage (gap map)\n{self.gap_map}\n\n"
             f"---\n\n"
-            f"Find at least {VALIDATION_PDF_COUNT} PDFs that may be missing. "
-            f"Use different navigation paths than the script above. "
-            f"Validate each with check_pdf."
+            f"The **Original Task** above is the source of truth. Follow its "
+            f"navigation instructions to find PDFs on the site. Check at least "
+            f"{VALIDATION_PDF_COUNT} PDFs spanning all difficulty levels — "
+            f"including regular, easily-reachable ones — and validate each "
+            f"with check_pdf."
         )
