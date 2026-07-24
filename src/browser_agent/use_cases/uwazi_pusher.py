@@ -13,6 +13,7 @@ from pathlib import Path
 from browser_agent.domain.apply_result import ApplyResult
 from browser_agent.domain.sync_plan import SyncAction, SyncPlan
 from browser_agent.domain.uwazi_mapping import UwaziMapping
+from browser_agent.use_cases.push_progress import PushProgress
 
 from uwazi_api.client import UwaziClient
 from uwazi_api.domain.entity import Entity
@@ -30,22 +31,31 @@ class UwaziPusher:
         """Push the plan to Uwazi; no LLM, pure :class:`UwaziClient` calls."""
         out = ApplyResult()
         total = len(plan.rows)
+        active = sum(1 for row in plan.rows if row.action is not SyncAction.SKIP)
+        progress = PushProgress(total, active)
         for i, row in enumerate(plan.rows, start=1):
-            self._push_row(client, out, row, plan.mapping, i, total)
+            self._push_row(client, out, row, plan.mapping, i, total, progress)
         return out
 
-    def _push_row(self, client, out: ApplyResult, row, mapping: UwaziMapping, i: int, total: int) -> None:
+    def _push_row(
+        self, client, out: ApplyResult, row, mapping: UwaziMapping, i: int, total: int, progress: PushProgress
+    ) -> None:
         """Push one :class:`SyncPlanRow` to Uwazi and update ``out`` accordingly."""
         try:
             if row.action is SyncAction.CREATE:
+                progress.begin_active()
                 shared_id = self._create_entity(client, row, mapping)
-                print(f"  [{i}/{total}] created {row.language} '{row.title}' -> {shared_id}")
+                progress.end_active()
+                print(f"  [{i}/{total}] {progress.format_prefix()} | created {row.language} '{row.title}' -> {shared_id}")
             elif row.action is SyncAction.SKIP:
                 self._record_skip(out, row.language, row.source_url, row.skip_reason or "skipped_by_plan")
-                print(f"  [{i}/{total}] skipped {row.language} '{row.title}': {row.skip_reason}")
+                print(
+                    f"  [{i}/{total}] {progress.format_prefix()} | skipped {row.language} '{row.title}': {row.skip_reason}"
+                )
                 return
             self._record_result(out, row.language, row.action)
         except Exception as exc:  # noqa: BLE001 - any failure is recorded
+            progress.end_active()
             self._record_error(out, row.language, row.source_url, str(exc))
 
     def _create_entity(self, client: UwaziClient, row, mapping: UwaziMapping) -> str:
