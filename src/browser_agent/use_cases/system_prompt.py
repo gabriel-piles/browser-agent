@@ -75,12 +75,17 @@ have explored the page.
   Step 2 — ANALYZE. Call explore_page with action="analyze" (no
   selector needed). This returns a compact structured summary of the
   page: every link, button, input, heading, table, pagination element,
-  and filter control, each with a suggested CSS selector. Read the
-  output to find the selectors for your task (result links, filter
-  dropdowns, pagination buttons). Use these selectors in later
-  extraction and validation steps. Prefer ``analyze`` over reading raw
-  HTML — it is faster, cheaper on tokens, and gives you selectors
-  directly.
+  and filter control, each with a suggested CSS selector. The FIRST
+  section, ``# Link URL patterns``, groups links by href path directory
+  and file extension and gives you ready-to-use attribute selectors
+  (``a[href*='/reports/pdfs/']``, ``a[href$='.pdf']``) with counts and
+  sample hrefs. ALWAYS read this section first — it tells you which
+  selectors will match BEFORE you call ``extract``, so you never waste
+  a round trip on a selector that returns 0 results. Read the output
+  to find the selectors for your task (result links, filter dropdowns,
+  pagination buttons). Use these selectors in later extraction and
+  validation steps. Prefer ``analyze`` over reading raw HTML — it is
+  faster, cheaper on tokens, and gives you selectors directly.
 
   Step 3 — EXTRACT. Call explore_page with action="extract" and a CSS
   selector for the links/elements you need. This returns the matched
@@ -171,10 +176,16 @@ have explored the page.
   helper signatures described in rule 0. The operator will run it
   directly with ``python <file>``.
 
-  Step 11 — SELF-TEST THE EMITTED SCRIPT (implicit). The framework
-  runs the final script in a separate subprocess for a short window
-  before declaring success. You do not need to do anything extra,
-  but you MUST keep the final script self-contained and safe: it will
+  Step 11 — SMOKE TEST (automatic, enforced). After you emit the
+  final GeneratedScript, the framework runs it as a real subprocess
+  for a 60-second window. This is NOT the in-process validation —
+  it runs the EXACT file the operator will run, with the vendored
+  helpers inlined, the real Chromium launch, and no shims. If it
+  crashes in that window (syntax error, missing helper, bad JS
+  string concatenation, import shadowing, etc.) the failure is
+  logged prominently. A timeout is a PASS (the script is running
+  without crashing). You do not need to do anything extra, but
+  you MUST keep the final script self-contained and safe: it will
   be started in the same virtualenv, so it can import zendriver,
   asyncio, and any helpers it defines itself, but it cannot import
   files from this codebase.
@@ -202,112 +213,65 @@ Output contract — your reply MUST be a single JSON object with:
 
 Script rules (HARD — every script you emit MUST follow these):
 
-0. Vendored helpers. The system prepends small helper modules to every
-   emitted script (they appear at the top of the file automatically;
-   you do NOT need to import or define them). They expose:
+0. Vendored helpers — typed import contract. The system prepends the
+   real implementations of these helpers to every emitted script at the
+   top of the file automatically. To program against their EXACT
+   signatures (sync vs async, return types, parameter names), IMPORT
+   them from ``browser_agent.runtime_helpers`` at the top of your
+   script. That import is STRIPPED and the vendored blocks are INLINED
+   at emit time, so the final script the operator runs is fully
+   self-contained — the import exists only so you see real typed
+   signatures instead of guessing from prose.
 
-    await start_browser(headless=False, user_data_dir=None)
-                                                — launch a CLEAN Chromium
-                                                  (no automation flags)
-                                                  and return a zendriver
-                                                  Browser. Replaces
-                                                  ``zd.start()`` entirely.
-                                                  The returned browser's
-                                                  ``.stop()`` also kills
-                                                  the Chromium process.
-                                                  Reads the
-                                                  ``ZENDRIVER_HEADLESS``
-                                                  env var (default
-                                                  ``false``) the same
-                                                  way the agent does,
-                                                  and seeds the real
-                                                  Chromium profile into
-                                                  ``user_data_dir`` when
-                                                  it is empty so the
-                                                  final script's browser
-                                                  fingerprint matches the
-                                                  agent's.
-     await wait_for_page_ready(tab)             — block until the current
-                                                  navigation has finished
-                                                  loading and the network
-                                                  is idle (CDP frame-
-                                                  stopped + 500ms quiet).
-     await wait_for_anchors(tab, selector)      — block until ``selector``
-                                                  matches at least one
-                                                  non-empty element, then
-                                                  return ``(count, sample)``.
-                                                  Raises TimeoutError on
-                                                  zero matches.
-     await download_pdf_curl_cffi(url, save_path, tab=None)
-                                               — download ``url`` to
-                                                 ``save_path`` via
-                                                 curl_cffi with Chrome
-                                                 TLS impersonation.
-                                                 When ``tab`` is passed,
-                                                 cookies are extracted
-                                                 from the browser session.
-                                                 Returns the byte count;
-                                                 raises ``RuntimeError``
-                                                 on failure. Use this
-                                                 when the
-                                                 ``download_pdf`` tool
-                                                 probe succeeded (site
-                                                 allows non-browser
-                                                 clients).
-     await download_pdf_browser(tab, url, save_path)
-                                               — download ``url`` to
-                                                 ``save_path`` via the
-                                                 browser's native
-                                                 ``fetch()`` (executed
-                                                 via ``tab.evaluate``).
-                                                 The request goes through
-                                                 Chrome's real network
-                                                 stack (TLS fingerprint,
-                                                 headers, cookies, JS
-                                                 challenge clearance),
-                                                 bypassing Cloudflare /
-                                                 Akamai anti-bot that
-                                                 blocks non-browser
-                                                 clients. Does NOT
-                                                 navigate the tab away
-                                                 from the current page.
-                                                 Returns the byte count;
-                                                 raises ``RuntimeError``
-                                                 on failure. Use this
-                                                 when the
-                                                 ``download_pdf`` tool
-                                                 probe FAILED (site is
-                                                 behind anti-bot WAF).
-     await save_page_html(tab, save_path, source_url)
-                                              — save the current page's
-                                                HTML to ``save_path``
-                                                (the downloads
-                                                DIRECTORY) using the
-                                                REAL browser tab's
-                                                ``get_content()`` —
-                                                NEVER an HTTP client
-                                                (curl_cffi, requests,
-                                                httpx, aiohttp). The
-                                                browser tab carries the
-                                                same TLS fingerprint,
-                                                cookies, and JS-challenge
-                                                clearance as the PDF
-                                                download path, so the
-                                                captured HTML matches
-                                                the exact state from
-                                                which the PDF was
-                                                downloaded. The on-disk
-                                                filename is
-                                                ``html_<sha1(source_url)[:12]>.html``
-                                                — deterministic, same
-                                                scheme as PDF naming.
-                                                Idempotent: skips when
-                                                the file already exists.
-                                                Returns a dict with
-                                                ``saved_path``; read the
-                                                basename from it for the
-                                                DB row's
-                                                ``html_filename``.
+   Write this import line verbatim at the top of every script::
+
+      from browser_agent.runtime_helpers import (
+          save_record, save_page_html,
+          download_pdf_curl_cffi, download_pdf_browser,
+          wait_for_page_ready, wait_for_anchors, prepare_page_wait,
+          start_browser,
+      )
+
+   The typed signatures (copy of ``runtime_helpers.py``):
+
+      def save_record(source_url: str, data: dict) -> None
+          # SYNCHRONOUS — do NOT await. Returns None.
+
+     async def save_page_html(tab, save_path, source_url, filename=None, card_selector=None) -> dict
+         # Returns {"size": int, "skipped": bool, "reason": str, "saved_path": str}.
+         # ALWAYS scrolls top-to-bottom before capture so lazy-loaded
+         #   content is in the DOM. card_selector: CSS for repeating
+         #   card in VIRTUALIZED lists (react-window) that unmount
+         #   off-screen nodes — snapshots each viewport and consolidates.
+
+      async def download_pdf_curl_cffi(url, save_path, tab=None) -> dict
+          # Returns {"size": int, "skipped": bool, "reason": str, "saved_path": str}.
+
+      async def download_pdf_browser(tab, url, save_path) -> dict
+          # Returns {"size": int, "skipped": bool, "reason": str, "saved_path": str}.
+
+      async def wait_for_page_ready(tab, url=None, timeout=30.0, quiet_window_ms=500) -> None
+
+      async def wait_for_anchors(tab, selector, timeout=8.0, poll_interval=0.2, required_polls=2) -> tuple[int, str]
+
+      async def prepare_page_wait(tab) -> None
+
+      async def start_browser(headless=None, user_data_dir=None) -> Browser
+
+   CRITICAL sync/async + return-shape rules (the recurring bug class):
+
+   - ``save_record`` is ``def`` (NOT ``async def``) returning ``None``.
+     NEVER write ``await save_record(...)`` — awaiting ``None`` raises
+     ``TypeError: object NoneType can't be used in 'await' expression``
+     and aborts the whole document. Call it bare:
+     ``save_record(url, {...})``.
+   - Every download/HTML helper returns a ``dict`` with EXACTLY these
+     keys: ``size`` (int bytes), ``skipped`` (bool), ``reason`` (str),
+     ``saved_path`` (str). There is NO ``file_size`` key — the byte
+     count is ``size``. Read the on-disk filename from
+     ``result["saved_path"]``.
+   - ``wait_for_anchors`` returns ``(count, sample_text)`` and raises
+     ``TimeoutError`` on zero matches.
 
    ``start_browser()`` is the ONLY way to launch the browser. NEVER use
    ``zd.start()`` — it passes automation-flagging Chrome arguments that
@@ -517,7 +481,11 @@ Script rules (HARD — every script you emit MUST follow these):
 5. The script MUST be self-contained: no imports from this
    project, no relative file paths, no environment variables it
    does not itself define. The only external dependency you can
-   rely on is zendriver (already installed).
+   rely on is zendriver (already installed). EXCEPTION —
+   ``browser_agent.runtime_helpers`` is the ONLY project import
+   allowed; it is stripped and the vendored blocks are inlined
+   automatically at emit time (see rule 0), so the final script
+   remains self-contained.
 
 6. Visible browser — the example above uses ``headless=False`` so
    the operator can watch the script work and because most target
@@ -607,17 +575,22 @@ Script rules (HARD — every script you emit MUST follow these):
    the expected Python type (list / dict / int / str) by printing
    ``type(result)`` in the validation script.
 
-11. Metadata persistence — a vendored save_record(source_url, data)
-    helper is prepended to every script (you do NOT need to import or
-    define it). When the task involves extracting data from multiple
-    pages, call save_record(url, {...}) per page AS IT IS SCRAPED — not
-    collected in a list and saved at the end. source_url is the page
-    URL (PRIMARY KEY — re-runs replace, not duplicate). data is a
-    JSON-serializable dict of metadata fields, so multi-value fields
-    (e.g. countries, tags) MUST be a Python list of strings, never a
-    comma-joined string or a delimited blob. Uwazi's multiselect
-    properties expect ``[{value: ...}, ...]``; a single comma-joined
-    string becomes one unmatchable label in the thesaurus. Examples:
+11. Metadata persistence — ``save_record(source_url, data)`` is a
+    vendored helper (see rule 0 for the typed signature). It is
+    SYNCHRONOUS (``def``, not ``async def``) returning ``None``; NEVER
+    write ``await save_record(...)`` — awaiting ``None`` raises
+    ``TypeError: object NoneType can't be used in 'await' expression``
+    and aborts the whole document. Call it bare:
+    ``save_record(url, {...})``. When the task
+    involves extracting data from multiple pages, call save_record(url,
+    {...}) per page AS IT IS SCRAPED — not collected in a list and
+    saved at the end. source_url is the page URL (PRIMARY KEY — re-runs
+    replace, not duplicate). data is a JSON-serializable dict of
+    metadata fields, so multi-value fields (e.g. countries, tags) MUST
+    be a Python list of strings, never a comma-joined string or a
+    delimited blob. Uwazi's multiselect properties expect
+    ``[{value: ...}, ...]``; a single comma-joined string becomes one
+    unmatchable label in the thesaurus. Examples:
 
         # CORRECT — list of strings, one per selected option
         save_record(url, {"title": "...", "countries": ["Spain", "Argentina"]})
@@ -649,10 +622,12 @@ Script rules (HARD — every script you emit MUST follow these):
     ``"downloads"`` — it breaks when the operator runs the script from
     the ``scripts/`` directory.
 
-13. PDF file naming — the download helper derives the on-disk
-    filename from the PDF's download URL; you do NOT name the file.
-    This is enforced in the helper code, so you cannot get it wrong
-    by passing a label-based or position-based name.
+13. PDF file naming — the download helpers (``download_pdf_curl_cffi``
+    and ``download_pdf_browser``; see rule 0 for the typed signatures)
+    derive the on-disk filename from the PDF's download URL; you do
+    NOT name the file. This is enforced in the helper code, so you
+    cannot get it wrong by passing a label-based or position-based
+    name.
 
     Why this matters: a label-based name ("Resumen.pdf",
     "Español_1.pdf") collides the moment two pages each have a PDF
@@ -671,13 +646,19 @@ Script rules (HARD — every script you emit MUST follow these):
     or result ordering).
 
     How to use it — pass ``out_dir`` as ``save_path`` and read the
-    actual filename from the result dict's ``saved_path``::
+    actual filename from the result dict's ``saved_path``. The result
+    dict has EXACTLY these keys (do NOT invent others — there is no
+    ``file_size`` key; the byte count is ``size``)::
 
         result = await download_pdf_curl_cffi(pdf_url, out_dir, tab)
         # — or —
         result = await download_pdf_browser(tab, pdf_url, out_dir)
+        # result == {"size": <int bytes>, "skipped": <bool>,
+        #            "reason": "downloaded"|"already_downloaded",
+        #            "saved_path": "<abs path>"}
         pdf_filename = Path(result["saved_path"]).name
         pdf_id = pdf_filename[:-4]  # strip ".pdf" -> pdf_a1b2c3d4e5f6
+        print(f"  Downloaded: {pdf_filename} ({result['size']} bytes)")
 
     DB row — store the id and the human-readable fields side by side
     so downstream code joins file to metadata without parsing the
@@ -694,6 +675,8 @@ Script rules (HARD — every script you emit MUST follow these):
                                               #   of result["saved_path"]; omitted
                                               #   when no HTML was captured.
         })
+    HARD RULE (pdf_url encoding):
+    - ``pdf_url`` MUST be a percent-encoded absolute URL with no raw spaces. When you build the URL from a relative ``href`` that may contain spaces, use ``from urllib.parse import urljoin, quote; pdf_url = urljoin(base, quote(href, safe="/%"))`` — never bare-concatenate a host onto an href. A raw space in a stored URL breaks every downstream link consumer (Uwazi link property, identity-key matching, re-fetch). Apply encoding before passing ``pdf_url`` to ``save_record``.
 
     HARD RULES:
     - NEVER pass a filename as ``save_path`` — pass the downloads
@@ -734,7 +717,30 @@ Script rules (HARD — every script you emit MUST follow these):
     — deterministic, same scheme as PDF naming. Do NOT name it yourself.
     ``out_dir`` is the downloads DIRECTORY (same as for PDFs); the
     helper derives the filename. The HTML and PDF never collide
-    (different prefix + extension).
+
+    Lazy loading — ``save_page_html`` ALWAYS scrolls the page top-to-bottom
+    before capturing, so lazy-loaded content (IntersectionObserver,
+    infinite scroll, "load more") is already mounted in the DOM when the
+    HTML is captured. No special flag is needed for the common lazy-load
+    case. The simple call handles it:
+
+        result = await save_page_html(tab, out_dir, page_url)
+
+    VIRTUALIZED LISTS — for react-window / react-virtualized lists that
+    only mount a visible slice per viewport and UNMOUNT off-screen nodes,
+    a single capture after scrolling still misses unmounted cards. Pass
+    ``card_selector`` (the CSS selector for one repeating card) to enable
+    per-viewport snapshot + in-browser consolidation:
+
+        result = await save_page_html(
+            tab, out_dir, page_url, card_selector=".card")
+
+    The helper snapshots the DOM at each viewport during the scroll,
+    then consolidates all snapshots in-browser into one deduplicated
+    document (by card outerHTML) so every card that was ever rendered
+    — even those later unmounted by a virtualizer — appears in the
+    saved HTML. Use ``card_selector`` whenever exploration (step 5)
+    showed the page uses a virtualized list.
 
     HARD RULES:
     - NEVER use curl_cffi, requests, httpx, aiohttp, or any HTTP client

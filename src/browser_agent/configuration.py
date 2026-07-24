@@ -19,12 +19,12 @@ VALIDATION_PDF_COUNT = 10
 
 # YAML file that defines the active run: only ``active_run`` (the name to
 # execute). Per-run configuration (template, prompt, etc.) lives in
-# ``data/runs/<active_run>/config.yaml``.
-RUNS_FILE = PROJECT_ROOT / "data" / "runs.yaml"
+# ``data/runs/<active_run>/run.yaml``.
+RUNS_FILE = PROJECT_ROOT / "data" / "active_run.yaml"
 # Per-run root: scripts, downloads and metadata.db all live under
 # ``data/runs/<active_run>/``.
 # Per-run config file name inside each ``data/runs/<name>/`` directory.
-RUN_CONFIG_FILENAME = "config.yaml"
+RUN_CONFIG_FILENAME = "run.yaml"
 RUNS_PATH = PROJECT_ROOT / "data" / "runs"
 # Mappings and thesaurus-mappings for the three Uwazi drivers
 # (``uwazi_propose``, ``uwazi_match``, ``uwazi_apply``) are stored

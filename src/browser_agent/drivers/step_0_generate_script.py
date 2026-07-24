@@ -24,6 +24,10 @@ from browser_agent.domain.run_config import RunConfig
 from browser_agent.drivers.generation.script_emitter import ScriptEmitter
 from browser_agent.drivers.generation.script_generator import ScriptGenerator
 from browser_agent.drivers.generation.script_path_builder import ScriptPathBuilder
+from browser_agent.drivers.generation.script_smoke_tester import (
+    log_smoke_test_result,
+    smoke_test_script,
+)
 from browser_agent.drivers.generation.task_reader import TaskReader
 from browser_agent.logging_config import configure_logging
 from loguru import logger
@@ -62,12 +66,18 @@ class GenerateScriptDriver:
         script = await self._generator.generate(task, run_path)
         script_path = self._emitter.emit(task, script, run_path)
         logger.info("emitted script at {path}", path=script_path)
+        await self._smoke_test(script_path)
         return 0
 
     def _wire_run(self, run_path: Path) -> None:
         """Bind the per-run path to the path builder + emitter."""
         self._path_builder = ScriptPathBuilder(run_path)
         self._emitter = ScriptEmitter(self._path_builder)
+
+    async def _smoke_test(self, script_path: Path) -> None:
+        """Run the emitted script as a subprocess to catch runtime errors."""
+        result = await smoke_test_script(script_path)
+        log_smoke_test_result(result, script_path)
 
     def _read_task(self, argv: list[str], run: RunConfig) -> str:
         """Read the task from argv/stdin via the injected :class:`TaskReader`."""

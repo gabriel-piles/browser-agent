@@ -43,6 +43,9 @@ from typing import Any
 import zendriver as _real_zendriver
 from loguru import logger
 
+from browser_agent.adapters.emitted_strip_imports import (
+    with_emitted_strip_imports,
+)
 from browser_agent.adapters.emitted_page_wait import with_emitted_page_wait
 from browser_agent.adapters.emitted_save_record import with_emitted_save_record
 from browser_agent.adapters.emitted_save_html import with_emitted_save_html
@@ -86,7 +89,8 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
         self._task_slug = task_slug
 
     async def run(self, python_code: str, timeout: float = _DEFAULT_TIMEOUT) -> ScriptExecutionResult:
-        augmented = with_emitted_page_wait(python_code)
+        augmented = with_emitted_strip_imports(python_code)
+        augmented = with_emitted_page_wait(augmented)
         augmented = with_emitted_save_record(augmented)
         augmented = with_emitted_save_html(augmented)
         augmented = with_emitted_all_pdf_downloads(augmented)

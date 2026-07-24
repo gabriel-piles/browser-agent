@@ -16,6 +16,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from browser_agent.domain.element_info import ElementInfo
+from browser_agent.domain.link_pattern import LinkPattern
 
 
 class PageStructure(BaseModel):
@@ -57,4 +58,13 @@ class PageStructure(BaseModel):
     filters: list[ElementInfo] = Field(
         default_factory=list,
         description="Likely filter controls (selects, checkboxes, filter buttons).",
+    )
+    link_patterns: list[LinkPattern] = Field(
+        default_factory=list,
+        description=(
+            "Groups of links sharing a common href path directory or file "
+            "extension, each with a ready-to-use CSS attribute selector "
+            "(a[href*='...'] or a[href$='...']) and count. Use these to pick "
+            "extract selectors without blind-probing."
+        ),
     )

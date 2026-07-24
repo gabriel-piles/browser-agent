@@ -59,7 +59,7 @@ class ProposeDriver:
         """Print a refusal and return False when the run has no Uwazi template set."""
         if run_config.template:
             return True
-        print(f"Run {run_config.name!r} has no 'template' set in runs.yaml; cannot propose.")
+        print(f"Run {run_config.name!r} has no 'template' set in active_run.yaml; cannot propose.")
         return False
 
     async def _propose(self, run_config: RunConfig, catalog):

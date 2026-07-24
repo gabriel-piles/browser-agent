@@ -1,6 +1,6 @@
 """Top-level driver for the scraping validation agent (step 4).
 
-Reads the active run from ``runs.yaml``, builds a
+Reads the active run from ``active_run.yaml``, builds a
 :class:`ValidationAgentDeps` with a :class:`ZendriverBrowserSession`
 and the run's ``metadata.db`` + ``downloads/`` paths, constructs a
 :class:`ValidationRequest` from the run prompt + the latest step 0

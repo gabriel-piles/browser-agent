@@ -15,8 +15,8 @@ explore the page's behaviour before writing any validation script.
 from __future__ import annotations
 
 from pydantic_ai import RunContext
-
 from browser_agent.agent_logging import traced_tool
+from browser_agent.domain.link_pattern import LinkPattern
 from browser_agent.domain.page_action import PageAction
 from browser_agent.domain.page_snapshot import PageSnapshot
 from browser_agent.use_cases.agent_deps import AgentDeps
@@ -117,6 +117,7 @@ def _format_snapshot(snapshot: PageSnapshot) -> str:
 
 def _format_structure(structure: PageStructure, lines: list[str]) -> list[str]:
     """Append structured analysis sections to ``lines`` and return it."""
+    _append_link_patterns(lines, structure.link_patterns)
     _append_section(lines, "# Links", structure.links, _fmt_link)
     _append_section(lines, "# Buttons", structure.buttons, _fmt_element)
     _append_section(lines, "# Form inputs", structure.inputs, _fmt_input)
@@ -125,6 +126,18 @@ def _format_structure(structure: PageStructure, lines: list[str]) -> list[str]:
     _append_section(lines, "# Pagination", structure.pagination, _fmt_link)
     _append_section(lines, "# Filters", structure.filters, _fmt_element)
     return lines
+
+
+def _append_link_patterns(lines: list[str], patterns: list[LinkPattern]) -> None:
+    """Append the link-URL-patterns section, sorted by count descending."""
+    if not patterns:
+        return
+    lines.append("")
+    lines.append(f"# Link URL patterns ({len(patterns)} groups):")
+    for pat in patterns:
+        lines.append(f"  {pat.selector}  count={pat.count}")
+        for sample in pat.sample_hrefs:
+            lines.append(f"    {sample}")
 
 
 def _append_section(lines: list[str], header: str, items: list[ElementInfo], formatter) -> None:

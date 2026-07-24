@@ -17,7 +17,7 @@ class MetadataFieldCatalog(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    run: str = Field(description="Run name (the active run from runs.yaml).")
+    run: str = Field(description="Run name (the active run from active_run.yaml).")
     pattern: str = Field(description="URL pattern of the metadata rows this catalog was built from.")
     sample_urls: tuple[str, ...] = Field(default_factory=tuple)
     fields: tuple[MetadataField, ...] = Field(default_factory=tuple)

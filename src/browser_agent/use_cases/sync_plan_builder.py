@@ -23,6 +23,7 @@ from browser_agent.use_cases.metadata_value_transformer import (
     MetadataValueTransformer,
     build_thesaurus_parents,
     load_thesauri_mappings,
+    load_thesauri_mappings_by_id,
 )
 from browser_agent.use_cases.uwazi_mappers import to_template
 
@@ -141,10 +142,10 @@ def _fetch_existing_entities(client: UwaziClient, mapping: UwaziMapping) -> dict
 def _fetch_relationship_entity_mapping(
     client: UwaziClient, mapping: UwaziMapping, template: UwaziTemplate
 ) -> dict[str, dict[str, str]]:
-    """Return ``{thesaurus_name: {entity_title: entity_shared_id}}`` for each relationship property."""
+    """Return ``{target_template_id: {entity_title: entity_shared_id}}`` for each relationship."""
     result: dict[str, dict[str, str]] = {}
     for prop in mapping.properties:
-        if prop.type is not FieldType.RELATIONSHIP or prop.thesaurus is None:
+        if prop.type is not FieldType.RELATIONSHIP:
             continue
         tprop = template.property_by_name(prop.name)
         if tprop is None or tprop.thesaurus_id is None:
@@ -155,7 +156,7 @@ def _fetch_relationship_entity_mapping(
         entities = _fetch_all_entities_by_template(client, target.name, mapping.default_language)
         title_to_id = {e.title: e.shared_id for e in entities if e.title and e.shared_id}
         if title_to_id:
-            result[prop.thesaurus] = title_to_id
+            result[tprop.thesaurus_id] = title_to_id
     return result
 
 
@@ -190,6 +191,7 @@ def _build_plan_row(
     thesaurus_parents,
     downloads_dir,
     relationship_title_to_id,
+    thesaurus_lookup_by_id=None,
 ) -> SyncPlanRow:
     """Transform one record into one :class:`SyncPlanRow`."""
     pdf_path = resolve_pdf_filename(record, source_url, downloads_dir)
@@ -202,7 +204,13 @@ def _build_plan_row(
         source_url=source_url,
         title=_title_of_record(record, source_url, mapping),
         metadata=transformer.build_for_row(
-            record, source_url, mapping, thesaurus_lookup, thesaurus_parents, relationship_title_to_id
+            record,
+            source_url,
+            mapping,
+            thesaurus_lookup,
+            thesaurus_parents,
+            relationship_title_to_id,
+            thesaurus_lookup_by_id,
         ),
         pdf_path=pdf_path,
         html_path=html_path,
@@ -212,12 +220,13 @@ def _build_plan_row(
     )
 
 
-def _plan_rows(records, mapping, client, thesaurus_lookup, transformer, downloads_dir) -> tuple[SyncPlanRow, ...]:
+def _plan_rows(records, mapping, client, thesaurus_lookup, thesaurus_lookup_by_id, downloads_dir) -> tuple[SyncPlanRow, ...]:
     """Transform every metadata row into one :class:`SyncPlanRow`."""
     template_raw = client.templates.get_by_name(mapping.template)
     if template_raw is None:
         raise ValueError(f"Uwazi template {mapping.template!r} not found")
     template = to_template(template_raw)
+    transformer = MetadataValueTransformer(template=template)
     entities_by_key = _fetch_existing_entities(client, mapping)
     thesaurus_ids = _thesaurus_ids_from_mapping(template, mapping)
     parents_by_id = build_thesaurus_parents(client, mapping.default_language, thesaurus_ids)
@@ -239,6 +248,7 @@ def _plan_rows(records, mapping, client, thesaurus_lookup, transformer, download
             thesaurus_parents,
             downloads_dir,
             relationship_title_to_id,
+            thesaurus_lookup_by_id,
         )
         for source_url, _task_slug, raw_data in records
     )
@@ -253,8 +263,9 @@ def execute(
     run: str | None = None,
     downloads_dir: Path | None = None,
 ) -> SyncPlan:
-    """Build a :class:`SyncPlan` from the live ``metadata.db`` rows."""
     thesaurus_lookup = load_thesauri_mappings(thesauri_mappings_dir)
+    thesaurus_lookup_by_id = load_thesauri_mappings_by_id(thesauri_mappings_dir)
     rows = query_rows(metadata_db_path, run)
-    transformer = MetadataValueTransformer()
-    return SyncPlan(mapping=mapping, rows=_plan_rows(rows, mapping, client, thesaurus_lookup, transformer, downloads_dir))
+    return SyncPlan(
+        mapping=mapping, rows=_plan_rows(rows, mapping, client, thesaurus_lookup, thesaurus_lookup_by_id, downloads_dir)
+    )

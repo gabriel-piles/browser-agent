@@ -20,6 +20,7 @@ from browser_agent.configuration import (
     ANALYZE_MAX_TABLES,
 )
 from browser_agent.domain.element_info import ElementInfo
+from browser_agent.domain.link_pattern import LinkPattern
 from browser_agent.domain.page_structure import PageStructure
 
 _PAGINATION_TEXTS = {"next", "prev", "previous", "page", "more", "»", "«", ">>", "<<"}
@@ -37,6 +38,7 @@ class PageAnalyzer:
         headings = self._extract_headings(soup, ANALYZE_MAX_HEADINGS)
         tables = self._extract_tables(soup, ANALYZE_MAX_TABLES)
         pagination, filters = self._classify_interactive(soup, links, buttons)
+        patterns = self._group_link_patterns(links)
         return PageStructure(
             url=url,
             title=title,
@@ -47,6 +49,7 @@ class PageAnalyzer:
             tables=tables,
             pagination=pagination,
             filters=filters,
+            link_patterns=patterns,
         )
 
     def _classify_interactive(self, soup, links, buttons) -> tuple[list[ElementInfo], list[ElementInfo]]:
@@ -86,6 +89,32 @@ class PageAnalyzer:
                 ElementInfo(tag="a", text=self._get_text(a), href=href, selector=self._build_selector("a", a.attrs))
             )
         return results
+
+    @staticmethod
+    def _group_link_patterns(links: list[ElementInfo]) -> list[LinkPattern]:
+        """Group links by href path directory and file extension.
+
+        Produces ready-to-use ``a[href*='...']`` and ``a[href$='...']``
+        selectors so the agent can extract links by pattern without
+        blind-probing. Groups with fewer than 2 links are dropped.
+        """
+        groups: dict[str, list[str]] = {}
+        for link in links:
+            href = link.href or ""
+            for key in _pattern_keys(href):
+                groups.setdefault(key, []).append(href)
+        patterns: list[LinkPattern] = []
+        for key, hrefs in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+            if len(hrefs) < 2:
+                continue
+            patterns.append(
+                LinkPattern(
+                    selector=_selector_for(key),
+                    count=len(hrefs),
+                    sample_hrefs=hrefs[:3],
+                )
+            )
+        return patterns
 
     def _extract_buttons(self, soup: BeautifulSoup, limit: int) -> list[ElementInfo]:
         """Extract <button> and input[type=submit/button] elements."""
@@ -214,3 +243,32 @@ class PageAnalyzer:
                 return True
         text = (el.get_text(strip=True) or "").lower()
         return text in ("filter", "sort", "filter by", "sort by")
+
+
+def _pattern_keys(href: str) -> list[str]:
+    """Yield grouping keys for one href: path-directory and file-extension.
+
+    ``path:/reports/pdfs/`` groups all links whose href contains that
+    directory segment. ``ext:.pdf`` groups all links ending in ``.pdf``.
+    Keys are prefixed so path and extension groups never collide.
+    """
+    keys: list[str] = []
+    path = href.split("://", 1)[-1].split("?", 1)[0].split("#", 1)[0]
+    parts = [p for p in path.split("/") if p]
+    if len(parts) >= 2:
+        dirname = "/".join(parts[:-1]) + "/"
+        keys.append(f"path:{dirname}")
+    dot_pos = path.rfind(".")
+    slash_pos = path.rfind("/")
+    if dot_pos > slash_pos and dot_pos != -1:
+        ext = path[dot_pos:]
+        keys.append(f"ext:{ext}")
+    return keys
+
+
+def _selector_for(key: str) -> str:
+    """Build a CSS attribute selector from a pattern grouping key."""
+    prefix, value = key.split(":", 1)
+    if prefix == "path":
+        return f"a[href*={value!r}]"
+    return f"a[href$={value!r}]"

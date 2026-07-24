@@ -10,7 +10,7 @@ Every select/multiselect property in the mapping produces one
 group, even when the property carries only a constant
 ``default_value`` and no extracted column: the default tokens
 are added to the group's counter so the per-thesaurus mapping
-YAML still gets written. ``step_3_upload_to_uwazi.py`` then
+YAML still gets written. ``step_4_upload_to_uwazi.py`` then
 substitutes the default through the same lookup the extracted
 values use.
 """

@@ -13,7 +13,7 @@ class ValidationRequest(BaseModel):
     summarizing what is already in ``metadata.db``.
     """
 
-    task_prompt: str = Field(description="The original run prompt from config.yaml.")
+    task_prompt: str = Field(description="The original run prompt from run.yaml.")
     generated_script: str = Field(description="The step 0 script source code.")
     gap_map: str = Field(description="Coverage summary from the DB.")
 

@@ -18,7 +18,7 @@ resulting entities are created (or updated) on Uwazi.
 
 The driver does not currently run a dry-run by default — it
 pushes to Uwazi. The operator edits ``PUSH`` in
-``runs.yaml`` to switch to read-only.
+``active_run.yaml`` to switch to read-only.
 """
 
 from __future__ import annotations

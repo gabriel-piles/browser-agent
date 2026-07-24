@@ -41,4 +41,4 @@ packages = ["src/browser_agent"]
 # asyncio_mode = "auto"
 
 [tool.uv.sources]
-uwazi-api = { git = "https://github.com/huridocs/python_uwazi_API", rev = "2026.7.22.3" }
+uwazi-api = { git = "https://github.com/huridocs/python_uwazi_API", rev = "2026.7.24.1" }

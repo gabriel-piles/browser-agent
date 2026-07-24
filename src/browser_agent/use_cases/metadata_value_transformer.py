@@ -20,6 +20,7 @@ import yaml
 from browser_agent.domain.field_type import FieldType
 from browser_agent.domain.mapped_property import MappedProperty
 from browser_agent.domain.uwazi_mapping import UwaziMapping
+from browser_agent.domain.uwazi_template import UwaziTemplate
 from uwazi_api.domain.thesauri_value import ThesauriValue
 
 
@@ -44,6 +45,10 @@ def build_metadata_for_row(
 class MetadataValueTransformer:
     """Apply per-property value transformations for the Uwazi metadata blob."""
 
+    def __init__(self, template: UwaziTemplate | None = None) -> None:
+        """Store the optional live ``template`` used to resolve relationship keys."""
+        self._template = template
+
     def build_for_row(
         self,
         record: dict,
@@ -52,6 +57,7 @@ class MetadataValueTransformer:
         thesaurus_lookup: dict[str, dict[str, str | None]],
         thesaurus_parents: dict[str, dict[str, str | None]] | None = None,
         relationship_title_to_id: dict[str, dict[str, str]] | None = None,
+        thesaurus_lookup_by_id: dict[str, dict[str, str | None]] | None = None,
     ) -> dict:
         """Build the post-transform metadata dict for one record.
 
@@ -65,18 +71,61 @@ class MetadataValueTransformer:
             if prop.type in (FieldType.TITLE, FieldType.SKIPPED, FieldType.FILE):
                 continue
             out[prop.name] = self._property_value(
-                record, prop, source_url, thesaurus_lookup, thesaurus_parents, relationship_title_to_id
+                record,
+                prop,
+                source_url,
+                thesaurus_lookup,
+                thesaurus_parents,
+                relationship_title_to_id,
+                thesaurus_lookup_by_id,
             )
-        if mapping.identity.source_url_property and self._looks_like_url(source_url):
+        if (
+            mapping.identity.source_url_property
+            and mapping.identity.source_url_property not in out
+            and self._looks_like_url(source_url)
+        ):
             out[mapping.identity.source_url_property] = self._link_value(source_url, source_url)
         return {k: v for k, v in out.items() if v is not None}
 
+    def _relationship_map_for(self, prop, relationship_title_to_id) -> dict[str, str] | None:
+        """Return the title->id map for ``prop`` using the live template's thesaurus_id."""
+        if not relationship_title_to_id:
+            return None
+        if self._template is None:
+            return relationship_title_to_id.get(prop.thesaurus) if prop.thesaurus else None
+        tprop = self._template.property_by_name(prop.name)
+        if tprop is None or tprop.thesaurus_id is None:
+            return None
+        return relationship_title_to_id.get(tprop.thesaurus_id)
+
+    def _thesaurus_lookup_for(self, prop, thesaurus_lookup, thesaurus_lookup_by_id) -> dict[str, str | None] | None:
+        """Return the substitution map for ``prop``.
+
+        Relationships resolve from the id-keyed map via the live template
+        (whose ``thesaurus_id`` is the target template's id), matching the
+        ``thesaurus_id`` field every relationship YAML carries regardless
+        of its filename. Select/multiselect keep the name-keyed lookup.
+        """
+        if prop.type is FieldType.RELATIONSHIP and self._template is not None and thesaurus_lookup_by_id:
+            tprop = self._template.property_by_name(prop.name)
+            if tprop and tprop.thesaurus_id:
+                return thesaurus_lookup_by_id.get(tprop.thesaurus_id)
+            return None
+        return thesaurus_lookup.get(prop.thesaurus) if prop.thesaurus else None
+
     def _property_value(
-        self, record, prop, source_url, thesaurus_lookup, thesaurus_parents, relationship_title_to_id
+        self,
+        record,
+        prop,
+        source_url,
+        thesaurus_lookup,
+        thesaurus_parents,
+        relationship_title_to_id,
+        thesaurus_lookup_by_id=None,
     ) -> object:
         """Return the coerced value for one property, or None to skip it."""
-        lookup = thesaurus_lookup.get(prop.thesaurus) if prop.thesaurus else None
-        rel_map = relationship_title_to_id.get(prop.thesaurus) if (relationship_title_to_id and prop.thesaurus) else None
+        lookup = self._thesaurus_lookup_for(prop, thesaurus_lookup, thesaurus_lookup_by_id)
+        rel_map = self._relationship_map_for(prop, relationship_title_to_id)
         if prop.source is None:
             value = self._default_value(prop)
             if value is None:
@@ -233,6 +282,39 @@ def load_thesauri_mappings(thesauri_dir: Path) -> dict[str, dict[str, str | None
             continue
         out[path.stem] = data
     return out
+
+
+def load_thesauri_mappings_by_id(thesauri_dir: Path) -> dict[str, dict[str, str | None]]:
+    """Read every ``thesauri_mappings/*.yaml`` into a thesaurus_id -> {crawl: uwazi} dict.
+
+    Relationship YAMLs name the file after the target template's display
+    name or id, but always carry ``thesaurus_id``; keying by id lets the
+    transformer resolve the substitution map from the live template
+    regardless of how the file was named.
+    """
+    out: dict[str, dict[str, str | None]] = {}
+    if not thesauri_dir.is_dir():
+        return out
+    for path in sorted(thesauri_dir.glob("*.yaml")):
+        data = _thesauri_dict_from_yaml(path)
+        if not data:
+            continue
+        thesaurus_id = _thesaurus_id_from_yaml(path)
+        if thesaurus_id:
+            out[thesaurus_id] = data
+    return out
+
+
+def _thesaurus_id_from_yaml(path: Path) -> str | None:
+    """Return the ``thesaurus_id`` field of one mapping YAML, or None."""
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    thesaurus_id = data.get("thesaurus_id")
+    return thesaurus_id if isinstance(thesaurus_id, str) else None
 
 
 def _thesauri_dict_from_yaml(path: Path) -> dict[str, str | None]:

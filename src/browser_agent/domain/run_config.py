@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class RunConfig(BaseModel):
-    """A single named run definition from ``runs.yaml``.
+    """A single named run definition from ``active_run.yaml``.
 
     Carries the ``name`` used to create the per-run folder under
     ``data/runs/<name>/`` and the natural-language ``prompt`` that

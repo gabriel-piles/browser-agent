@@ -31,8 +31,9 @@ class GeneratedScript(BaseModel):
     python_code: str = Field(
         description=(
             "A completely self-contained, executable async Python script "
-            "utilizing zendriver and asyncio.run(). Must not import or "
-            "reference anything from this project; it must be runnable "
+            "utilizing zendriver and asyncio.run(). Must not import from "
+            "this project EXCEPT ``browser_agent.runtime_helpers``, which "
+            "is stripped and inlined at emit time; it must be runnable "
             "as a standalone file."
         ),
     )

@@ -3,6 +3,11 @@
 Hides the chain of source-level rewrites the agent's emitted
 code needs before it can run as a standalone script:
 
+0. ``with_emitted_strip_imports`` removes the
+   ``from browser_agent.runtime_helpers import ...`` line the LLM
+   writes so it can see typed signatures during generation. The
+   import is a development-time anchor; the final script is
+   self-contained.
 1. ``with_emitted_normalize_launch`` rewrites ``zd.start(...)`` to
    ``start_browser(...)`` so the script does not pass automation-
    flagging Chrome args that trigger anti-bot checks.
@@ -22,6 +27,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from browser_agent.adapters.emitted_strip_imports import (
+    with_emitted_strip_imports,
+)
 from browser_agent.adapters.emitted_clean_launch import (
     with_emitted_clean_launch,
     with_emitted_inject_profile_path,
@@ -50,7 +58,8 @@ class ScriptEmitter:
 
     def _finalize_source(self, script: GeneratedScript, run_path: Path) -> str:
         """Run every source-level transform the emitted script needs."""
-        code = with_emitted_normalize_launch(script.python_code)
+        code = with_emitted_strip_imports(script.python_code)
+        code = with_emitted_normalize_launch(code)
         code = with_emitted_inject_profile_path(code, self._profile_path(run_path))
         code = with_emitted_clean_launch(code)
         code = with_emitted_page_wait(code)
