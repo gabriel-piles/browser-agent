@@ -376,6 +376,31 @@ Script rules (HARD — every script you emit MUST follow these):
    or None. Use ``getattr(element, "text", None) or ""`` rather
    than bare ``.text``.
 
+4b. Null-guard every ``tab.evaluate`` that mutates a DOM element —
+   ``document.querySelector(...)`` returns ``null`` when the element
+   is not in the DOM (re-rendered after a filter change, swapped by
+   AJAX, not yet hydrated). Setting ``.value`` / calling ``.click()``
+   on a null result throws ``TypeError: Cannot set properties of
+   null`` and kills the whole run. Before mutating via JS, EITHER:
+
+     (a) wait for the element with ``await wait_for_anchors(tab,
+         "#theSelect")`` first, OR
+     (b) null-check inside the JS and no-op on miss, e.g.::
+
+         await tab.evaluate(
+             "(function(){"
+             "var s=document.querySelector('#ddlPMYear');"
+             "if(!s){return false;}"
+             "s.value='2025';"
+             "s.dispatchEvent(new Event('change',{bubbles:true}));"
+             "return true;"
+             "})()"
+         )
+
+   Use BOTH: the wait for the first iteration and the null-check for
+   robustness across a loop of many selections (the dropdown can
+   disappear between iterations when the page re-renders results).
+
 4a. Element handle API — the objects returned by ``tab.query_selector``,
    ``tab.query_selector_all``, and ``row.query_selector`` are zendriver
    element handles, NOT Playwright elements. They expose:
@@ -406,12 +431,18 @@ Script rules (HARD — every script you emit MUST follow these):
        the label. The row's ``title``/``aria-label`` is the stable label.
 
    (b) Full subtree text via CDP — the ONLY way to get ``textContent``
-       through zendriver's handle::
+       through zendriver's handle is ``el.apply(...)``, which calls
+       ``Runtime.callFunctionOn`` with the element already bound::
 
-           await tab.evaluate("(el => el.textContent || '')(...args)", el)
+           await el.apply("(el) => el.textContent || ''")
 
-       Use this when no attribute carries the label and you need the
-       concatenated text of the whole subtree.
+       NEVER pass an element handle to ``tab.evaluate`` — its signature is
+       ``tab.evaluate(expression, await_promise=False, return_by_value=True)``
+       with NO element parameter, so ``tab.evaluate("(el => ...)(...)", el)``
+       lands ``el`` in ``await_promise`` and crashes with
+       ``TypeError: Object of type Element is not JSON serializable``.
+       ``el.apply`` is the correct API; it resolves the node's object id
+       and passes it as a CDP ``CallArgument``.
 
    (c) ``el.text`` — last resort, only on confirmed simple leaf elements.
 
@@ -425,11 +456,11 @@ Script rules (HARD — every script you emit MUST follow these):
               attrs = getattr(el, "attrs", None)
               if attrs and attrs.get(attr):
                   return (attrs[attr] or "").strip()
-          # (b) full subtree text via CDP
+          # (b) full subtree text via CDP (el.apply, NOT tab.evaluate)
           if tab is not None:
               try:
-                  val = await tab.evaluate(
-                      "(el => (el.textContent || '').trim())(...)", el)
+                  val = await el.apply(
+                      "(el) => (el.textContent || '').trim()")
                   if isinstance(val, str) and val:
                       return val.strip()
               except Exception:
