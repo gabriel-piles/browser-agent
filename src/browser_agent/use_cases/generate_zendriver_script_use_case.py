@@ -38,6 +38,7 @@ class GenerateZendriverScriptUseCase:
 
     def __init__(self, deps: AgentDeps) -> None:
         self._deps = deps
+        self._last_messages: list = []
 
     def _build_agent(self, model: Model) -> Agent[AgentDeps, GeneratedScript]:
         agent: Agent[AgentDeps, GeneratedScript] = Agent(
@@ -55,13 +56,34 @@ class GenerateZendriverScriptUseCase:
         try:
             agent = self._build_agent(self._deps.llm.get_model())
             run = await self._run_agent(agent, request.render_prompt())
+            self._last_messages = list(run.all_messages())
             script = self._coerce_result(run)
             self._log_script(script)
             return script
-        finally:
+        except Exception:
             await self._deps.browser_session.close()
+            raise
 
-    async def _run_agent(self, agent: Agent, prompt: str) -> Any:
+    async def repair(self, feedback: str) -> GeneratedScript:
+        """Run a repair turn with ``feedback`` as a new user message.
+
+        Uses the message history from the prior ``execute`` call so the
+        agent sees its full exploration + generation context. Does NOT
+        consume a validation attempt — the attempt budget pays for
+        browser work, not for syntax fixes.
+        """
+        agent = self._build_agent(self._deps.llm.get_model())
+        run = await self._run_agent(agent, feedback, message_history=self._last_messages)
+        self._last_messages = list(run.all_messages())
+        script = self._coerce_result(run)
+        self._log_script(script)
+        return script
+
+    async def close(self) -> None:
+        """Close the browser session after all runs + repairs are done."""
+        await self._deps.browser_session.close()
+
+    async def _run_agent(self, agent: Agent, prompt: str, message_history: list | None = None) -> Any:
         agent_logger.info(
             "START  prompt_tokens={n} prompt_preview={preview}",
             n=len(prompt) // 4,
@@ -69,7 +91,12 @@ class GenerateZendriverScriptUseCase:
         )
         started = time.monotonic()
         try:
-            run = await agent.run(prompt, deps=self._deps, usage_limits=UsageLimits(request_limit=MAX_LLM_CALLS))
+            run = await agent.run(
+                prompt,
+                deps=self._deps,
+                usage_limits=UsageLimits(request_limit=MAX_LLM_CALLS),
+                message_history=message_history,
+            )
         finally:
             agent_logger.info(
                 "END    elapsed={elapsed:.1f}s",

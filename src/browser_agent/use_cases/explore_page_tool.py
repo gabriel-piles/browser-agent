@@ -78,11 +78,13 @@ async def explore_page(ctx: RunContext[AgentDeps], action: PageAction) -> str:
       - scroll_height: document height in px (compare before/after scroll)
       - error: present if the action failed (e.g. selector not found)
     """
-    session = ctx.deps.browser_session
+    deps = ctx.deps
+    deps.explore_calls += 1
+    session = deps.browser_session
     summary = _action_summary(action)
     async with traced_tool("explore_page", summary=summary):
         snapshot: PageSnapshot = await session.perform(action)
-    return _format_snapshot(snapshot)
+    return _format_snapshot(snapshot) + _budget_footer(deps)
 
 
 def _format_snapshot(snapshot: PageSnapshot) -> str:
@@ -185,3 +187,10 @@ def _fmt_table(lines: list[str], el: ElementInfo) -> None:
     cols = el.extra.get("columns", "")
     suffix = f" | columns: {cols}" if cols else ""
     lines.append(f"  <table{_selector_suffix(el)}> {rows} rows{suffix}")
+
+
+def _budget_footer(deps: AgentDeps) -> str:
+    """Return a pacing footer telling the model how many requests remain."""
+    used = deps.explore_calls + deps.validation_attempts
+    remaining = deps.call_budget - used
+    return f"\n# exploration call {deps.explore_calls}; ~{remaining} requests remain before you must emit."

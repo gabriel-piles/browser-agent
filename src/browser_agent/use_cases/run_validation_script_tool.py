@@ -16,6 +16,8 @@ retrying forever.
 
 from __future__ import annotations
 
+import re
+
 from pydantic_ai import RunContext
 
 from browser_agent.agent_logging import traced_tool
@@ -24,6 +26,8 @@ from browser_agent.ports.script_runner_port import ScriptRunnerPort
 from browser_agent.use_cases.agent_deps import AgentDeps
 
 VALIDATION_TIMEOUT_S = 90.0
+_ERROR_HEAD_CHARS = 2000
+_TIMEOUT_NOTICE_RE = re.compile(r"\[TIMEOUT[^\]]*\]")
 
 
 async def run_validation_script(ctx: RunContext[AgentDeps], python_code: str) -> str:
@@ -54,7 +58,18 @@ async def run_validation_script(ctx: RunContext[AgentDeps], python_code: str) ->
     runner: ScriptRunnerPort = deps.script_runner
     async with traced_tool("run_validation_script"):
         result: ScriptExecutionResult = await runner.run(python_code, timeout=VALIDATION_TIMEOUT_S)
+    if _is_pure_timeout(result):
+        deps.validation_attempts -= 1
+        return _timeout_no_charge(result, deps.validation_attempts, deps.validation_limit)
     return _format_result(result, deps.validation_attempts, deps.validation_limit)
+
+
+def _is_pure_timeout(result: ScriptExecutionResult) -> bool:
+    """True when a timeout produced no partial diagnostics before the notice."""
+    if result.exit_code != 124:
+        return False
+    stripped = _TIMEOUT_NOTICE_RE.sub("", result.output)
+    return not stripped.strip()
 
 
 def _limit_reached(deps: AgentDeps) -> str:
@@ -79,17 +94,37 @@ def _format_result(result: ScriptExecutionResult, attempt: int, limit: int) -> s
     return f"{header}\n\n{body}{footer}"
 
 
-def _extract_error(output: str) -> str:
-    """Return the last traceback block plus the final error line.
+def _timeout_no_charge(result: ScriptExecutionResult, attempt: int, limit: int) -> str:
+    """Format a timeout that did NOT consume an attempt."""
+    remaining = limit - attempt
+    header = f"# Validation TIMEOUT (not charged; {remaining} attempt(s) still remaining)"
+    note = (
+        "The script produced no output before the timeout — likely a slow\n"
+        "target site, not a strategy error. Re-run the same script; the\n"
+        f"timeout was {VALIDATION_TIMEOUT_S:.0f}s. If it times out again,\n"
+        "simplify the script (fewer navigations, skip PDF downloads)."
+    )
+    return f"{header}\n\n{result.output}\n\n{note}"
 
-    Validation output is often dozens of lines of zendriver/CDP noise
-    before the actual Python traceback. Feeding the whole thing to the
-    LLM wastes context and buries the fixable error. We keep only the
-    last ``Traceback (most recent call last)`` block (inclusive) and
-    fall back to the tail of the output if no traceback is present.
+
+def _extract_error(output: str) -> str:
+    """Keep the printed diagnostics (head) AND the last traceback.
+
+    Step 7 is built around the prints — counts, sample hrefs,
+    label-vs-badge comparisons. A script that proved 8 of 9 checks
+    and crashed on the 9th must not lose the evidence of what
+    already worked. We keep the head (everything before the last
+    traceback) capped to ``_ERROR_HEAD_CHARS``, then the last
+    ``Traceback`` block (inclusive), with a marker between them.
     """
     marker = "Traceback (most recent call last)"
     idx = output.rfind(marker)
     if idx == -1:
         return output[-3000:] if len(output) > 3000 else output
-    return output[idx:]
+    head = output[:idx].rstrip()
+    tail = output[idx:]
+    if len(head) > _ERROR_HEAD_CHARS:
+        head = head[:_ERROR_HEAD_CHARS] + "\n…(truncated head)"
+    if not head:
+        return tail[-3000:]
+    return f"{head}\n\n--- traceback ---\n{tail}"

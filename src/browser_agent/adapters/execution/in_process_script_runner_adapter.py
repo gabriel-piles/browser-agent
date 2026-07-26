@@ -23,7 +23,14 @@ self-contained by running it in a clean subprocess — but every
 emitted script the operator actually runs is still written through
 the same vendored helpers, so the in-process check is sufficient for
 selector / scroll / filter logic verification.
-"""
+
+HAZARD: LLM-authored validation code runs in the driver's own event
+loop. ``asyncio.wait_for`` cannot interrupt a synchronous block
+(``while True: pass``, a blocking ``time.sleep``, a blocking C call),
+so such a script hangs step 0 forever with no timeout — a hazard the
+previous subprocess design did not have. A watchdog on a separate
+thread, or running the LLM's ``main()`` in a worker thread with its
+own loop, would bound it."""
 
 from __future__ import annotations
 
@@ -89,28 +96,32 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
         self._task_slug = task_slug
 
     async def run(self, python_code: str, timeout: float = _DEFAULT_TIMEOUT) -> ScriptExecutionResult:
-        augmented = with_emitted_strip_imports(python_code)
-        augmented = with_emitted_page_wait(augmented)
-        augmented = with_emitted_save_record(augmented)
-        augmented = with_emitted_save_html(augmented)
-        augmented = with_emitted_all_pdf_downloads(augmented)
+        augmented = self._augment(python_code)
         tab = await self._session.new_tab()
         namespace = self._build_namespace(tab)
         transformed = self._strip_asyncio_entrypoint(augmented)
+        buffer = io.StringIO()
         try:
             try:
                 return await asyncio.wait_for(
-                    self._exec_main(transformed, namespace),
+                    self._exec_main(transformed, namespace, buffer),
                     timeout=timeout,
                 )
             except asyncio.TimeoutError:
-                return ScriptExecutionResult(
-                    exit_code=124,
-                    output=f"[TIMEOUT after {timeout:.0f}s — validation script cancelled]",
-                    success=False,
-                )
+                partial = buffer.getvalue()
+                output = f"{partial}\n[TIMEOUT after {timeout:.0f}s — validation script cancelled]".strip()
+                return ScriptExecutionResult(exit_code=124, output=output, success=False)
         finally:
             await _close_tab_silently(tab)
+
+    @staticmethod
+    def _augment(python_code: str) -> str:
+        """Apply the vendored helper transforms the validation script needs."""
+        code = with_emitted_strip_imports(python_code)
+        code = with_emitted_page_wait(code)
+        code = with_emitted_save_record(code)
+        code = with_emitted_save_html(code)
+        return with_emitted_all_pdf_downloads(code)
 
     @staticmethod
     def _strip_asyncio_entrypoint(code: str) -> str:
@@ -123,18 +134,13 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
         """
         return _ASYNCIO_ENTRYPOINT_RE.sub("", code)
 
-    async def _exec_main(self, code: str, namespace: dict[str, Any]) -> ScriptExecutionResult:
-        with _redirect_stdio() as buffer:
+    async def _exec_main(self, code: str, namespace: dict[str, Any], buffer: io.StringIO) -> ScriptExecutionResult:
+        with _redirect_stdio_into(buffer):
             try:
                 with _shim_zendriver_in_sys_modules(namespace["start_browser"]):
                     compiled = compile(code, "<validation_script>", "exec")
                     exec(compiled, namespace)
                     if self._metadata_db_path is not None:
-                        # Replace the vendored save_record with one
-                        # that writes to the runner's metadata DB
-                        # path. The replacement runs after exec so
-                        # the vendored block's definition is
-                        # overridden before ``main()`` is awaited.
                         namespace["save_record"] = _build_save_record(self._metadata_db_path, self._task_slug)
                     main = namespace.get("main")
                     if main is None:
@@ -315,14 +321,22 @@ def _shim_zendriver_in_sys_modules(start_browser: Any):
 
 
 @contextlib.contextmanager
-def _redirect_stdio():
-    """Swap stdout/stderr to capture the validation script's prints."""
+def _redirect_stdio_into(buffer: io.StringIO):
+    """Swap stdout/stderr to capture the validation script's prints into ``buffer``.
+
+    The buffer is owned by the caller (``run``) so partial output
+    survives ``asyncio.wait_for`` cancellation — on timeout the caller
+    can still read whatever the script printed before it was killed.
+    NOTE: this swaps the process-global ``sys.stdout`` / ``sys.stderr``
+    around LLM-authored code. Safe today because loguru binds its sink
+    object at configure time, but a future lazily-resolving sink would
+    start leaking framework logs into the agent's validation output.
+    """
     real_out, real_err = sys.stdout, sys.stderr
-    buffer = io.StringIO()
     sys.stdout = buffer
     sys.stderr = buffer
     try:
-        yield buffer
+        yield
     finally:
         sys.stdout = real_out
         sys.stderr = real_err

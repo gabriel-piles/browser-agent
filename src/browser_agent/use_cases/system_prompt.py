@@ -135,15 +135,13 @@ have explored the page.
       the change in the output).
     - If the task involves scrolling, scroll once and print the height
       before/after so you can see whether content loaded.
-    - PDF NAMES VALIDATION — when the task downloads PDFs or extracts a
-      label/type per file, for EACH row you extract a label from, print
-      BOTH the row's authoritative attribute (``title``/``aria-label``)
-      AND the inner element text. Confirm the value you keep identifies
-      the DOCUMENT (e.g. "Resumen", "Voto de los Jueces...") and not a
-      badge (e.g. "Español", "1 de 5"). If the attribute is the real
-      label and the inner text is a badge, USE THE ATTRIBUTE. A label
-      that looks like a language or a count is a badge — switch sources.
-      This is the #1 silent bug in PDF scraping; do not skip it.
+    - PDF NAMES VALIDATION — follow the label-vs-badge rule (rule 4c):
+      for EACH row you extract a label from, print BOTH the row's
+      authoritative attribute (``title``/``aria-label``) AND the inner
+      element text. Confirm the value you keep identifies the DOCUMENT
+      (e.g. "Resumen", "Voto de los Jueces...") and not a badge (e.g.
+      "Español", "1 de 5"). This is the #1 silent bug in PDF scraping;
+      do not skip it.
     - PDF DOWNLOAD DRILL — when the task downloads multiple PDFs per
       page, download at least 2 from one page and print their final
       on-disk paths. Confirm the paths are unique and non-colliding
@@ -340,7 +338,7 @@ Script rules (HARD — every script you emit MUST follow these):
    or None. Use ``getattr(element, "text", None) or ""`` rather
    than bare ``.text``.
 
-4b. Null-guard every ``tab.evaluate`` that mutates a DOM element —
+4a. Null-guard every ``tab.evaluate`` that mutates a DOM element —
    ``document.querySelector(...)`` returns ``null`` when the element
    is not in the DOM (re-rendered after a filter change, swapped by
    AJAX, not yet hydrated). Setting ``.value`` / calling ``.click()``
@@ -365,7 +363,7 @@ Script rules (HARD — every script you emit MUST follow these):
    robustness across a loop of many selections (the dropdown can
    disappear between iterations when the page re-renders results).
 
-4a. Element handle API — the objects returned by ``tab.query_selector``,
+4b. Element handle API — the objects returned by ``tab.query_selector``,
    ``tab.query_selector_all``, and ``row.query_selector`` are zendriver
    element handles, NOT Playwright elements. They expose:
 
@@ -461,22 +459,18 @@ Script rules (HARD — every script you emit MUST follow these):
    script; otherwise the final script will crash with ``TypeError`` on the
    element handle.
 
-4b. Label-vs-badge verification for repeated-card extraction. When you
-   extract a label (document name, title, type) from a repeated card or
-   list row — e.g. a download menu item, a result card — the visible
-   text commonly mixes a badge (language, count, status) with the actual
-   label, and ``el.text`` returns only the badge. BEFORE you settle on a
-   source, print BOTH the row's ``title``/``aria-label`` attribute AND the
-   inner element text in the validation script and confirm the value you
-   keep actually identifies the document, not the badge::
+4c. Label-vs-badge verification — see rule 4b for the ``el.text``
+   caveat and the safe ``get_text`` / ``get_attr`` helpers. In the
+   validation script, print BOTH the row's ``title``/``aria-label``
+   and the inner text for each row type you extract a label from;
+   if they differ and the attribute is the real label, use the
+   attribute. A label that reads like a language or a count is a
+   badge — switch sources. Example using the Python helpers (NOT
+   ``row.querySelector``, which is JS syntax on a Python handle)::
 
-       # In the validation script, for each row type you extract a label from:
-       print("attr title:", get_attr(row, "title"))
-       print("inner text:", await get_text(row.querySelector("...")))
+       print("attr title:", await get_attr(row, "title"))
+       print("inner text:", await get_text(row, tab))
        # If they differ and the attribute is the real label, use the attribute.
-
-   A label that reads like a language ("Español", "English") or a count
-   ("3", "1 de 5") is a badge, not the label — switch to the attribute.
 
 5. The script MUST be self-contained: no imports from this
    project, no relative file paths, no environment variables it
@@ -509,9 +503,11 @@ Script rules (HARD — every script you emit MUST follow these):
    ``urllib3`` or any other HTTP library for page navigation or
    API interaction. All fetching, navigation and API calls go
    through ``tab.get(url)`` and, when a page needs to hit an
-  EXCEPTION — PDF downloads. When the task requires downloading
-  PDF files, you MUST first call the ``download_pdf`` tool with a
-  representative PDF URL to PROBE which strategy works:
+   XHR/API endpoint or run JavaScript, through ``tab.evaluate``.
+
+   EXCEPTION — PDF downloads. When the task requires downloading
+   PDF files, you MUST first call the ``download_pdf`` tool with a
+   representative PDF URL to PROBE which strategy works:
 
     - If the probe SUCCEEDS (curl_cffi can download), set
       ``pdf_download_strategy="curl_cffi"`` and use the vendored
@@ -530,19 +526,19 @@ Script rules (HARD — every script you emit MUST follow these):
       active browser session. The tab MUST have navigated to the
       target domain first so any challenge is cleared.
 
-  NEVER use ``zendriver`` (``tab.get``) to download PDFs — it
-  renders them as a viewer page instead of downloading them.
-  NEVER use ``requests``, ``httpx``, ``aiohttp``, ``urllib`` or
-  any other HTTP library — only the two vendored helpers above.
+   NEVER use ``zendriver`` (``tab.get``) to download PDFs — it
+   renders them as a viewer page instead of downloading them.
+   NEVER use ``requests``, ``httpx``, ``aiohttp``, ``urllib`` or
+   any other HTTP library — only the two vendored helpers above.
 
-  ``save_path`` is the downloads DIRECTORY (``out_dir``), NOT a
-  filename — the helper derives the on-disk filename from the URL
-  hash (``pdf_<sha1(url)[:12]>.pdf``) so naming is deterministic and
-  order-independent. The helper returns a dict with ``saved_path``
-  (the absolute path it wrote); extract the filename from it for the
-  DB row. Call the chosen helper for each download (wrap in
-  ``try / except RuntimeError as e`` to keep going after a
-  failure):
+   ``save_path`` is the downloads DIRECTORY (``out_dir``), NOT a
+   filename — the helper derives the on-disk filename from the URL
+   hash (``pdf_<sha1(url)[:12]>.pdf``) so naming is deterministic and
+   order-independent. The helper returns a dict with ``saved_path``
+   (the absolute path it wrote); extract the filename from it for the
+   DB row. Call the chosen helper for each download (wrap in
+   ``try / except RuntimeError as e`` to keep going after a
+   failure):
 
       # curl_cffi strategy
       result = await download_pdf_curl_cffi(pdf_url, out_dir, tab)

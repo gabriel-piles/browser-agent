@@ -34,7 +34,6 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 from pydantic_ai.models import ModelRequestContext
 from browser_agent.configuration import (
     COMPACT_HEAD_LINES,
-    COMPACT_KEEP_RECENT_SNAPSHOTS,
     COMPACT_KEEP_RECENT_STRUCTURED,
     COMPACT_KEEP_RECENT_VALIDATIONS,
     COMPACT_MAX_EXTRACTED_LINES,
@@ -47,7 +46,7 @@ from browser_agent.use_cases.agent_deps import AgentDeps
 _EXPLORE_TOOL = "explore_page"
 _VALIDATION_TOOL = "run_validation_script"
 
-_NEVER_TRIM = 10**9
+_KEEP_ALL = 0
 
 
 @dataclass(frozen=True)
@@ -57,9 +56,9 @@ class _CutPlan:
     snaps: set[int] = field(default_factory=set)
     vals: set[int] = field(default_factory=set)
     others: set[int] = field(default_factory=set)
-    snap_cut: int = _NEVER_TRIM
-    val_cut: int = _NEVER_TRIM
-    oth_cut: int = _NEVER_TRIM
+    snap_cut: int = _KEEP_ALL
+    val_cut: int = _KEEP_ALL
+    oth_cut: int = _KEEP_ALL
 
 
 class ToolReturnCompactor(AbstractCapability[AgentDeps]):
@@ -165,7 +164,7 @@ def _trim_bucket(part: ToolReturnPart) -> str | None:
 def _cut_index(indices: set[int], keep_recent: int) -> int:
     """Return the lowest index to KEEP; older ones get trimmed."""
     if keep_recent <= 0 or len(indices) <= keep_recent:
-        return _NEVER_TRIM
+        return _KEEP_ALL
     return sorted(indices, reverse=True)[keep_recent - 1]
 
 

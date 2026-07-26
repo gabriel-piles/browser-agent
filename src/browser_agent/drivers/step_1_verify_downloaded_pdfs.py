@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 from loguru import logger
@@ -57,11 +58,13 @@ class VerifyDownloadsDriver:
         run = RunsConfigLoader.load_active()
         run_path = RunsConfigLoader.load_active_path()
         logger.info("verification driver starting run={run}", run=run.name)
-        script = self._read_latest_script(run_path)
-        if script is None:
+        script_path = self._latest_script_path(run_path)
+        if script_path is None:
             return 1
+        script = script_path.read_text(encoding="utf-8")
+        explanation = self._read_sidecar_explanation(script_path)
         deps = self._build_deps(run_path)
-        request = self._build_request(run, script, run_path)
+        request = self._build_request(run, script, run_path, explanation)
         model = OllamaAdapter(model=VERIFICATION_MODEL).get_model()
         report = await VerifyDownloadsUseCase(deps, model).execute(request)
         path = VerificationReportWriter(run_path).write(report)
@@ -83,17 +86,18 @@ class VerifyDownloadsDriver:
             script_run_limit=VERIFICATION_SCRIPT_RUN_LIMIT,
         )
 
-    def _build_request(self, run, script: str, run_path: Path) -> VerificationRequest:
+    def _build_request(self, run, script: str, run_path: Path, explanation: str) -> VerificationRequest:
         """Build the verification request from the run prompt, script, and gap map."""
         gap_map = ScrapingGapMapBuilder(run_path / "metadata.db").build()
         return VerificationRequest(
             task_prompt=run.prompt,
             generated_script=script,
             gap_map=gap_map,
+            step0_explanation=explanation,
         )
 
-    def _read_latest_script(self, run_path: Path) -> str | None:
-        """Return the most recent ``scripts/*.py`` source, or None."""
+    def _latest_script_path(self, run_path: Path) -> Path | None:
+        """Return the most recent ``scripts/*.py`` path, or None."""
         scripts_dir = run_path / SCRIPTS_DIRNAME
         if not scripts_dir.is_dir():
             logger.warning("no scripts directory at {dir}", dir=scripts_dir)
@@ -102,7 +106,18 @@ class VerifyDownloadsDriver:
         if not scripts:
             logger.warning("no step 0 scripts found in {dir}", dir=scripts_dir)
             return None
-        return scripts[-1].read_text(encoding="utf-8")
+        return scripts[-1]
+
+    @staticmethod
+    def _read_sidecar_explanation(script_path: Path) -> str:
+        """Return the ``explanation`` from the sidecar JSON, or empty string."""
+        sidecar = script_path.with_suffix(".json")
+        if not sidecar.is_file():
+            return ""
+        try:
+            return json.loads(sidecar.read_text(encoding="utf-8")).get("explanation", "")
+        except (ValueError, OSError):
+            return ""
 
 
 def main() -> None:

@@ -24,7 +24,23 @@ class ScriptPathBuilder:
         today = self._today()
         slug = self._slug(task)
         scripts_dir = self._scripts_dir()
-        return scripts_dir / f"{today}__{slug}.py"
+        base = scripts_dir / f"{today}__{slug}.py"
+        return self._unique(base)
+
+    @staticmethod
+    def _unique(base: Path) -> Path:
+        """Append ``__HHMMSS`` (then ``__002`` etc.) if ``base`` already exists."""
+        if not base.exists():
+            return base
+        stamp = datetime.datetime.now().strftime("%H%M%S")
+        stamped = base.with_name(base.stem + f"__{stamp}.py")
+        if not stamped.exists():
+            return stamped
+        for i in range(2, 1000):
+            cand = base.with_name(base.stem + f"__{i:03d}.py")
+            if not cand.exists():
+                return cand
+        return stamped
 
     def _today(self) -> str:
         """Return today's date as ``YYYY_MM_DD`` for the filename prefix."""

@@ -35,13 +35,25 @@ from browser_agent.use_cases.generate_zendriver_script_use_case import (
 
 
 class ScriptGenerator:
-    """Build deps + call the script-generation use case for one task."""
+    """Build deps + run the script-generation use case for one task."""
 
-    async def generate(self, task: str, run_path: Path) -> GeneratedScript:
-        """Run the agent for ``task`` and return the structured result."""
+    async def generate(self, task: str, run_path: Path) -> tuple[GeneratedScript, GenerateZendriverScriptUseCase]:
+        """Run the agent for ``task``; return the script + live use case."""
         session = self._build_session(run_path)
         deps = self._build_deps(session, run_path)
-        return await GenerateZendriverScriptUseCase(deps).execute(CodeGenerationRequest(task=task))
+        use_case = GenerateZendriverScriptUseCase(deps)
+        script = await use_case.execute(CodeGenerationRequest(task=task))
+        return script, use_case
+
+    @staticmethod
+    async def repair(use_case: GenerateZendriverScriptUseCase, feedback: str) -> GeneratedScript:
+        """Run a repair turn on ``use_case`` with ``feedback``."""
+        return await use_case.repair(feedback)
+
+    @staticmethod
+    async def close(use_case: GenerateZendriverScriptUseCase) -> None:
+        """Close the browser session owned by ``use_case``."""
+        await use_case.close()
 
     def _build_session(self, run_path: Path) -> ZendriverBrowserSession:
         """Return a :class:`ZendriverBrowserSession` rooted in the run's profile dir."""

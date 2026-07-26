@@ -17,11 +17,27 @@ running, doing real work — we don't want to wait for a full scrape).
 Only an early crash (exit before the timeout with a non-zero code)
 is a FAIL. The result is logged prominently and surfaced to the
 operator so a broken script is never silently delivered.
+
+SCRATCH ISOLATION: the script is launched with ``_SAVE_RECORD_DB_PATH``
+and ``_SAVE_RECORD_TASK_SLUG`` injected as globals (via a ``-c``
+wrapper preamble) so the smoke test writes rows into a scratch
+``metadata.db`` and PDFs into a scratch ``downloads/`` dir under the
+run's ``smoke/`` folder — NOT the real run directory. This prevents
+the 60-second window from dirtying the run with partial rows and
+locked PDFs that step 1 then has to untangle.
+
+PROCESS GROUP: the subprocess is launched with
+``start_new_session=True`` so the Python process and the Chromium it
+spawns share a process group. On timeout the whole group is killed
+(SIGTERM then SIGKILL), preventing orphaned browsers with locked
+profiles.
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +49,17 @@ from loguru import logger
 # real scrape takes minutes; we don't wait for that. If the script is
 # still running at the timeout, it passed the smoke test.
 SMOKE_TEST_TIMEOUT_S = 60.0
+
+# The preamble sets _SAVE_RECORD_DB_PATH / _SAVE_RECORD_TASK_SLUG in
+# the script's globals before exec'ing the file, redirecting DB writes
+# and downloads into the scratch dir. Mirrors the in-process runner's
+# injection (in_process_script_runner_adapter.py:193).
+_PREAMBLE = """\
+import runpy, sys
+g = {{"_SAVE_RECORD_DB_PATH": {db!r}, "_SAVE_RECORD_TASK_SLUG": "smoke"}}
+runpy.run_path({path!r}, run_name="__smoke__", init_globals=g)
+sys.exit(0)
+"""
 
 
 @dataclass
@@ -52,12 +79,17 @@ async def smoke_test_script(script_path: Path) -> SmokeTestResult:
     exit before the timeout is a failure — the output carries the
     traceback so the operator can see the root cause immediately.
     """
-    cmd = [sys.executable, str(script_path)]
+    scratch_dir = _scratch_dir(script_path)
+    db_path = str(scratch_dir / "metadata.db")
+    preamble = _PREAMBLE.format(db=db_path, path=str(script_path))
+    cmd = [sys.executable, "-c", preamble]
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,
+            env={**os.environ, "ZENDRIVER_HEADLESS": "true"},
         )
     except OSError as exc:
         return SmokeTestResult(success=False, output=f"failed to launch: {exc}", timed_out=False)
@@ -65,14 +97,36 @@ async def smoke_test_script(script_path: Path) -> SmokeTestResult:
     try:
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=SMOKE_TEST_TIMEOUT_S)
     except asyncio.TimeoutError:
-        proc.kill()
-        _ = await proc.wait()
+        await _kill_process_group(proc)
         return SmokeTestResult(success=True, output="[smoke test timed out — script is running]", timed_out=True)
 
     output = stdout.decode("utf-8", errors="replace") if stdout else ""
     if proc.returncode == 0:
         return SmokeTestResult(success=True, output=output, timed_out=False)
     return SmokeTestResult(success=False, output=output, timed_out=False)
+
+
+def _scratch_dir(script_path: Path) -> Path:
+    """Return a scratch dir for smoke-test DB + downloads under the run."""
+    run_path = script_path.parent.parent
+    scratch = run_path / "smoke"
+    scratch.mkdir(parents=True, exist_ok=True)
+    return scratch
+
+
+async def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
+    """Kill the process group (Python + Chromium child) on timeout."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        proc.kill()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=5)
+    except asyncio.TimeoutError:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
 
 
 def log_smoke_test_result(result: SmokeTestResult, script_path: Path) -> None:

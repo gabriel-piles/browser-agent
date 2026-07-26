@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from browser_agent.configuration import MAX_VALIDATION_ATTEMPTS
+from browser_agent.configuration import MAX_LLM_CALLS, MAX_VALIDATION_ATTEMPTS
 from browser_agent.ports.browser_session_port import BrowserSessionPort
 from browser_agent.ports.llm_port import LlmPort
 from browser_agent.ports.pdf_downloader_port import PdfDownloaderPort
@@ -35,3 +35,5 @@ class AgentDeps:
     pdf_downloader: PdfDownloaderPort
     validation_attempts: int = 0
     validation_limit: int = MAX_VALIDATION_ATTEMPTS
+    explore_calls: int = 0
+    call_budget: int = MAX_LLM_CALLS
