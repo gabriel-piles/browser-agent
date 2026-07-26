@@ -88,3 +88,22 @@ class MappedProperty(BaseModel):
         """Build the title entry: forced to :attr:`FieldType.TITLE`, thesaurus dropped."""
         entry = cls.from_template_and_draft(title_prop, draft)
         return entry.model_copy(update={"type": FieldType.TITLE, "thesaurus": None})
+
+    def match_rank(self) -> int:
+        """Sort key: 0 source-backed, 1 default-only, 2 ignored (source=None and default_value=None)."""
+        if self.type is FieldType.TITLE:
+            return -1
+        if self.source is not None:
+            return 0
+        if self.default_value is not None:
+            return 1
+        return 2
+
+    @classmethod
+    def order_by_match(cls, properties: tuple[MappedProperty, ...]) -> tuple[MappedProperty, ...]:
+        """Stable sort: source-backed first, then default-only, then ignored.
+
+        The title entry keeps rank -1 so it stays at the front; the apply
+        step reads it as ``Entity.title`` rather than as metadata.
+        """
+        return tuple(sorted(properties, key=lambda p: p.match_rank()))

@@ -25,11 +25,17 @@ class LlmDraftAssembler:
     """Turn one :class:`LlmMappingDraft` into a canonical :class:`UwaziMapping`."""
 
     def assemble(self, draft: LlmMappingDraft, template: UwaziTemplate) -> UwaziMapping:
-        """Build the :class:`UwaziMapping` from ``draft`` + ``template``."""
+        """Build the :class:`UwaziMapping` from ``draft`` + ``template``.
+
+        Domain entries are ordered so the properties the LLM matched to a
+        scraped source come first and the source-less (ignored) ones last;
+        the title entry, when present, stays pinned at the front.
+        """
         by_target = {raw.target: raw for raw in draft.fields}
         title_entry = self._title_entry(template, by_target)
         domain_entries = tuple(MappedProperty.from_template_and_draft(p, by_target.get(p.name)) for p in template.properties)
-        properties = (title_entry,) + domain_entries if title_entry is not None else domain_entries
+        all_entries = (title_entry,) + domain_entries if title_entry is not None else domain_entries
+        properties = MappedProperty.order_by_match(all_entries)
         return UwaziMapping(
             template=template.name,
             default_language=template.default_language,
