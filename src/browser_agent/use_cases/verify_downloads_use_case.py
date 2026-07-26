@@ -1,10 +1,10 @@
-"""The validation use case: run an independent agent to check scraping coverage.
+"""The download-verification use case: run an independent agent to verify coverage.
 
 Mirrors :class:`GenerateZendriverScriptUseCase` structure: builds a
-Pydantic-AI ``Agent`` with the ``explore_page`` and ``check_pdf`` tools
-bound, the structured ``ValidationReport`` as the result type, and the
-validation system prompt. Runs the agent and packages the output back
-as a :class:`ValidationReport` for the caller.
+Pydantic-AI ``Agent`` with the four verification tools bound, the
+structured ``VerificationReport`` as the result type, and the
+verification system prompt. Runs the agent and packages the output
+back as a :class:`VerificationReport` for the caller.
 """
 
 from __future__ import annotations
@@ -14,35 +14,37 @@ from typing import Any
 
 from pydantic_ai import Agent, UsageLimits
 from pydantic_ai.models import Model
+
 from browser_agent.agent_logging import agent_logger
-
 from browser_agent.configuration import MAX_LLM_CALLS
-from browser_agent.domain.validation_report import ValidationReport
-from browser_agent.domain.validation_request import ValidationRequest
+from browser_agent.domain.verification_report import VerificationReport
+from browser_agent.domain.verification_request import VerificationRequest
 from browser_agent.use_cases.check_pdf_tool import check_pdf
-from browser_agent.use_cases.validation_agent_deps import ValidationAgentDeps
-from browser_agent.use_cases.validation_explore_tool import explore_page
-from browser_agent.use_cases.validation_system_prompt import VALIDATION_SYSTEM_PROMPT
+from browser_agent.use_cases.query_db_tool import query_db
+from browser_agent.use_cases.run_read_script_tool import run_read_script
+from browser_agent.use_cases.verification_agent_deps import VerificationAgentDeps
+from browser_agent.use_cases.verification_explore_tool import explore_page
+from browser_agent.use_cases.verification_system_prompt import VERIFICATION_SYSTEM_PROMPT
 
 
-class ValidateScrapingUseCase:
-    """Build the validation agent, run it once, return the report."""
+class VerifyDownloadsUseCase:
+    """Build the verification agent, run it once, return the report."""
 
-    def __init__(self, deps: ValidationAgentDeps, model: Model) -> None:
+    def __init__(self, deps: VerificationAgentDeps, model: Model) -> None:
         self._deps = deps
         self._model = model
 
-    def _build_agent(self) -> Agent[ValidationAgentDeps, ValidationReport]:
-        agent: Agent[ValidationAgentDeps, ValidationReport] = Agent(
+    def _build_agent(self) -> Agent[VerificationAgentDeps, VerificationReport]:
+        agent: Agent[VerificationAgentDeps, VerificationReport] = Agent(
             model=self._model,
-            system_prompt=VALIDATION_SYSTEM_PROMPT,
-            deps_type=ValidationAgentDeps,
-            output_type=ValidationReport,
-            tools=[explore_page, check_pdf],
+            system_prompt=VERIFICATION_SYSTEM_PROMPT,
+            deps_type=VerificationAgentDeps,
+            output_type=VerificationReport,
+            tools=[explore_page, check_pdf, query_db, run_read_script],
         )
         return agent
 
-    async def execute(self, request: ValidationRequest) -> ValidationReport:
+    async def execute(self, request: VerificationRequest) -> VerificationReport:
         await self._deps.browser_session.start()
         try:
             agent = self._build_agent()
@@ -84,9 +86,9 @@ class ValidateScrapingUseCase:
         )
 
     @staticmethod
-    def _coerce_result(run: Any) -> ValidationReport:
+    def _coerce_result(run: Any) -> VerificationReport:
         output = getattr(run, "output", None)
-        if isinstance(output, ValidationReport):
+        if isinstance(output, VerificationReport):
             return output
         raise RuntimeError(
             f"Agent returned an unsupported output type: {type(output).__name__}",

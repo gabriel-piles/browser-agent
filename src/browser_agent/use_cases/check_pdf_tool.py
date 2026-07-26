@@ -1,4 +1,4 @@
-"""The ``check_pdf`` tool bound to the validation agent.
+"""The ``check_pdf`` tool bound to the verification agent.
 
 Queries ``metadata.db`` for a row whose ``data`` JSON contains a
 ``pdf_url`` matching the candidate URL, then checks the filesystem
@@ -17,13 +17,13 @@ from browser_agent.agent_logging import traced_tool
 from browser_agent.domain.pdf_check_request import PdfCheckRequest
 from browser_agent.domain.pdf_check_result import PdfCheckResult
 from browser_agent.use_cases.metadata_db import parse_row_data
-from browser_agent.use_cases.validation_agent_deps import ValidationAgentDeps
+from browser_agent.use_cases.verification_agent_deps import VerificationAgentDeps
 
 _PDF_MAGIC = b"%PDF"
 _MIN_VALID_SIZE = 1024
 
 
-async def check_pdf(ctx: RunContext[ValidationAgentDeps], request: PdfCheckRequest) -> str:
+async def check_pdf(ctx: RunContext[VerificationAgentDeps], request: PdfCheckRequest) -> str:
     """Validate a candidate PDF URL against the DB and filesystem.
 
     The agent calls this for each PDF it discovers during exploration.
@@ -40,7 +40,7 @@ async def check_pdf(ctx: RunContext[ValidationAgentDeps], request: PdfCheckReque
     return _format_result(result)
 
 
-def _run_check(deps: ValidationAgentDeps, request: PdfCheckRequest) -> PdfCheckResult:
+def _run_check(deps: VerificationAgentDeps, request: PdfCheckRequest) -> PdfCheckResult:
     """Query the DB and filesystem, returning a :class:`PdfCheckResult`."""
     row = _query_db(deps.db_path, request.url)
     if row is None:
@@ -69,7 +69,7 @@ def _query_db(db_path: Path, pdf_url: str) -> tuple[str, dict[str, Any]] | None:
 
 
 def _check_file(
-    deps: ValidationAgentDeps,
+    deps: VerificationAgentDeps,
     request: PdfCheckRequest,
     row: tuple[str, dict[str, Any]],
 ) -> PdfCheckResult:
@@ -111,11 +111,11 @@ def _verdict(file_exists: bool, is_valid: bool, file_size: int) -> str:
     return "present"
 
 
-def _limit_reached(deps: ValidationAgentDeps) -> str:
+def _limit_reached(deps: VerificationAgentDeps) -> str:
     return (
         f"# PDF check limit reached ({deps.pdf_check_limit}).\n"
         "You have checked the maximum number of PDFs. STOP calling this tool.\n"
-        "Emit the final ValidationReport now using the results you have gathered."
+        "Emit the final VerificationReport now using the results you have gathered."
     )
 
 
