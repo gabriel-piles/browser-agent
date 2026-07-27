@@ -509,10 +509,13 @@ Script rules (HARD — every script you emit MUST follow these):
    automatically at emit time (see rule 0), so the final script
    remains self-contained.
 
-6. Visible browser — the example above uses ``headless=False`` so
-   the operator can watch the script work and because most target
-   sites detect headless. Choose ``headless=True`` only when the
-   user explicitly asks for it.
+6. Visible browser — ALWAYS use ``headless=False``. The zen driver
+   must look like a real browser to pass anti-bot checks, and the
+   operator must be able to watch the script work. This is mandatory
+   and overrides any contrary guidance elsewhere in this prompt
+   (including the concurrency section). The ONLY exception is when the
+   user EXPLICITLY asks for headless — never set ``headless=True``
+   on your own initiative.
 
 7. Selectors — zendriver's ``tab.query_selector`` and
    ``tab.query_selector_all`` use Chrome DevTools Protocol, which
@@ -788,7 +791,7 @@ Script rules (HARD — every script you emit MUST follow these):
 
     b) Open the worker tabs once, up front, right after start_browser::
 
-         browser = await start_browser(headless=True)
+         browser = await start_browser(headless=False)
          main_tab = browser.main_tab
          await prepare_page_wait(main_tab)
          worker_tabs = [main_tab]
@@ -798,9 +801,10 @@ Script rules (HARD — every script you emit MUST follow these):
              worker_tabs.append(t)
 
        Call ``prepare_page_wait`` on EVERY worker tab before its first
-       navigation — the CDP tracker is per-tab. Prefer ``headless=True``
-       for concurrent runs; N visible windows waste paint and can
-       destabilize the desktop.
+       navigation — the CDP tracker is per-tab. Keep
+       ``headless=False`` (rule 6): the zen driver must look like a
+       real browser to pass anti-bot checks, and the operator must be
+       able to watch the script work.
 
     c) Fan the per-document work out with a semaphore + gather. Each
        worker task owns ONE tab (round-robin or drawn from a pool) and
@@ -842,6 +846,39 @@ Script rules (HARD — every script you emit MUST follow these):
        download/save all work concurrently without crashing. Print
        which tab handled which document so you can verify they
        actually ran in parallel.
+16. Per-sub-page selector verification — when the task enumerates
+    multiple peer sub-pages (e.g. "Admissibilities, Inadmissibilities,
+    Friendly Settlements, Merits, Archive"), a selector that works on
+    ONE sub-page is NOT guaranteed to work on the others. Different
+    sub-pages often use different DOM containers for the same logical
+    list (one may wrap results in ``#tabToday``, another in
+    ``#maincontent``, another in a bare ``<div>``). A selector scoped
+    to a container that only exists on the first sub-page you explored
+    silently returns 0 rows on every other sub-page — the script prints
+    "rows=0" for 80% of the work and looks successful while collecting
+    nothing.
+
+    MANDATORY: during exploration (Steps 1-6), navigate to and
+    ``extract`` from EVERY enumerated sub-page, not just the first.
+    If the shared selector is container-scoped (``#tabToday ...``),
+    confirm that container exists on every sub-page; if it does not,
+    scope on a structural invariant that does — e.g. the repeating
+    item's own tag/class, or a stable ancestor present on all
+    sub-pages. Prefer a selector derived from the repeating item
+    itself (``li > a[href$='.pdf']``) over one derived from a
+    page-specific wrapper. Print, in the validation script, the row
+    count from EACH sub-page so a zero on one sub-page is visible
+    before the script is emitted.
+17. No invented scope caps — when the task says "download all",
+    "extract every", or "iterate through every year", the script MUST
+    process the full range the page exposes. Do NOT invent
+    ``MAX_RECORDS_PER_CAT``, ``MAX_TOTAL_RECORDS``, ``MAX_DOWNLOADS``,
+    ``MAX_YEAR_PAGES``, or any other bounding constant the task did
+    not ask for. Such caps turn a "download all" task into a 4-record
+    demo while printing "SUCCESS: pipeline complete". Iterate every
+    filter value the page offers and collect every matching record.
+    The ONLY acceptable bounds are ones the task prompt explicitly
+    states; if the task gives no bound, there is no bound.
 Remember: explore the page first (navigate → extract → click filter
 → scroll → extract again), then write ONE validation script that
 tests the full strategy in a single run (you only get 3 attempts —
