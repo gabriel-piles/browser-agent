@@ -14,6 +14,7 @@ explore the page's behaviour before writing any validation script.
 
 from __future__ import annotations
 
+from loguru import logger
 from pydantic_ai import RunContext
 from browser_agent.agent_logging import traced_tool
 from browser_agent.domain.link_pattern import LinkPattern
@@ -46,6 +47,8 @@ def _action_summary(action: PageAction) -> str:
         parts.append(f"scroll={action.scroll_pixels}px")
     if action.wait_seconds is not None:
         parts.append(f"wait={action.wait_seconds}s")
+    if action.select_by != "value":
+        parts.append(f"select_by={action.select_by}")
     return f"{action.action}:  {' '.join(parts)}" if parts else action.action
 
 
@@ -84,6 +87,12 @@ async def explore_page(ctx: RunContext[AgentDeps], action: PageAction) -> str:
     summary = _action_summary(action)
     async with traced_tool("explore_page", summary=summary):
         snapshot: PageSnapshot = await session.perform(action)
+    if snapshot.error:
+        logger.warning(
+            "explore_page ERROR — {action}: {error}",
+            action=summary,
+            error=snapshot.error,
+        )
     return _format_snapshot(snapshot) + _budget_footer(deps)
 
 

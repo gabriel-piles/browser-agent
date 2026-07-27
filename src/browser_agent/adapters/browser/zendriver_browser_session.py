@@ -44,10 +44,13 @@ from browser_agent.adapters.human_challenge_detector import (
     HumanChallengeBypass,
     UnsolvedChallengeError,
 )
+from browser_agent.adapters.nopecha_extension import NopechaExtension
 from browser_agent.adapters.zendriver_page_wait import ZendriverPageWait
 from browser_agent.configuration import (
     BROWSER_TAB_LOAD_TIMEOUT_SECONDS,
     BROWSER_TAB_OPEN_TIMEOUT_SECONDS,
+    NOPECHA_ENABLED,
+    NOPECHA_SOLVE_TIMEOUT_S,
     PAGE_LOAD_NETWORK_QUIET_WINDOW_MS,
     PAGE_LOAD_TIMEOUT_SECONDS,
     PAGE_LOAD_WAIT_UNTIL,
@@ -64,6 +67,9 @@ _apply_zendriver_patch()
 _DEFAULT_SETTLE_SECONDS = 3.0
 _DEFAULT_WAIT_SECONDS = 1.0
 _EXTRACT_MAX_ELEMENTS = 50
+
+_SELECT_MAX_OPTIONS = 60
+_NON_HTML_EXTENSIONS = (".js", ".css", ".json", ".xml", ".txt", ".svg")
 
 
 class ZendriverBrowserSession(BrowserSessionPort):
@@ -86,6 +92,7 @@ class ZendriverBrowserSession(BrowserSessionPort):
                 allow_reload=False,
                 interactive_pause=True,
                 interactive_timeout_seconds=120.0,
+                nopecha_solve_seconds=NOPECHA_SOLVE_TIMEOUT_S if NOPECHA_ENABLED else 0.0,
             )
         )
         self._analyzer = PageAnalyzer()
@@ -102,10 +109,14 @@ class ZendriverBrowserSession(BrowserSessionPort):
         else:
             user_data_dir = tempfile.mkdtemp(prefix="zd_profile_")
             logger.info("launching clean Chromium (headless={})", self._headless)
+        extension_dir = None
+        if NOPECHA_ENABLED:
+            extension_dir = NopechaExtension().ensure_ready()
         self._process = launch_chromium(
             port=self._port,
             user_data_dir=user_data_dir,
             headless=self._headless,
+            extension_dir=extension_dir,
         )
         self._browser, self._tab = await connect_and_prepare(port=self._port)
         self._tracker = CdpPageTracker(self._tab)
@@ -216,10 +227,26 @@ class ZendriverBrowserSession(BrowserSessionPort):
         url = action.url or ""
         if not url:
             return self._error_snapshot("navigate requires url")
+        guard = self._non_html_guard(url)
+        if guard:
+            return self._error_snapshot(guard)
         await self._navigate(url)
         await self._settle(_DEFAULT_SETTLE_SECONDS)
         snapshot = await self._snapshot(f"navigated to {url}")
         return await self._annotate_challenge(snapshot)
+
+    @staticmethod
+    def _non_html_guard(url: str) -> str:
+        """Return an error message if ``url`` points at a non-HTML resource."""
+        path = url.split("?")[0].split("#")[0].lower()
+        if path.endswith(_NON_HTML_EXTENSIONS):
+            return (
+                f"navigate: {url!r} is a non-HTML resource (.{path.rsplit('.', 1)[-1]}); "
+                "navigating would replace your page context with raw text. "
+                "Use inspect on the <script src>/<link href> element instead, "
+                'or fetch the URL via tab.evaluate("fetch(url).then(r=>r.text())").'
+            )
+        return ""
 
     async def _do_click(self, action: PageAction) -> PageSnapshot:
         selector = action.selector or ""
@@ -281,26 +308,67 @@ class ZendriverBrowserSession(BrowserSessionPort):
         if not selector:
             return self._error_snapshot("select requires selector")
         pre_url = self._tab.url or ""
-        element = await self._query(selector)
-        if element is None:
-            return self._error_snapshot(f"select: no element matches {selector!r}")
-        # zendriver's select_option is parameterless and only works on an
-        # OPTION element. For our API we select the option whose value/label
-        # matches ``value`` and then click it (which fires change events).
-        option_selector = f"{selector} option[value={json.dumps(value)}]"
-        option = await self._query(option_selector)
-        if option is None:
-            # Fallback: match by text content.
-            option = await self._query(f"{selector} option")
-            if option is not None and value.lower() not in (getattr(option, "text", "") or "").lower():
-                option = None
-        if option is None:
-            return self._error_snapshot(f"select: no option matches {value!r} in {selector!r}")
-        err = await self._try_interact(option.click(), selector, "select")
-        if err:
-            return self._error_snapshot(err)
+        outcome = await self._select_via_js(selector, value, action.select_by or "value")
+        if outcome.get("error"):
+            opts = outcome.get("options") or []
+            msg = self._select_error_msg(selector, value, opts) if opts else outcome["error"]
+            return self._error_snapshot(msg)
         await self._settle(_DEFAULT_SETTLE_SECONDS)
         return await self._snapshot(f"selected {value!r} in {selector!r}", previous_url=pre_url)
+
+    async def _select_via_js(self, selector: str, value: str, select_by: str) -> dict:
+        """Set ``<select>`` value in-browser and return ``{error, options}``.
+
+        Clicking an ``<option>`` element is not interactable when the dropdown
+        is collapsed (zendriver: "could not find position for <option>"). We
+        instead set ``select.value`` and dispatch a ``change`` event from JS,
+        which works regardless of dropdown state. On no match the returned
+        ``options`` list (value+text pairs) is formatted into the error.
+        """
+        esc_sel = json.dumps(selector)
+        esc_val = json.dumps(value)
+        by_text = "true" if select_by in ("text", "label") else "false"
+        js = (
+            "(() => {"
+            f"  const sel = document.querySelector({esc_sel});"
+            "  if (!sel) { return {error: 'select: no element matches ' + " + esc_sel + "}; }"
+            "  const opts = Array.from(sel.options);"
+            "  const pairs = opts.map(o => ({value: o.value, text: (o.textContent||'').trim()}));"
+            f"  const want = ({esc_val}).toLowerCase();"
+            f"  const byText = {by_text};"
+            "  const match = opts.find(o => byText"
+            "    ? (o.textContent||'').trim().toLowerCase() === want"
+            "    : (o.value||'').toLowerCase() === want);"
+            "  if (!match) { return {error: 'select: no option matches ' + "
+            + esc_val
+            + " + ' in ' + "
+            + esc_sel
+            + ", options: pairs}; }"
+            "  sel.value = match.value;"
+            "  sel.dispatchEvent(new Event('change', {bubbles: true}));"
+            "  return {selected: match.value, options: pairs};"
+            "})()"
+        )
+        try:
+            result = await self._tab.evaluate(js)
+        except _ProtocolException:
+            return {"error": f"select: invalid selector {selector!r}"}
+        return result if isinstance(result, dict) else {"error": "select: unexpected evaluate result"}
+
+    @staticmethod
+    def _select_error_msg(selector: str, value: str, options: list[dict]) -> str:
+        """Build an error message that lists every available option."""
+        lines = [f"select: no option matches {value!r} in {selector!r}"]
+        shown = options[:_SELECT_MAX_OPTIONS]
+        if not shown:
+            lines.append("  (the <select> has no <option> elements)")
+            return "\n".join(lines)
+        lines.append(f"  available options ({len(options)} total, showing {len(shown)}):")
+        for opt in shown:
+            val = opt.get("value", "")
+            text = opt.get("text", "")
+            lines.append(f"    value={val!r} text={text!r}")
+        return "\n".join(lines)
 
     async def _do_extract(self, action: PageAction) -> PageSnapshot:
         selector = action.selector or ""
@@ -384,7 +452,7 @@ class ZendriverBrowserSession(BrowserSessionPort):
         result = await self._tab.evaluate(
             f"""(() => {{
                 const el = document.querySelector({escaped});
-                if (!el) return JSON.stringify({{error:'not found'}});
+                if (!el) return ({{error: 'not found'}});
                 const parts = [];
                 let sib = el.previousElementSibling;
                 while (sib) {{ parts.unshift(sib.outerHTML); sib = sib.previousElementSibling; }}
@@ -393,11 +461,11 @@ class ZendriverBrowserSession(BrowserSessionPort):
                 while (sib) {{ parts.push(sib.outerHTML); sib = sib.nextElementSibling; }}
                 const html = parts.join('\\n');
                 if (html.length <= {context_chars})
-                    return JSON.stringify({{html}});
+                    return ({{html}});
                 const idx = html.indexOf(el.outerHTML);
                 const start = Math.max(0, idx - {context_chars});
                 const end = Math.min(html.length, idx + el.outerHTML.length + {context_chars});
-                return JSON.stringify({{html: html.slice(start, end)}});
+                return ({{html: html.slice(start, end)}});
             }})()"""
         )
         if not isinstance(result, dict) or result.get("error"):

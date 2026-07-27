@@ -14,6 +14,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 ActionType = Literal["navigate", "click", "scroll", "fill", "select", "extract", "wait", "analyze", "inspect"]
+SelectBy = Literal["value", "text", "label"]
 
 
 class PageAction(BaseModel):
@@ -27,7 +28,12 @@ class PageAction(BaseModel):
     - ``fill``      — type ``value`` into the input matching
       ``selector``.
     - ``select``     — pick ``value`` in the ``<select>`` matching
-      ``selector``.
+      ``selector``. ``select_by`` chooses how ``value`` is matched:
+      ``"value"`` (default) matches the ``<option value="...">``
+      attribute; ``"text"`` / ``"label"`` match the option's visible
+      text. Inspect the ``<select>`` first (or read the error
+      snapshot, which lists every available option) to learn which
+      values exist before selecting.
     - ``extract``   — run ``selector`` (CSS) against the page and
       return matching elements' text + href. Use ``selector`` to
       extract links, counts, or verify filters reacted.
@@ -48,7 +54,6 @@ class PageAction(BaseModel):
         default=None,
         description="URL to navigate to (required for 'navigate' action).",
     )
-
     selector: str | None = Field(
         default=None,
         description=(
@@ -59,6 +64,14 @@ class PageAction(BaseModel):
     value: str | None = Field(
         default=None,
         description=("Text to type (fill), option value to select (select), or ignored for other actions."),
+    )
+    select_by: SelectBy = Field(
+        default="value",
+        description=(
+            "How to match ``value`` for the 'select' action: 'value' matches "
+            "the <option value='...'> attribute (default); 'text' or 'label' "
+            "match the option's visible text. Ignored for other actions."
+        ),
     )
     scroll_pixels: int | None = Field(
         default=None,

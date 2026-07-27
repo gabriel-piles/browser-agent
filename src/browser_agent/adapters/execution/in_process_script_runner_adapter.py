@@ -13,10 +13,12 @@ validation attempt, injects a ``start_browser()`` shim that returns
 that tab inside the agent's browser, installs a wrapped ``zendriver``
 module in ``sys.modules`` so the LLM's ``import zendriver as zd`` also
 picks up the shim, prepends the page-wait and save-record helpers
-(which work on any tab), strips the ``asyncio.run(main())`` wrapper
-the LLM emits, replaces the vendored ``save_record`` with one that
-writes to the runner's metadata DB path, and runs ``main()`` directly
-in the agent's event loop.
+(which work on any tab), neutralizes every ``asyncio.run(...)``
+call via :func:`with_emitted_asyncio_run` (so the LLM's
+``asyncio.run(main())`` trailer / bare top-level calls do not raise
+inside the already-running loop), replaces the vendored
+``save_record`` with one that writes to the runner's metadata DB
+path, and runs ``main()`` directly in the agent's event loop.
 
 Trade-off: the agent no longer proves the emitted script is fully
 self-contained by running it in a clean subprocess — but every
@@ -39,7 +41,6 @@ import contextlib
 import datetime
 import io
 import json
-import re
 import sqlite3
 import sys
 import traceback
@@ -57,14 +58,10 @@ from browser_agent.adapters.emitted_page_wait import with_emitted_page_wait
 from browser_agent.adapters.emitted_save_record import with_emitted_save_record
 from browser_agent.adapters.emitted_save_html import with_emitted_save_html
 from browser_agent.adapters.emitted_pdf_download import with_emitted_all_pdf_downloads
+from browser_agent.adapters.emitted_asyncio_run import with_emitted_asyncio_run
 from browser_agent.domain.script_execution_result import ScriptExecutionResult
 from browser_agent.ports.browser_session_port import BrowserSessionPort
 from browser_agent.ports.script_runner_port import ScriptRunnerPort
-
-_ASYNCIO_ENTRYPOINT_RE = re.compile(
-    r"^\s*if\s+__name__\s*==\s*[\"']__main__[\"']\s*:\s*\n\s*asyncio\.run\(\s*main\s*\(\s*\)\s*\)\s*$",
-    re.MULTILINE,
-)
 
 
 class InProcessScriptRunnerAdapter(ScriptRunnerPort):
@@ -96,10 +93,9 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
         self._task_slug = task_slug
 
     async def run(self, python_code: str, timeout: float = _DEFAULT_TIMEOUT) -> ScriptExecutionResult:
-        augmented = self._augment(python_code)
+        transformed = self._augment(python_code)
         tab = await self._session.new_tab()
         namespace = self._build_namespace(tab)
-        transformed = self._strip_asyncio_entrypoint(augmented)
         buffer = io.StringIO()
         try:
             try:
@@ -116,23 +112,12 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
 
     @staticmethod
     def _augment(python_code: str) -> str:
-        """Apply the vendored helper transforms the validation script needs."""
         code = with_emitted_strip_imports(python_code)
         code = with_emitted_page_wait(code)
         code = with_emitted_save_record(code)
         code = with_emitted_save_html(code)
-        return with_emitted_all_pdf_downloads(code)
-
-    @staticmethod
-    def _strip_asyncio_entrypoint(code: str) -> str:
-        """Remove the ``if __name__ == "__main__": asyncio.run(main())`` trailer.
-
-        We are already in an event loop, so calling ``asyncio.run``
-        would raise. The runner instead awaits ``main()`` directly
-        (see :meth:`_exec_main`). The trailer removal is a no-op if
-        the LLM did not emit it.
-        """
-        return _ASYNCIO_ENTRYPOINT_RE.sub("", code)
+        code = with_emitted_all_pdf_downloads(code)
+        return with_emitted_asyncio_run(code)
 
     async def _exec_main(self, code: str, namespace: dict[str, Any], buffer: io.StringIO) -> ScriptExecutionResult:
         with _redirect_stdio_into(buffer):

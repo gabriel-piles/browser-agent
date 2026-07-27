@@ -74,6 +74,22 @@ MAX_VALIDATION_ATTEMPTS = 3
 # navigate during inspection and the generated script. Set the env
 # var to ``1`` / ``true`` for headless runs.
 ZENDRIVER_HEADLESS = os.environ.get("ZENDRIVER_HEADLESS", "false").lower() in {"1", "true", "yes"}
+# NopeCHA CAPTCHA-solver extension. Opt-in: the extension only loads when
+# ``NOPECHA_ENABLED`` is truthy. ``NOPECHA_KEY`` is optional — the free tier
+# (100 solves/day, keyed by IP) needs no key; a paid key raises the limit.
+# When enabled, the automation build is downloaded once, unzipped to a
+# cached directory under the project, its manifest.json is patched with the
+# key + enabled CAPTCHA types, and the dir is passed to Chromium via
+# ``--load-extension``. Leave unset to keep the stealth-clean launch with
+# zero extension flags.
+NOPECHA_ENABLED = os.environ.get("NOPECHA_ENABLED", "false").lower() in {"1", "true", "yes"}
+NOPECHA_KEY = os.environ.get("NOPECHA_KEY", "")
+NOPECHA_VERSION = "0.6.1"  # pin; bump manually when upgrading
+NOPECHA_DOWNLOAD_URL = (
+    f"https://github.com/NopeCHALLC/nopecha-extension/releases/download/{NOPECHA_VERSION}/chromium_automation.zip"
+)
+NOPECHA_CACHE_DIR = PROJECT_ROOT / "data" / "nopecha-extension"
+NOPECHA_SOLVE_TIMEOUT_S = float(os.environ.get("NOPECHA_SOLVE_TIMEOUT_S", "30"))
 
 # Hard probe timeout (seconds). The inspection tool bails out and
 # returns a truncated snippet if Chrome doesn't navigate inside this

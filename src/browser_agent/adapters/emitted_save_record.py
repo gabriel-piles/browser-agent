@@ -111,8 +111,9 @@ def save_record(source_url: str, data: dict) -> None:
     supporting attachment on the same Uwazi entity. Omit the key
     (or set it to ``None``) when no HTML was captured for a row.
     """
-    conn = sqlite3.connect(_SAVE_RECORD_DB_PATH)
+    conn = sqlite3.connect(_SAVE_RECORD_DB_PATH, timeout=5.0)
     try:
+        conn.execute("PRAGMA busy_timeout=5000")
         conn.execute(
             "CREATE TABLE IF NOT EXISTS metadata "
             "(source_url TEXT PRIMARY KEY, task_slug TEXT NOT NULL, "

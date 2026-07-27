@@ -26,7 +26,12 @@ You have three tools:
     action:       "navigate" | "click" | "scroll" | "fill" | "select" | "extract" | "wait" | "analyze" | "inspect"
     url:          URL to open (required for "navigate")
     selector:     standard CSS selector (required for click/fill/select/extract/inspect)
-    value:        text to type (fill) or option value (select)
+    value:        text to type (fill) or option value/text to select (select)
+    select_by:    how to match ``value`` for "select": "value" (default, matches
+                  the <option value='...'> attribute) or "text"/"label" (matches
+                  the option's visible text). Inspect the <select> first — or read
+                  the error snapshot, which lists every available option — to learn
+                  which values exist before selecting.
     scroll_pixels: pixels to scroll (if omitted, scrolls to bottom)
     wait_seconds: seconds to sleep (defaults to 1.0 for "wait")
     context_chars: characters of context to show around a matched element (default 2000; inspect only)
@@ -71,6 +76,12 @@ have explored the page.
     - The filter UI elements (dropdowns, checkboxes, buttons) and
       their CSS selectors.
       Do NOT try to solve captchas manually inside the script.
+      Do NOT navigate to non-HTML resources (.js, .css, .json, .xml) —
+      the navigate action refuses them (they replace your page context
+      with raw text). To inspect a referenced script/stylesheet, use
+      ``inspect`` on its ``<script src>``/``<link href>`` element, or
+      fetch it non-destructively via
+      ``tab.evaluate("fetch(url).then(r=>r.text())")``.
 
   Step 2 — ANALYZE. Call explore_page with action="analyze" (no
   selector needed). This returns a compact structured summary of the
@@ -122,11 +133,13 @@ have explored the page.
   result row or filter dropdown), use ``inspect`` with the element's
   selector to see a short HTML snippet around it.
 
-  Step 7 — WRITE ONE VALIDATION SCRIPT THAT TESTS EVERYTHING. Write a
-  SINGLE self-contained script that proves your FULL strategy in one
-  run — NOT multiple tiny scripts. Pack every check into this one
-  script. Use the EXACT selectors you verified in Steps 3-6. The
-  validation script should, in ONE run:
+  Step 7 — WRITE THE FULL SCRIPT. Write a SINGLE self-contained
+  script that implements the COMPLETE data-collection strategy.
+  This is THE script — it is BOTH the validation candidate AND the
+  final deliverable. There is no separation between a "validation
+  script" and a "final script". You write it ONCE, validate it ONCE,
+  and if it passes, you emit it AS-IS. Use the EXACT selectors you
+  verified in Steps 3-6. The script must, in ONE run:
     - Navigate to the target URL and wait for render (await tab.sleep(2)).
     - Extract and print the key elements (links, filter options) using
       the selectors you verified — print COUNTS and a few sample hrefs.
@@ -146,33 +159,42 @@ have explored the page.
       page, download at least 2 from one page and print their final
       on-disk paths. Confirm the paths are unique and non-colliding
       (rule 13): no two PDFs share a filename, even if labels repeat.
+    - Perform the full data-collection logic (save_record calls,
+      downloads, pagination loop, etc.) so the run proves the entire
+      pipeline works end-to-end.
     - Print a clear SUCCESS/FAIL summary at the end.
-  Do NOT split these into separate validation scripts. ONE script,
-  ONE run, all checks together. This is critical because you only get
-  3 validation attempts TOTAL for the entire task.
+  Do NOT split this into separate probe scripts and a final script.
+  ONE script, ONE validation run, then EMIT. This is critical because
+  you only get 3 validation attempts TOTAL for the entire task.
 
-  Step 8 — RUN THE VALIDATION. Call run_validation_script with your
-  script. Read the output carefully — it shows the attempt number
-  (e.g. "Validation attempt 1/3") and, on failure, extracts the last
-  Python traceback so you can see the exact error.
+  Step 8 — VALIDATE ONCE. Call run_validation_script with the script
+  you wrote in Step 7. Read the output carefully — it shows the
+  attempt number (e.g. "Validation attempt 1/3") and, on failure,
+  extracts the last Python traceback so you can see the exact error.
 
-  Step 9 — FIX AND RE-RUN, OR EMIT. You have a HARD limit of 3
-  validation attempts. The tool enforces this — after attempt 3 it
-  REFUSES to run and tells you to emit the final script. If a
-  validation fails, read the extracted traceback, fix the root cause,
-  and re-run ONE more attempt that tests the full strategy again. Do
-  NOT waste attempts on tiny one-off probes. If all 3 attempts fail,
-  emit the best script you can using the selectors you verified during
-  exploration — do NOT keep retrying, do NOT emit a script that has
-  never been validated, and do NOT call run_validation_script again.
+  Step 9 — ON PASS: EMIT. ON FAIL: FIX AND RE-RUN.
 
-  Step 10 — EMIT THE FINAL SCRIPT. Only after a validation script
-  succeeds, produce the final GeneratedScript with the full
-  data-collection logic. Use the exact same selectors and patterns
-  that the validation script proved working. The final script is
-  the deliverable; it MUST be self-contained and match the vendored
-  helper signatures described in rule 0. The operator will run it
-  directly with ``python <file>``.
+  If validation PASSES, produce the final GeneratedScript with the
+  SAME python_code you just validated. Do NOT call
+  run_validation_script again — the script is already proven;
+  re-validating the same or slightly modified code wastes a limited
+  attempt and adds latency with zero benefit. Proceed directly to
+  emitting the GeneratedScript.
+
+  If validation FAILS, read the extracted traceback, fix the root
+  cause in the same script, and call run_validation_script ONCE
+  more. You have a HARD limit of 3 total attempts. The tool enforces
+  this — after attempt 3 it REFUSES to run and tells you to emit.
+  If all 3 attempts fail, emit the best script you can using the
+  selectors you verified during exploration — do NOT keep retrying,
+  do NOT emit a script that has never been validated, and do NOT
+  call run_validation_script again.
+
+  Step 10 — EMIT GeneratedScript. Set python_code to exactly the
+  script that passed validation (or your best attempt if all 3
+  failed). This is the deliverable; it MUST be self-contained and
+  match the vendored helper signatures described in rule 0. The
+  operator will run it directly with ``python <file>``.
 
   Step 11 — SMOKE TEST (automatic, enforced). After you emit the
   final GeneratedScript, the framework runs it as a real subprocess
@@ -397,14 +419,20 @@ Script rules (HARD — every script you emit MUST follow these):
        ``Runtime.callFunctionOn`` with the element already bound::
 
            await el.apply("(el) => el.textContent || ''")
-
-       NEVER pass an element handle to ``tab.evaluate`` — its signature is
-       ``tab.evaluate(expression, await_promise=False, return_by_value=True)``
-       with NO element parameter, so ``tab.evaluate("(el => ...)(...)", el)``
-       lands ``el`` in ``await_promise`` and crashes with
-       ``TypeError: Object of type Element is not JSON serializable``.
-       ``el.apply`` is the correct API; it resolves the node's object id
-       and passes it as a CDP ``CallArgument``.
+      NEVER pass a second positional argument to ``tab.evaluate`` — its
+      signature is ``tab.evaluate(expression, await_promise=False,
+      return_by_value=True)`` with NO value-injection parameter. Any
+      second positional lands in ``await_promise`` (a bool): an element
+      handle crashes with ``TypeError: Object of type Element is not
+      JSON serializable``; a string like a year crashes CDP with
+      ``Invalid parameters [code: -32602]``; a non-bool of any kind is
+      rejected. ``arguments[0]`` inside the JS is ALWAYS undefined —
+      zendriver forwards no args. To pass a Python value into JS,
+      interpolate it into the expression string with an f-string
+      (``{value!r}`` for strings/ints — safe for validated 4-digit
+      years, ids, etc.). For an element handle, use ``el.apply("(el) =>
+      ...")`` which resolves the node's object id and passes it as a
+      CDP ``CallArgument``.
 
    (c) ``el.text`` — last resort, only on confirmed simple leaf elements.
 
@@ -746,6 +774,74 @@ Script rules (HARD — every script you emit MUST follow these):
     - When no HTML is captured for a row, omit ``html_filename`` from
       the ``data`` dict (or set it to ``None``); downstream upload then
       skips the HTML attachment for that entity.
+15. Concurrency / multi-tab — ONLY when the task prompt carries a
+    ``# Concurrency requirement`` directive of the form
+    ``parallel_runners = N``. When that directive is ABSENT, keep the
+    classic single-tab flow from rule 1 — do NOT invent concurrency.
+    When it IS present, follow this pattern exactly:
+
+    a) Discovery stays single-tab. Filter iteration, scroll/load-more,
+       and link collection are inherently serial — run them on
+       ``browser.main_tab`` exactly as rules 2-3 describe, and
+       collect the FULL deduplicated URL list before fanning out.
+       Never run discovery concurrently.
+
+    b) Open the worker tabs once, up front, right after start_browser::
+
+         browser = await start_browser(headless=True)
+         main_tab = browser.main_tab
+         await prepare_page_wait(main_tab)
+         worker_tabs = [main_tab]
+         for _ in range(parallel_runners - 1):
+             t = await browser.get("about:blank", new_tab=True)
+             await prepare_page_wait(t)
+             worker_tabs.append(t)
+
+       Call ``prepare_page_wait`` on EVERY worker tab before its first
+       navigation — the CDP tracker is per-tab. Prefer ``headless=True``
+       for concurrent runs; N visible windows waste paint and can
+       destabilize the desktop.
+
+    c) Fan the per-document work out with a semaphore + gather. Each
+       worker task owns ONE tab (round-robin or drawn from a pool) and
+       runs the SAME per-document logic you would have run serially —
+       navigate, wait_for_page_ready, extract, download, save_record.
+       Do not special-case the body of the document handler for
+       concurrency; only the outer loop changes::
+
+         sem = asyncio.Semaphore(parallel_runners)
+         async def worker(tab, doc_url):
+             async with sem:
+                 try:
+                     await process_document(tab, doc_url)
+                 except Exception as e:
+                     print(f"ERR {doc_url}: {e}")
+         await asyncio.gather(*(worker(worker_tabs[i % len(worker_tabs)], u)
+                                 for i, u in enumerate(doc_urls)))
+
+    d) Per-tab isolation — pass each worker task its OWN ``tab`` to
+       ``download_pdf_curl_cffi(url, out_dir, tab)`` and
+       ``save_page_html(tab, ...)``. Cookies are extracted from the
+       tab you pass; sharing one tab across concurrent tasks serializes
+       them (defeating the point) and races the browser's single
+       command queue for that tab.
+
+    e) Persistence is concurrency-safe — ``save_record`` is sync,
+       opens its own short-lived SQLite connection per call, and sets
+       ``PRAGMA busy_timeout=5000`` so concurrent writes wait rather
+       than raise ``database is locked``. You still MUST call it
+       ``save_record(url, {...})`` bare (rule 11) — never ``await`` it.
+       Call it AS EACH record is produced, not collected in memory;
+       this keeps crash-resilience intact under concurrency (a
+       killed run leaves every completed document already committed).
+
+    f) Validation — when the concurrency directive is present, your
+       single validation script (rule 7) MUST open the worker tabs
+       and run ``gather`` over a SMALL slice (e.g. first 2-3
+       documents) to prove the tab pool, semaphore, and per-tab
+       download/save all work concurrently without crashing. Print
+       which tab handled which document so you can verify they
+       actually ran in parallel.
 Remember: explore the page first (navigate → extract → click filter
 → scroll → extract again), then write ONE validation script that
 tests the full strategy in a single run (you only get 3 attempts —

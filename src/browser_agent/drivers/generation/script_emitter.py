@@ -35,9 +35,11 @@ from loguru import logger
 
 from browser_agent.adapters.emitted_clean_launch import (
     with_emitted_clean_launch,
+    with_emitted_inject_nopecha,
     with_emitted_inject_profile_path,
     with_emitted_normalize_launch,
 )
+from browser_agent.adapters.nopecha_extension import NopechaExtension
 from browser_agent.adapters.emitted_page_wait import with_emitted_page_wait
 from browser_agent.adapters.emitted_pdf_download import with_emitted_pdf_download
 from browser_agent.adapters.emitted_save_html import with_emitted_save_html
@@ -89,6 +91,7 @@ class ScriptEmitter:
         code = with_emitted_inject_profile_path(code, self._profile_path(run_path))
         code, n = self._apply(with_emitted_clean_launch, code, "clean_launch")
         applied.extend(n)
+        code = with_emitted_inject_nopecha(code, NopechaExtension().ensure_ready())
         code, n = self._apply(with_emitted_page_wait, code, "page_wait")
         applied.extend(n)
         code, n = self._apply(with_emitted_save_record, code, "save_record")

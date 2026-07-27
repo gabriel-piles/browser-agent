@@ -54,6 +54,55 @@ SMOKE_TEST_TIMEOUT_S = 60.0
 # the script's globals before exec'ing the file, redirecting DB writes
 # and downloads into the scratch dir. Mirrors the in-process runner's
 # injection (in_process_script_runner_adapter.py:193).
+_ZD_RUNTIME_ERROR_PATTERNS: list[tuple[str, str, str]] = [
+    (
+        "tab.evaluate",
+        "evaluate() missing 1 required positional argument",
+        "tab.evaluate — called without expression argument",
+    ),
+    (
+        "TypeError: object NoneType can't be used in 'await' expression",
+        "save_record sync",
+        "save_record — awaited synchronous helper",
+    ),
+    (
+        "AttributeError: module 'zendriver' has no attribute 'start'",
+        "zd.start not found",
+        "zendriver.start — no such function",
+    ),
+    ("TypeError: 'NoneType' object is not callable", "NoneType called", "zendriver object was None — wrong browser startup"),
+    (
+        "TimeoutError: wait_for_anchors timed out after",
+        "wait_for_anchors timeout",
+        "wait_for_anchors — zero matches or wrong selector",
+    ),
+    (
+        "ModuleNotFoundError: No module named 'playwright'",
+        "playwright import",
+        "agent imports playwright instead of zendriver CDP",
+    ),
+    ("KeyError: 'file_size'", "file_size key", "result dict has no file_size key; use 'size'"),
+    (
+        "zendriver.core.connection.ProtocolException",
+        "ProtocolException",
+        "zendriver CDP protocol error — bad evaluate() call",
+    ),
+    ("zendriver.core.elements.ElementNotFound", "ElementNotFound", "zendriver element not found — wrong selector"),
+    # Generic Python errors indicating the agent's script is structurally broken
+    ("NameError: name '", "NameError", "undefined variable — agent used wrong API name"),
+    ("SyntaxError: invalid syntax", "SyntaxError", "syntax error — agent emitted malformed Python"),
+    ("ImportError: cannot import name '", "ImportError", "import error — agent imports wrong module/name"),
+    ("ModuleNotFoundError: No module named '", "ModuleNotFoundError", "missing module — agent imports non-existent package"),
+    ("AttributeError: '", "AttributeError", "attribute error — agent called wrong method/property"),
+    ("TypeError: ", "TypeError", "type error — agent passed wrong argument type"),
+    (
+        "asyncio.run() cannot be called from a running event loop",
+        "asyncio.run error",
+        "agent used asyncio.run() inside running loop",
+    ),
+]
+
+
 _PREAMBLE = """\
 import runpy, sys
 g = {{"_SAVE_RECORD_DB_PATH": {db!r}, "_SAVE_RECORD_TASK_SLUG": "smoke"}}
@@ -129,6 +178,43 @@ async def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
             proc.kill()
 
 
+def _log_smoke_failure(output: str) -> None:
+    """Catch-all: log the root error line from any smoke test failure."""
+    lines = output.strip().split("\n")
+    error_line = ""
+    for line in reversed(lines):
+        stripped = line.strip()
+        if (
+            stripped
+            and not stripped.startswith("Traceback")
+            and not stripped.startswith("File ")
+            and not stripped.startswith("  ")
+        ):
+            error_line = stripped
+            break
+    summary = f" — root error: {error_line}" if error_line else ""
+    logger.warning("smoke test FAILED{summary}", summary=summary)
+
+
+def _log_zendriver_errors_in_output(output: str) -> None:
+    """Scan ``output`` for patterns indicating zendriver API misuse and log them."""
+    found: list[str] = []
+    for pattern, label, description in _ZD_RUNTIME_ERROR_PATTERNS:
+        if pattern in output:
+            found.append(description)
+            logger.warning(
+                "[SMOKE ZD-ERROR] — {label}: {description}",
+                label=label,
+                description=description,
+            )
+    if found:
+        logger.warning(
+            "smoke test — zendriver runtime errors: {count} issue(s) — {gaps}",
+            count=len(found),
+            gaps="; ".join(found),
+        )
+
+
 def log_smoke_test_result(result: SmokeTestResult, script_path: Path) -> None:
     """Log the smoke-test result prominently so the operator sees it."""
     if result.success:
@@ -142,4 +228,6 @@ def log_smoke_test_result(result: SmokeTestResult, script_path: Path) -> None:
             logger.info("smoke test PASSED: {path}", path=script_path)
         return
     logger.error("smoke test FAILED: {path}", path=script_path)
+    _log_smoke_failure(result.output)
+    _log_zendriver_errors_in_output(result.output)
     logger.error("smoke test output:\n{output}", output=result.output)

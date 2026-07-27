@@ -180,11 +180,37 @@ def with_emitted_clean_launch(python_code: str) -> str:
     return f"{EMITTED_CLEAN_LAUNCH_BLOCK}{python_code}"
 
 
+def with_emitted_inject_nopecha(python_code: str, extension_dir: Path | None) -> str:
+    """Inject the NopeCHA extension dir into the vendored clean-launch helper.
+
+    Runs after :func:`with_emitted_clean_launch` so the vendored block
+    (and its ``_NOPECHA_EXTENSION_DIR = None`` line) is already present.
+    Rewrites that single line to ``_NOPECHA_EXTENSION_DIR = <repr(path)>``
+    when a path is given; when ``extension_dir`` is ``None`` (disabled or
+    provisioning failed) the line is left as ``= None`` so no
+    ``--load-extension`` flag is added — behavior unchanged.
+    """
+    if extension_dir is None:
+        return python_code
+    marker = "_NOPECHA_EXTENSION_DIR = None"
+    if marker not in python_code:
+        return python_code
+    from loguru import logger
+
+    replacement = f"_NOPECHA_EXTENSION_DIR = {str(extension_dir)!r}"
+    logger.info(
+        "emitted-script injector wired nopecha extension dir at {path}",
+        path=extension_dir,
+    )
+    return python_code.replace(marker, replacement, 1)
+
+
 _EMITTED_CLEAN_LAUNCH_SUFFIX = '''
 # Same default the agent uses (see ``configuration.ZENDRIVER_HEADLESS``).
 _EMITTED_HEADLESS = os.environ.get("ZENDRIVER_HEADLESS", "false").lower() in {"1", "true", "yes"}
 _CHROMIUM_BIN = "/usr/bin/chromium"
 _REAL_CHROMIUM_PROFILE = Path.home() / ".config" / "chromium"
+_NOPECHA_EXTENSION_DIR = None  # injected by the emit pipeline
 
 
 def _free_port():
@@ -256,6 +282,8 @@ async def start_browser(headless=None, user_data_dir=None):
     ]
     if headless:
         args.append("--headless=new")
+    if _NOPECHA_EXTENSION_DIR:
+        args.append(f"--load-extension={_NOPECHA_EXTENSION_DIR}")
 
     process = subprocess.Popen(
         args,

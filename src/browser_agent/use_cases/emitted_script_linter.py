@@ -121,6 +121,30 @@ def _check_evaluate_iife(python_code: str) -> list[LintFinding]:
     return out
 
 
+def _check_evaluate_args(python_code: str) -> list[LintFinding]:
+    out: list[LintFinding] = []
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return out
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute) or func.attr != "evaluate":
+            continue
+        if len(node.args) > 1:
+            out.append(
+                LintFinding(
+                    rule="10",
+                    severity="error",
+                    message="tab.evaluate takes only expression positionally; pass await_promise/return_by_value as keywords, interpolate other values into the string",
+                    line=node.lineno,
+                )
+            )
+    return out
+
+
 def _check_bare_paths(python_code: str) -> list[LintFinding]:
     out: list[LintFinding] = []
     pat = re.compile(r"""Path\(\s*["']downloads["']\s*\)|\./downloads""")
@@ -154,6 +178,36 @@ def _check_self_contained(python_code: str) -> list[LintFinding]:
     return out
 
 
+# Zendriver-specific rules — violations indicate the agent does not
+# understand zendriver's API surface (browser launcher, CDP-only
+# selectors, evaluate calling convention, helper return shapes).
+# Separated from general lint rules so the driver can log them distinctly.
+_ZENDRIVER_RULES: frozenset[str] = frozenset(
+    {
+        "0",  # zd.start() vs start_browser()
+        "7",  # Playwright-only selectors (CDP rejects them)
+        "8",  # HTTP libs instead of tab.get()
+        "10",  # tab.evaluate calling convention
+        "11",  # await save_record (sync)
+        "13",  # file_size vs size key
+    }
+)
+
+
+def _is_zendriver_rule(rule: str) -> bool:
+    return rule in _ZENDRIVER_RULES
+
+
+_ZENDRIVER_RULE_NAMES: dict[str, str] = {
+    "0": "browser launcher — uses zd.start() instead of start_browser()",
+    "7": "selectors — uses Playwright-only pseudo-selectors rejected by CDP",
+    "8": "HTTP client — uses raw HTTP lib instead of zendriver tab.get()",
+    "10": "tab.evaluate — wrong calling convention (extra positional args or bare arrow function)",
+    "11": "save_record — awaited a synchronous helper (TypeError at runtime)",
+    "13": "result shape — uses file_size key instead of size",
+}
+
+
 class EmittedScriptLinter:
     """Lint the RAW LLM python_code (before emit transforms)."""
 
@@ -166,6 +220,7 @@ class EmittedScriptLinter:
             _check_http_imports,
             _check_playwright_selectors,
             _check_evaluate_iife,
+            _check_evaluate_args,
             _check_bare_paths,
             _check_self_contained,
         )
@@ -175,3 +230,18 @@ class EmittedScriptLinter:
         for check in self._checks:
             findings.extend(check(python_code))
         return findings
+
+    @staticmethod
+    def zendriver_findings(findings: list[LintFinding]) -> list[LintFinding]:
+        """Return only the findings that indicate zendriver API misunderstanding."""
+        return [f for f in findings if _is_zendriver_rule(f.rule)]
+
+    @staticmethod
+    def general_findings(findings: list[LintFinding]) -> list[LintFinding]:
+        """Return findings that are NOT zendriver-specific (syntax, convention, paths)."""
+        return [f for f in findings if not _is_zendriver_rule(f.rule)]
+
+    @staticmethod
+    def describe_zendriver_finding(finding: LintFinding) -> str:
+        """Return a human-readable description of the zendriver concept the agent got wrong."""
+        return _ZENDRIVER_RULE_NAMES.get(finding.rule, finding.message)

@@ -180,6 +180,7 @@ class BypassConfig:
     interactive_timeout_seconds: float = 120.0
     real_user_agent: str | None = None
     profile_dir: Path | None = None
+    nopecha_solve_seconds: float = 0.0
 
 
 _REALISTIC_USER_AGENTS = [
@@ -233,6 +234,13 @@ class HumanChallengeBypass:
             conf=status.confidence,
             details=status.details,
         )
+
+        if self.config.nopecha_solve_seconds > 0:
+            logger.info("nopecha: waiting up to {s}s for extension to solve", s=self.config.nopecha_solve_seconds)
+            status = await self._wait_extension_solve(tab, self.config.nopecha_solve_seconds)
+            if not status:
+                logger.info("nopecha: challenge cleared by extension")
+                return ChallengeStatus.none()
 
         for round_ in range(1, self.config.max_wait_rounds + 1):
             logger.info(
@@ -295,6 +303,31 @@ class HumanChallengeBypass:
                 return ChallengeStatus.none()
             logger.info(
                 "human-challenge still present; waiting for operator ({remaining:.0f}s left)",
+                remaining=deadline - asyncio.get_event_loop().time(),
+            )
+        current_url = getattr(tab, "url", "") or ""
+        current_title = await self._safe_title(tab)
+        current_html = await self._safe_html(tab)
+        return self.detector.detect(current_url, current_title, current_html)
+
+    async def _wait_extension_solve(self, tab: Any, budget_s: float) -> ChallengeStatus:
+        """Poll for the NopeCHA extension to clear the challenge without clicking.
+
+        NopeCHA injects into challenge frames and solves autonomously, so
+        this method only polls ``self.detector.detect`` every 1.5s up to
+        ``budget_s``. Returns the last status (falsy when solved).
+        """
+        deadline = asyncio.get_event_loop().time() + budget_s
+        while asyncio.get_event_loop().time() < deadline:
+            await tab.sleep(1.5)
+            current_url = getattr(tab, "url", "") or ""
+            current_title = await self._safe_title(tab)
+            current_html = await self._safe_html(tab)
+            status = self.detector.detect(current_url, current_title, current_html)
+            if not status:
+                return ChallengeStatus.none()
+            logger.info(
+                "nopecha: challenge still present; extension retrying ({remaining:.0f}s left)",
                 remaining=deadline - asyncio.get_event_loop().time(),
             )
         current_url = getattr(tab, "url", "") or ""

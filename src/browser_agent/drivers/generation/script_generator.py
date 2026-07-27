@@ -37,12 +37,22 @@ from browser_agent.use_cases.generate_zendriver_script_use_case import (
 class ScriptGenerator:
     """Build deps + run the script-generation use case for one task."""
 
-    async def generate(self, task: str, run_path: Path) -> tuple[GeneratedScript, GenerateZendriverScriptUseCase]:
-        """Run the agent for ``task``; return the script + live use case."""
+    async def generate(
+        self,
+        task: str,
+        run_path: Path,
+        context: str = "",
+    ) -> tuple[GeneratedScript, GenerateZendriverScriptUseCase]:
+        """Run the agent for ``task``; return the script + live use case.
+
+        ``context`` is an optional directive prepended to the task (e.g. the
+        concurrency requirement derived from ``RunConfig.parallel_runners``);
+        empty string keeps the classic single-prompt behaviour.
+        """
         session = self._build_session(run_path)
         deps = self._build_deps(session, run_path)
         use_case = GenerateZendriverScriptUseCase(deps)
-        script = await use_case.execute(CodeGenerationRequest(task=task))
+        script = await use_case.execute(CodeGenerationRequest(task=task, context=context))
         return script, use_case
 
     @staticmethod

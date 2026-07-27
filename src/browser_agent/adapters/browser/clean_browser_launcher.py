@@ -82,6 +82,7 @@ def launch_chromium(
     user_data_dir: str | Path,
     headless: bool = False,
     user_agent: str | None = None,
+    extension_dir: str | Path | None = None,
 ) -> subprocess.Popen[bytes]:
     """Launch Chromium with minimal flags — only what a real user session has.
 
@@ -97,6 +98,8 @@ def launch_chromium(
         args.append("--headless=new")
     if user_agent:
         args.append(f"--user-agent={user_agent}")
+    if extension_dir is not None:
+        args.append(f"--load-extension={extension_dir}")
 
     logger.info("launching clean Chromium: {}", " ".join(args))
     return subprocess.Popen(
