@@ -32,7 +32,7 @@ class MappingLoader:
     def _refuse(self, mapping_path: Path) -> None:
         """Print the missing-mapping refusal and exit the process."""
         print(f"ERROR: No mapping at {mapping_path}.")
-        print("  Run step_2_propose_mapping.py first to create one, then review the YAML.")
+        print("  Run step_3_propose_mapping.py first to create one, then review the YAML.")
         sys.exit(1)
 
     def _load(self, mapping_path: Path) -> UwaziMapping:

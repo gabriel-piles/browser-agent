@@ -1,4 +1,4 @@
-"""Console reporting for the step_1 propose driver.
+"""Console reporting for the step_3 propose driver.
 
 Keeps the human-facing print logic (catalog summary, mapping body,
 notices) behind one object so the driver script stays a thin flow.
@@ -38,7 +38,7 @@ class ProposeConsole:
         """Print the full mapping summary, then the next-step hint."""
         print(f"\nDraft mapping written to {self._mapping_path}")
         self._print_body(mapping)
-        print("\nNext: review the YAML, then run step_3_validate_data.py and step_4_upload_to_uwazi.py.")
+        print("\nNext: review the YAML, then run step_4_validate_data.py and step_5_upload_to_uwazi.py.")
 
     def _print_body(self, mapping: UwaziMapping) -> None:
         """Print counts, skipped entries, and the identity block."""

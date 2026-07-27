@@ -159,6 +159,11 @@ have explored the page.
       page, download at least 2 from one page and print their final
       on-disk paths. Confirm the paths are unique and non-colliding
       (rule 13): no two PDFs share a filename, even if labels repeat.
+    - SUB-PAGE COVERAGE — when the task enumerates multiple peer
+      sub-pages (rule 16), the validation run MUST exercise at least
+      one filter value from EVERY sub-page and print the row count
+      from each. A validation that only touches the first sub-page
+      hides selector bugs on the others.
     - Perform the full data-collection logic (save_record calls,
       downloads, pagination loop, etc.) so the run proves the entire
       pipeline works end-to-end.
@@ -626,8 +631,8 @@ Script rules (HARD — every script you emit MUST follow these):
         save_record(url, {"title": "...", "countries": "Spain, Argentina"})
 
     Keep scalars as scalars (e.g. a single date stays a string). The
-    pipeline downstream (``step_2`` thesaurus matching and
-    ``step_3`` multiselect wrapping) relies on this shape — it expands
+    pipeline downstream (``step_4`` thesaurus matching and
+    ``step_5`` multiselect wrapping) relies on this shape — it expands
     list values one element at a time, but a comma-joined string is
     passed through unchanged. This makes the scraper crash-resilient:
     if it dies at page 3000, the first 2999 records are already in
@@ -783,17 +788,31 @@ Script rules (HARD — every script you emit MUST follow these):
     classic single-tab flow from rule 1 — do NOT invent concurrency.
     When it IS present, follow this pattern exactly:
 
-    a) Discovery stays single-tab. Filter iteration, scroll/load-more,
-       and link collection are inherently serial — run them on
-       ``browser.main_tab`` exactly as rules 2-3 describe, and
-       collect the FULL deduplicated URL list before fanning out.
+    a) Discovery is single-tab AND collects PDF URLs, not page URLs.
+       Run ALL filter iteration, page navigation, scroll/load-more,
+       and link extraction serially on ``browser.main_tab`` exactly
+       as rules 2-3 describe, until you have the FULL deduplicated
+       list of DOWNLOAD URLs (the ``a[href$='.pdf']`` hrefs), with
+       each record's metadata (country, reference, language, the
+       page URL it came from). Only then do you open worker tabs.
        Never run discovery concurrently.
 
-    b) Open the worker tabs once, up front, right after start_browser::
+       The unit of work that fans out is ONE DOWNLOAD (one PDF URL +
+       its already-extracted metadata), NOT one page. A task like
+       "iterate 5 categories x 30 years" has ~150 page navigations
+       that MUST stay serial in discovery, then ~1500 PDF downloads
+       that fan out across N tabs. Coupling page navigation into the
+       per-document worker (navigate-extract-download inside one
+       ``process_document``) serializes downloads behind navigation
+       and makes concurrency useless — a 60s budget expires during
+       discovery and zero PDFs download.
+
+    b) Open the worker tabs once, up front, AFTER discovery completes::
 
          browser = await start_browser(headless=False)
          main_tab = browser.main_tab
          await prepare_page_wait(main_tab)
+         # ... serial discovery on main_tab builds `records` ...
          worker_tabs = [main_tab]
          for _ in range(parallel_runners - 1):
              t = await browser.get("about:blank", new_tab=True)
@@ -806,22 +825,27 @@ Script rules (HARD — every script you emit MUST follow these):
        real browser to pass anti-bot checks, and the operator must be
        able to watch the script work.
 
-    c) Fan the per-document work out with a semaphore + gather. Each
-       worker task owns ONE tab (round-robin or drawn from a pool) and
-       runs the SAME per-document logic you would have run serially —
-       navigate, wait_for_page_ready, extract, download, save_record.
-       Do not special-case the body of the document handler for
-       concurrency; only the outer loop changes::
+    c) Fan the DOWNLOADS out with a semaphore + gather. Each worker
+       task owns ONE tab and downloads ONE PDF (the work item is a
+       PDF URL + its metadata, not a page URL). The per-download
+       handler does NOT navigate or extract — it only downloads and
+       saves the record. ``save_record`` is called inside the worker
+       so crash-resilience holds under concurrency::
 
          sem = asyncio.Semaphore(parallel_runners)
-         async def worker(tab, doc_url):
+         async def download_one(tab, rec):
              async with sem:
                  try:
-                     await process_document(tab, doc_url)
+                     result = await download_pdf_browser(tab, rec["pdf_url"], out_dir)
+                     save_record(rec["source_url"], {**rec, "pdf_filename": ...})
                  except Exception as e:
-                     print(f"ERR {doc_url}: {e}")
-         await asyncio.gather(*(worker(worker_tabs[i % len(worker_tabs)], u)
-                                 for i, u in enumerate(doc_urls)))
+                     print(f"ERR {rec['pdf_url']}: {e}")
+         await asyncio.gather(*(download_one(worker_tabs[i % len(worker_tabs)], r)
+                                 for i, r in enumerate(records)))
+
+       If a download needs the worker tab warmed to the target domain
+       (WAF clearance), navigate each worker tab to the domain root
+       ONCE before the gather, not per download.
 
     d) Per-tab isolation — pass each worker task its OWN ``tab`` to
        ``download_pdf_curl_cffi(url, out_dir, tab)`` and
@@ -840,12 +864,13 @@ Script rules (HARD — every script you emit MUST follow these):
        killed run leaves every completed document already committed).
 
     f) Validation — when the concurrency directive is present, your
-       single validation script (rule 7) MUST open the worker tabs
-       and run ``gather`` over a SMALL slice (e.g. first 2-3
-       documents) to prove the tab pool, semaphore, and per-tab
+       single validation script (rule 7) MUST run discovery to collect
+       a SMALL slice of records (e.g. first 2-3 pages' worth), then
+       open the worker tabs and run ``gather`` over those records'
+       downloads to prove the tab pool, semaphore, and per-tab
        download/save all work concurrently without crashing. Print
-       which tab handled which document so you can verify they
-       actually ran in parallel.
+       which tab handled which PDF so you can verify they actually
+       ran in parallel.
 16. Per-sub-page selector verification — when the task enumerates
     multiple peer sub-pages (e.g. "Admissibilities, Inadmissibilities,
     Friendly Settlements, Merits, Archive"), a selector that works on
@@ -858,7 +883,7 @@ Script rules (HARD — every script you emit MUST follow these):
     "rows=0" for 80% of the work and looks successful while collecting
     nothing.
 
-    MANDATORY: during exploration (Steps 1-6), navigate to and
+    MANDATORY — exploration: during Steps 1-6, navigate to and
     ``extract`` from EVERY enumerated sub-page, not just the first.
     If the shared selector is container-scoped (``#tabToday ...``),
     confirm that container exists on every sub-page; if it does not,
@@ -866,9 +891,19 @@ Script rules (HARD — every script you emit MUST follow these):
     item's own tag/class, or a stable ancestor present on all
     sub-pages. Prefer a selector derived from the repeating item
     itself (``li > a[href$='.pdf']``) over one derived from a
-    page-specific wrapper. Print, in the validation script, the row
-    count from EACH sub-page so a zero on one sub-page is visible
-    before the script is emitted.
+    page-specific wrapper.
+
+    MANDATORY — validation: the validation script (Step 7) MUST
+    print the row count from EACH enumerated sub-page, not just the
+    first. When discovery iterates many filter values per sub-page,
+    the validation slice MUST include at least one filter value from
+    EVERY sub-page (e.g. one year from each of Admissibilities,
+    Inadmissibilities, Friendly Settlements, Merits, Archive), so a
+    selector that returns 0 on 3 of 5 sub-pages is visible in the
+    validation output before the script is emitted. Slicing only from
+    the first sub-page you explored hides the bug — the validation
+    passes, the smoke test passes, and the operator gets a script
+    that collects nothing from 60% of the site.
 17. No invented scope caps — when the task says "download all",
     "extract every", or "iterate through every year", the script MUST
     process the full range the page exposes. Do NOT invent

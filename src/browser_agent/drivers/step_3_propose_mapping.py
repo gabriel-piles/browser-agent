@@ -4,8 +4,8 @@ Run this driver when you have a populated ``data/runs/<active_run>/metadata.db``
 and want an LLM to draft a Uwazi mapping from the actual extracted
 data, without the intermediate analyzer step. The human reviews the
 resulting YAML in ``data/runs/<active_run>/mappings/`` and edits it
-before running :mod:`browser_agent.drivers.step_2_uwazi_match` and
-::mod:`browser_agent.drivers.step_3_uwazi_apply`.
+before running :mod:`browser_agent.drivers.step_4_validate_data`
+and :mod:`browser_agent.drivers.step_5_upload_to_uwazi`.
 
 The driver does not mutate the ``metadata.db`` cache and does not
 push anything to Uwazi. The only side effect is the YAML file; the

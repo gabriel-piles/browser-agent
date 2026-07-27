@@ -1,7 +1,7 @@
 """Apply the reviewed mapping + thesaurus mappings to Uwazi (no LLM).
 
-Run this driver after :mod:`browser_agent.drivers.step_1_uwazi_propose`
-(LLM draft) and :mod:`browser_agent.drivers.step_2_uwazi_match`
+Run this driver after :mod:`browser_agent.drivers.step_3_propose_mapping`
+(LLM draft) and :mod:`browser_agent.drivers.step_4_validate_data`
 (thesaurus value mappings), and after a human has reviewed the
 YAMLs they wrote. The driver reads the reviewed
 ``mappings/uwazi_mapping.yaml``, loads the ``metadata.db`` rows

@@ -1,4 +1,4 @@
-"""Top-level driver for the download-verification agent (step 1).
+"""Top-level driver for the download-verification agent (step 2).
 
 Reads the active run from ``active_run.yaml``, builds a
 :class:`VerificationAgentDeps` with a :class:`ZendriverBrowserSession`,
@@ -10,7 +10,7 @@ script + a gap map of the DB, runs the
 and writes ``verification_report.md`` into the run directory.
 
 Usage:
-    python -m browser_agent.drivers.step_1_verify_downloaded_pdfs
+    python -m browser_agent.drivers.step_2_verify_downloaded_pdfs
 """
 
 from __future__ import annotations

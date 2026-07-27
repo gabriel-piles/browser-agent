@@ -2,8 +2,8 @@
 
 This is the contract between ``browser-agent`` metadata rows and a
 specific Uwazi template. The :class:`UwaziMapping` is the only
-file ``step_4_upload_to_uwazi.py`` reads to push data; ``step_2_propose_mapping.py``
-drafts it, a human reviews it, and ``step_3_validate_data.py`` adds
+file ``step_5_upload_to_uwazi.py`` reads to push data; ``step_3_propose_mapping.py``
+drafts it, a human reviews it, and ``step_4_validate_data.py`` adds
 per-thesaurus value mappings that the apply step then uses to
 normalise select/multiselect columns.
 """
