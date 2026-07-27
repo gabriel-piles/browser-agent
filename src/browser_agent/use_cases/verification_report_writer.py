@@ -77,6 +77,7 @@ class VerificationReportWriter:
             f"- Missing: {missing}\n"
             f"- Corrupt: {corrupt}\n"
             f"- Expected PDF total: {report.expected_pdf_total}\n"
+            f"- Observed PDF total: {report.observed_pdf_total}\n"
             f"- Coverage complete: {report.coverage_complete}\n"
             f"- Missing coverage paths: {gaps}"
         )

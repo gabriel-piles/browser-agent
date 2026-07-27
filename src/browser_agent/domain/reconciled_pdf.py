@@ -32,7 +32,6 @@ class ReconciledPdf(BaseModel):
         description="True when db_pdf_filename differs from the computed name.",
     )
     verdict: str = Field(
-        description="One of: present, file_not_downloaded, corrupt_file, "
-        + "missing_pdf_url, empty_pdf_url, filename_mismatch, suspiciously_small.",
+        description="One of: present, file_not_downloaded, corrupt_file, " + "empty_pdf_url, suspiciously_small.",
     )
     notes: str = Field(default="", description="Human-readable detail.")

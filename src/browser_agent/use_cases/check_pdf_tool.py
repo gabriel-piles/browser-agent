@@ -42,6 +42,7 @@ async def check_pdf(ctx: RunContext[VerificationAgentDeps], request: PdfCheckReq
     deps = ctx.deps
     if deps.pdf_checks >= deps.pdf_check_limit:
         return _limit_reached(deps)
+    deps.pdf_checks += 1
     async with traced_tool("check_pdf", summary=request.url):
         result = _run_check(deps, request)
         deps.pdf_results.append(result)

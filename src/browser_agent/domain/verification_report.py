@@ -35,9 +35,13 @@ class VerificationReport(BaseModel):
         default=0,
         description="How many PDFs the site advertised across all paths (0 if unknown).",
     )
+    observed_pdf_total: int = Field(
+        default=0,
+        description="How many distinct pdf_url rows the DB has across all paths.",
+    )
     coverage_complete: bool = Field(
         default=False,
-        description="True when observed DB total meets the expected advertised total.",
+        description="True when observed_pdf_total meets or exceeds expected_pdf_total.",
     )
     recommendations: str = Field(
         description="Short step-0 handoff summary referencing missing_coverage.",

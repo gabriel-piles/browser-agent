@@ -67,11 +67,15 @@ class VerifyDownloadsDriver:
             return 2
         script = script_path.read_text(encoding="utf-8")
         explanation = self._read_sidecar_explanation(script_path)
-        reconciler_section = self._run_reconciler(run_path)
-        deps = self._build_deps(run_path)
-        request = self._build_request(run, script, run_path, explanation, reconciler_section)
-        model = OllamaAdapter(model=VERIFICATION_MODEL).get_model()
-        report = await VerifyDownloadsUseCase(deps, model).execute(request)
+        try:
+            reconciler_section = self._run_reconciler(run_path)
+            deps = self._build_deps(run_path)
+            request = self._build_request(run, script, run_path, explanation, reconciler_section)
+            model = OllamaAdapter(model=VERIFICATION_MODEL).get_model()
+            report = await VerifyDownloadsUseCase(deps, model).execute(request)
+        except Exception as exc:
+            logger.error("verification could not run: {exc}", exc=exc)
+            return 2
         path = VerificationReportWriter(run_path).write(report)
         logger.info("verification report written to {path}", path=path)
         return self._exit_code(report)

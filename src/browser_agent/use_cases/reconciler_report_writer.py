@@ -58,7 +58,7 @@ class ReconcilerReportWriter:
         corrupt = sum(1 for r in per_row if r.verdict == "corrupt_file")
         small = sum(1 for r in per_row if r.verdict == "suspiciously_small")
         empty = sum(1 for r in per_row if r.verdict == "empty_pdf_url")
-        mismatch = sum(1 for r in per_row if r.verdict == "filename_mismatch")
+        mismatch = sum(1 for r in per_row if r.filename_mismatch)
         return (
             f"- DB rows: {total}\n"
             f"- Present: {present}\n"

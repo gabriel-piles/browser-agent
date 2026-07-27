@@ -125,8 +125,10 @@ accumulated into `pdf_results` for you. Concentrate on the analysis only.
   instruction to hand to the step 0 agent).
 - expected_pdf_total: the sum of site-advertised counts across paths
   (0 if none were harvestable).
-- coverage_complete: true when the observed DB total meets the
-  expected advertised total.
+- observed_pdf_total: the count of distinct pdf_url rows in the DB
+  across all paths (from query_db COUNT).
+- coverage_complete: true when observed_pdf_total meets or exceeds
+  expected_pdf_total.
 - recommendations: a short step-0 handoff summary referencing
   missing_coverage for detail.
 
