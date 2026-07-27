@@ -36,12 +36,16 @@ async def query_db(ctx: RunContext[VerificationAgentDeps], sql_query: str) -> st
     verbatim (parse the JSON in a follow-up ``run_read_script`` if you
     need decoded fields).
     """
+    deps = ctx.deps
+    if deps.query_db_calls >= deps.query_db_limit:
+        return _limit_reached(deps)
     async with traced_tool("query_db", summary=sql_query[:120]):
         guard = _guard(sql_query)
         if guard is not None:
             return guard
-        rows, columns = _run_select(ctx.deps.db_path, sql_query)
-    return _format(rows, columns, ctx.deps.db_path)
+        rows, columns = _run_select(deps.db_path, sql_query)
+        deps.query_db_calls += 1
+    return _format(rows, columns, deps.db_path)
 
 
 def _guard(sql_query: str) -> str | None:
@@ -52,6 +56,15 @@ def _guard(sql_query: str) -> str | None:
     if len(parts) != 1:
         return f"# query_db: rejected — pass exactly one statement with no trailing ';'.\n{_SCHEMA_REMINDER}"
     return None
+
+
+def _limit_reached(deps: VerificationAgentDeps) -> str:
+    return (
+        f"# query_db limit reached ({deps.query_db_limit}).\n"
+        "You have used all your SQL queries. STOP calling this tool.\n"
+        "Use the deterministic reconciler inventory for coverage; "
+        "emit the final VerificationReport now."
+    )
 
 
 def _run_select(db_path: Path, sql_query: str) -> tuple[list[tuple[object, ...]], list[str]]:

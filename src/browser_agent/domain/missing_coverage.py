@@ -16,6 +16,14 @@ class MissingCoverage(BaseModel):
     navigation_path: str = Field(
         description="The prompt-described path/filter/page that was missed.",
     )
+    expected_total: int = Field(
+        default=0,
+        description="How many PDFs the site advertised for this path (0 if unknown).",
+    )
+    observed_total: int = Field(
+        default=0,
+        description="How many distinct pdf_url rows the DB has for this path.",
+    )
     expected: str = Field(
         description="What the prompt says should be there.",
     )

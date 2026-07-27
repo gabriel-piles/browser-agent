@@ -32,11 +32,15 @@ from browser_agent.adapters.runs_config_loader import RunsConfigLoader
 from browser_agent.configuration import (
     VERIFICATION_MODEL,
     VERIFICATION_PDF_COUNT,
+    VERIFICATION_QUERY_LIMIT,
     VERIFICATION_SCRIPT_RUN_LIMIT,
     ZENDRIVER_HEADLESS,
 )
 from browser_agent.domain.verification_request import VerificationRequest
+from browser_agent.domain.verification_report import VerificationReport
 from browser_agent.logging_config import configure_logging
+from browser_agent.use_cases.reconcile_downloads_use_case import ReconcileDownloadsUseCase
+from browser_agent.use_cases.reconciler_report_writer import ReconcilerReportWriter
 from browser_agent.use_cases.scraping_gap_map_builder import ScrapingGapMapBuilder
 from browser_agent.use_cases.verification_agent_deps import VerificationAgentDeps
 from browser_agent.use_cases.verification_report_writer import VerificationReportWriter
@@ -54,21 +58,39 @@ class VerifyDownloadsDriver:
         return asyncio.run(self._run_async())
 
     async def _run_async(self) -> int:
-        """Load the active run, build deps + request, run, write report."""
+        """Load the active run, reconcile, run agent, write report, return exit code."""
         run = RunsConfigLoader.load_active()
         run_path = RunsConfigLoader.load_active_path()
         logger.info("verification driver starting run={run}", run=run.name)
         script_path = self._latest_script_path(run_path)
         if script_path is None:
-            return 1
+            return 2
         script = script_path.read_text(encoding="utf-8")
         explanation = self._read_sidecar_explanation(script_path)
+        reconciler_section = self._run_reconciler(run_path)
         deps = self._build_deps(run_path)
-        request = self._build_request(run, script, run_path, explanation)
+        request = self._build_request(run, script, run_path, explanation, reconciler_section)
         model = OllamaAdapter(model=VERIFICATION_MODEL).get_model()
         report = await VerifyDownloadsUseCase(deps, model).execute(request)
         path = VerificationReportWriter(run_path).write(report)
         logger.info("verification report written to {path}", path=path)
+        return self._exit_code(report)
+
+    def _run_reconciler(self, run_path: Path) -> str:
+        """Run the deterministic reconciler, persist it, return the markdown section."""
+        db_path = run_path / "metadata.db"
+        downloads_path = run_path / "downloads"
+        per_row, findings = ReconcileDownloadsUseCase(db_path, downloads_path).reconcile()
+        md_path, json_path = ReconcilerReportWriter(run_path).write(per_row, findings)
+        logger.info("reconciler inventory written to {path}", path=md_path)
+        logger.info("reconciler json written to {path}", path=json_path)
+        return ReconcilerReportWriter(run_path).render_section(per_row, findings)
+
+    @staticmethod
+    def _exit_code(report: VerificationReport) -> int:
+        """0 clean, 1 gaps found, 2 could not run."""
+        if report.missing_count > 0 or report.missing_coverage:
+            return 1
         return 0
 
     def _build_deps(self, run_path: Path) -> VerificationAgentDeps:
@@ -83,17 +105,26 @@ class VerifyDownloadsDriver:
             downloads_path=run_path / "downloads",
             script_runner=SubprocessReadScriptRunner(),
             pdf_check_limit=VERIFICATION_PDF_COUNT,
+            query_db_limit=VERIFICATION_QUERY_LIMIT,
             script_run_limit=VERIFICATION_SCRIPT_RUN_LIMIT,
         )
 
-    def _build_request(self, run, script: str, run_path: Path, explanation: str) -> VerificationRequest:
-        """Build the verification request from the run prompt, script, and gap map."""
+    def _build_request(
+        self,
+        run,
+        script: str,
+        run_path: Path,
+        explanation: str,
+        reconciler_section: str,
+    ) -> VerificationRequest:
+        """Build the verification request from the run prompt, script, gap map, and reconciler."""
         gap_map = ScrapingGapMapBuilder(run_path / "metadata.db").build()
         return VerificationRequest(
             task_prompt=run.prompt,
             generated_script=script,
             gap_map=gap_map,
             step0_explanation=explanation,
+            reconciler_inventory=reconciler_section,
         )
 
     def _latest_script_path(self, run_path: Path) -> Path | None:

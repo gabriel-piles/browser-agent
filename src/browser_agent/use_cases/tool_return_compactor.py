@@ -26,6 +26,7 @@ placeholder appended.
 
 from __future__ import annotations
 
+from typing import TypeVar
 from dataclasses import dataclass, field, replace
 
 from pydantic_ai import RunContext
@@ -38,13 +39,17 @@ from browser_agent.configuration import (
     COMPACT_KEEP_RECENT_VALIDATIONS,
     COMPACT_MAX_EXTRACTED_LINES,
     COMPACT_MIN_TRIM_CHARS,
-    COMPACT_STRUCTURED_MAX_TRIM_CHARS,
     COMPACT_TRUNCATED_PLACEHOLDER,
 )
-from browser_agent.use_cases.agent_deps import AgentDeps
+
+# Type var so the same capability works for both the step-0 agent
+# (``AgentDeps``) and the verification agent (``VerificationAgentDeps``).
+# The compactor never inspects ``ctx.deps``.
+AnyAgentDeps = TypeVar("AnyAgentDeps", covariant=True)
 
 _EXPLORE_TOOL = "explore_page"
 _VALIDATION_TOOL = "run_validation_script"
+
 
 _KEEP_ALL = 0
 
@@ -61,12 +66,12 @@ class _CutPlan:
     oth_cut: int = _KEEP_ALL
 
 
-class ToolReturnCompactor(AbstractCapability[AgentDeps]):
+class ToolReturnCompactor(AbstractCapability[AnyAgentDeps]):
     """pydantic-ai capability that trims old tool returns in the prompt."""
 
     async def before_model_request(
         self,
-        ctx: RunContext[AgentDeps],
+        ctx: RunContext[AnyAgentDeps],
         request_context: ModelRequestContext,
     ) -> ModelRequestContext:
         messages = request_context.messages

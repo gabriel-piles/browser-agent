@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from browser_agent.configuration import VERIFICATION_PDF_COUNT, VERIFICATION_SCRIPT_RUN_LIMIT
+from browser_agent.configuration import (
+    VERIFICATION_PDF_COUNT,
+    VERIFICATION_QUERY_LIMIT,
+    VERIFICATION_SCRIPT_RUN_LIMIT,
+)
+from browser_agent.domain.expected_path import ExpectedPath
+from browser_agent.domain.pdf_check_result import PdfCheckResult
 from browser_agent.ports.browser_session_port import BrowserSessionPort
 from browser_agent.ports.read_script_runner_port import ReadScriptRunnerPort
 
@@ -17,8 +23,10 @@ class VerificationAgentDeps:
     Carries the browser session (for ``explore_page``), the run's
     ``metadata.db`` and ``downloads/`` paths (for ``check_pdf`` and
     ``query_db``), the read-only script runner (for ``run_read_script``),
-    and counter/limit pairs that cap how many PDF checks and how many
-    forensic script runs one agent turn may perform.
+    and counter/limit pairs that cap how many PDF checks, SQL queries,
+    and forensic script runs one agent turn may perform. ``pdf_results``
+    accumulates the real :class:`PdfCheckResult` objects so the driver
+    can splice them into the report without the LLM re-transcribing them.
     """
 
     browser_session: BrowserSessionPort
@@ -29,3 +37,7 @@ class VerificationAgentDeps:
     pdf_check_limit: int = VERIFICATION_PDF_COUNT
     script_runs: int = 0
     script_run_limit: int = VERIFICATION_SCRIPT_RUN_LIMIT
+    query_db_calls: int = 0
+    query_db_limit: int = VERIFICATION_QUERY_LIMIT
+    pdf_results: list[PdfCheckResult] = field(default_factory=list)
+    declared_paths: list[ExpectedPath] = field(default_factory=list)

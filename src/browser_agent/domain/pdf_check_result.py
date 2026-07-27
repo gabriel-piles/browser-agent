@@ -19,9 +19,9 @@ class PdfCheckResult(BaseModel):
     file_size_bytes: int = Field(default=0, description="Size of the file in bytes (0 if missing).")
     is_valid_pdf: bool = Field(
         default=False,
-        description="True if the file starts with %PDF and is larger than 1 KB.",
+        description="True if the file has %PDF magic and %%EOF (size-independent).",
     )
     verdict: str = Field(
-        description="One of: present, missing_from_db, file_not_downloaded, corrupt_file.",
+        description="One of: present, suspiciously_small, missing_from_db, " + "file_not_downloaded, corrupt_file.",
     )
     notes: str = Field(default="", description="Extra context from the check.")

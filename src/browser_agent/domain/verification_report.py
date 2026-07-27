@@ -31,6 +31,14 @@ class VerificationReport(BaseModel):
         default_factory=list,
         description="One entry per prompt-described path not fully covered.",
     )
+    expected_pdf_total: int = Field(
+        default=0,
+        description="How many PDFs the site advertised across all paths (0 if unknown).",
+    )
+    coverage_complete: bool = Field(
+        default=False,
+        description="True when observed DB total meets the expected advertised total.",
+    )
     recommendations: str = Field(
         description="Short step-0 handoff summary referencing missing_coverage.",
     )

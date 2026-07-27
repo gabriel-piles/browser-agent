@@ -17,6 +17,7 @@ ORCHESTRATOR_MODEL = "deepseek-v4-pro:cloud"
 VERIFICATION_MODEL = "minimax-m3:cloud"
 VERIFICATION_PDF_COUNT = 10
 VERIFICATION_SCRIPT_RUN_LIMIT = 8
+VERIFICATION_QUERY_LIMIT = 10
 
 # YAML file that defines the active run: only ``active_run`` (the name to
 # execute). Per-run configuration (template, prompt, etc.) lives in

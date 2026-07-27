@@ -10,6 +10,7 @@ back as a :class:`VerificationReport` for the caller.
 from __future__ import annotations
 
 import time
+import asyncio
 from typing import Any
 
 from pydantic_ai import Agent, UsageLimits
@@ -20,8 +21,10 @@ from browser_agent.configuration import MAX_LLM_CALLS
 from browser_agent.domain.verification_report import VerificationReport
 from browser_agent.domain.verification_request import VerificationRequest
 from browser_agent.use_cases.check_pdf_tool import check_pdf
+from browser_agent.use_cases.declare_paths_tool import declare_paths
 from browser_agent.use_cases.query_db_tool import query_db
 from browser_agent.use_cases.run_read_script_tool import run_read_script
+from browser_agent.use_cases.tool_return_compactor import ToolReturnCompactor
 from browser_agent.use_cases.verification_agent_deps import VerificationAgentDeps
 from browser_agent.use_cases.verification_explore_tool import explore_page
 from browser_agent.use_cases.verification_system_prompt import VERIFICATION_SYSTEM_PROMPT
@@ -40,7 +43,8 @@ class VerifyDownloadsUseCase:
             system_prompt=VERIFICATION_SYSTEM_PROMPT,
             deps_type=VerificationAgentDeps,
             output_type=VerificationReport,
-            tools=[explore_page, check_pdf, query_db, run_read_script],
+            tools=[declare_paths, explore_page, check_pdf, query_db, run_read_script],
+            capabilities=[ToolReturnCompactor()],
         )
         return agent
 
@@ -50,10 +54,22 @@ class VerifyDownloadsUseCase:
             agent = self._build_agent()
             run = await self._run_agent(agent, request.render_prompt())
             report = self._coerce_result(run)
+            report = self._splice_tool_results(report)
             self._log_usage(run)
             return report
         finally:
             await self._deps.browser_session.close()
+
+    def _splice_tool_results(self, report: VerificationReport) -> VerificationReport:
+        """Merge the real PdfCheckResult objects the tools accumulated."""
+        if not self._deps.pdf_results:
+            return report
+        seen = {r.url for r in report.pdf_results}
+        merged = list(report.pdf_results)
+        for result in self._deps.pdf_results:
+            if result.url not in seen:
+                merged.append(result)
+        return report.model_copy(update={"pdf_results": merged})
 
     async def _run_agent(self, agent: Agent, prompt: str) -> Any:
         agent_logger.info(
@@ -63,7 +79,8 @@ class VerifyDownloadsUseCase:
         )
         started = time.monotonic()
         try:
-            run = await agent.run(
+            run = await _run_with_retry(
+                agent,
                 prompt,
                 deps=self._deps,
                 usage_limits=UsageLimits(request_limit=MAX_LLM_CALLS),
@@ -99,3 +116,29 @@ def _truncate(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
     return f"{value[:limit]}…(total={len(value) // 4} tokens)"
+
+
+_AGENT_RUN_RETRIES = 2
+_AGENT_RUN_RETRY_DELAY_S = 5.0
+
+
+async def _run_with_retry(agent: Agent, prompt: str, **kwargs: Any) -> Any:
+    """Run the agent, retrying transient model errors up to twice."""
+    last_exc: Exception | None = None
+    for attempt in range(_AGENT_RUN_RETRIES + 1):
+        try:
+            return await agent.run(prompt, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — transient model errors
+            last_exc = exc
+            if attempt < _AGENT_RUN_RETRIES:
+                agent_logger.warning(
+                    "agent.run failed (attempt {n}/{max}), retrying in {d}s: {exc}",
+                    n=attempt + 1,
+                    max=_AGENT_RUN_RETRIES + 1,
+                    d=_AGENT_RUN_RETRY_DELAY_S,
+                    exc=exc,
+                )
+                await asyncio.sleep(_AGENT_RUN_RETRY_DELAY_S)
+            else:
+                raise
+    raise RuntimeError("unreachable") if last_exc is None else last_exc

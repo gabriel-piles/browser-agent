@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from typing import Any
 from pathlib import Path
 
 
@@ -19,7 +20,8 @@ def query_rows(db_path: Path, run: str | None = None) -> list[tuple[str, str, st
     When ``run`` is not None the rows are filtered by ``task_slug``;
     pass None to read every row in the table.
     """
-    conn = sqlite3.connect(str(db_path))
+    uri = f"file:{db_path.as_posix()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
     try:
         if run is not None:
             return conn.execute(
@@ -31,7 +33,7 @@ def query_rows(db_path: Path, run: str | None = None) -> list[tuple[str, str, st
         conn.close()
 
 
-def parse_row_data(raw: str | None) -> dict:
+def parse_row_data(raw: str | None) -> dict[str, Any]:
     """Decode the ``metadata.data`` JSON blob of one row, returning ``{}`` on failure."""
     if not raw:
         return {}

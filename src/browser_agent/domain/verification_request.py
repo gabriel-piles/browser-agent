@@ -30,6 +30,10 @@ class VerificationRequest(BaseModel):
         default="",
         description="The step 0 agent's explanation of selectors, scroll strategy, and mutation order, from the sidecar JSON.",
     )
+    reconciler_inventory: str = Field(
+        default="",
+        description="Deterministic DB-vs-disk inventory from the reconciler (ground truth).",
+    )
 
     def render_prompt(self) -> str:
         parts = [
@@ -39,5 +43,9 @@ class VerificationRequest(BaseModel):
         if self.step0_explanation:
             parts.append(f"## Step 0 Agent Explanation\n{self.step0_explanation}\n\n---\n\n")
         parts.append(f"## Scraping Coverage (gap map)\n{self.gap_map}\n\n---\n\n")
+        if self.reconciler_inventory:
+            parts.append(
+                f"## Deterministic Reconciler Inventory (DB vs disk)\n{self.reconciler_inventory}\n\n---\n\n",
+            )
         parts.append(_TASK_DIRECTIVE)
         return "".join(parts)
