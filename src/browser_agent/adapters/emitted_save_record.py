@@ -84,6 +84,16 @@ if "_SAVE_RECORD_TASK_SLUG" not in globals():
     _SAVE_RECORD_TASK_SLUG = Path(__file__).resolve().stem
 
 
+def _normalize_scheme(url):
+    """Normalize a leading ``http://`` to ``https://`` so the http/https
+    variants of the same document collapse onto one DB key (source_url is
+    the PRIMARY KEY) and one ``pdf_url``. Generic for every crawler.
+    """
+    if isinstance(url, str) and url.lower().startswith("http://"):
+        return "https://" + url[7:]
+    return url
+
+
 def save_record(source_url: str, data: dict) -> None:
     """Persist one entity's metadata into the shared SQLite store.
 
@@ -111,6 +121,11 @@ def save_record(source_url: str, data: dict) -> None:
     supporting attachment on the same Uwazi entity. Omit the key
     (or set it to ``None``) when no HTML was captured for a row.
     """
+    source_url = _normalize_scheme(source_url)
+    if isinstance(data, dict):
+        _pu = data.get("pdf_url")
+        if isinstance(_pu, str):
+            data = {**data, "pdf_url": _normalize_scheme(_pu)}
     conn = sqlite3.connect(_SAVE_RECORD_DB_PATH, timeout=5.0)
     try:
         conn.execute("PRAGMA busy_timeout=5000")
