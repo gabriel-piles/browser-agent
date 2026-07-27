@@ -13,14 +13,14 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 # LLM connection — consumed by ``adapters/llm/ollama_adapter.py``.
 OLLAMA_BASE_URL = "https://ollama.com/v1"
-ORCHESTRATOR_MODEL = "deepseek-v4-pro:cloud"
+ORCHESTRATOR_MODEL = "glm-5.2:cloud"
 VERIFICATION_MODEL = "minimax-m3:cloud"
 VERIFICATION_PDF_COUNT = 10
 VERIFICATION_SCRIPT_RUN_LIMIT = 15
 VERIFICATION_QUERY_LIMIT = 10
 
 # YAML file that defines the active run: only ``active_run`` (the name of a
-# YAML in ``data/prompts/``, without the ``.yaml`` suffix). The prompt
+# YAML in ``data/prompts/``, with or without the ``.yaml`` suffix). The prompt
 # config itself lives in ``data/prompts/<active_run>.yaml`` and is copied
 # into the run folder as ``run.yaml`` at execution time for a historical
 # snapshot.

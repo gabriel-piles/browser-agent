@@ -55,13 +55,17 @@ class RunsConfigLoader:
 
 
 def _load_active_name() -> str:
-    """Return the ``active_run`` name from ``active_run.yaml``."""
+    """Return the ``active_run`` name from ``active_run.yaml``.
+
+    Strips a trailing ``.yaml`` extension if present so callers
+    can write the value with or without the suffix.
+    """
     if not RUNS_FILE.is_file():
         raise FileNotFoundError(f"runs config not found at {RUNS_FILE}")
     data = yaml.safe_load(RUNS_FILE.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or "active_run" not in data:
         raise ValueError(f"active_run.yaml must contain an 'active_run' key (got {data!r})")
-    return str(data["active_run"])
+    return str(data["active_run"]).removesuffix(".yaml")
 
 
 def _load_run_config(name: str) -> RunConfig:
