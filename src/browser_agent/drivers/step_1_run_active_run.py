@@ -72,10 +72,15 @@ class RunActiveScraperDriver:
 
         Returns the script's exit code. The script runs with a long
         timeout (default 6 hours) to accommodate full multi-document
-        scrapes.
+        scrapes.  Output is streamed line-by-line to stdout in real
+        time so the operator can monitor progress.
         """
         headless = "true" if ZENDRIVER_HEADLESS else "false"
-        env = {**os.environ, "ZENDRIVER_HEADLESS": headless}
+        env = {
+            **os.environ,
+            "PYTHONUNBUFFERED": "1",
+            "ZENDRIVER_HEADLESS": headless,
+        }
         cmd = [sys.executable, str(script_path)]
 
         try:
@@ -91,7 +96,10 @@ class RunActiveScraperDriver:
             return _EXIT_NO_SCRIPT
 
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_RUN_TIMEOUT_S)
+            output = await asyncio.wait_for(
+                self._stream_output(proc),
+                timeout=_RUN_TIMEOUT_S,
+            )
         except asyncio.TimeoutError:
             await self._kill_process_group(proc)
             logger.error(
@@ -100,17 +108,32 @@ class RunActiveScraperDriver:
             )
             return 124
 
-        output = stdout.decode("utf-8", errors="replace") if stdout else ""
-        if output.strip():
-            logger.info("scraper output:\n{output}", output=output)
-
         exit_code = proc.returncode if proc.returncode is not None else 1
         if exit_code == 0:
             logger.info("scraper completed successfully (exit code 0)")
         else:
             logger.error("scraper failed with exit code {code}", code=exit_code)
 
+        if output.strip():
+            logger.info("scraper output:\n{output}", output=output)
+
         return exit_code
+
+    async def _stream_output(self, proc: asyncio.subprocess.Process) -> str:
+        """Read subprocess stdout line by line, print each line to the
+        terminal in real time, and return the complete output string."""
+        lines: list[str] = []
+        assert proc.stdout is not None
+        while True:
+            line = await proc.stdout.readline()
+            if not line:
+                break
+            text = line.decode("utf-8", errors="replace")
+            print(text, end="", flush=True)
+            lines.append(text)
+        # Process should have exited — ensure returncode is set.
+        await proc.wait()
+        return "".join(lines)
 
     @staticmethod
     async def _kill_process_group(proc: asyncio.subprocess.Process) -> None:

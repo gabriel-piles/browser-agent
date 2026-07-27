@@ -1,6 +1,6 @@
-"""Terminal viewer for the IACHR_resolutions metadata.db.
+"""Terminal viewer for the active run's metadata.db.
 
-Run: python view_metadata.py
+Run: python -m browser_agent.drivers.view_metadata
 Type a pdf_filename (or a substring) at the prompt to see its full
 metadata card. Empty input exits. Enter '?' to list all pdf_filename
 values; '*' to dump every row's summary.
@@ -10,16 +10,29 @@ import json
 import sqlite3
 from pathlib import Path
 
-DB_PATH = "/mnt/projects/browser-agent/data/runs/IACHR_resolutions/metadata.db"
+from browser_agent.adapters.runs_config_loader import RunsConfigLoader
+
+
+_PATH_CACHE: Path | None = None
+
+
+def _db_path() -> Path:
+    global _PATH_CACHE
+    if _PATH_CACHE is None:
+        _PATH_CACHE = RunsConfigLoader.load_active_path() / "metadata.db"
+    return _PATH_CACHE
+
+
 SUBSTR_PROMPT = "pdf_filename (or ? to list, * to dump all, empty to quit) > "
 URL_KEYS = {"source_url", "pdf_url", "source_page"}
 SINGLE_LINE_KEYS = URL_KEYS | {k for k in ()}
 
 
 def connect() -> sqlite3.Connection:
-    if not Path(DB_PATH).exists():
-        raise SystemExit(f"DB not found: {DB_PATH}")
-    conn = sqlite3.connect(DB_PATH)
+    path = _db_path()
+    if not path.exists():
+        raise SystemExit(f"DB not found: {path}")
+    conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -120,7 +133,7 @@ def summary(conn: sqlite3.Connection) -> None:
     print(header(f"metadata.db — {len(rows)} rows", 64))
     print(f"  task_slugs : {', '.join(slugs)}")
     print(f"  rows with pdf_filename : {with_fn}")
-    print(f"  DB path    : {DB_PATH}\n")
+    print(f"  DB path    : {_db_path()}\n")
 
 
 def main() -> None:
