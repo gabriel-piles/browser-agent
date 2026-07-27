@@ -19,14 +19,16 @@ VERIFICATION_PDF_COUNT = 10
 VERIFICATION_SCRIPT_RUN_LIMIT = 15
 VERIFICATION_QUERY_LIMIT = 10
 
-# YAML file that defines the active run: only ``active_run`` (the name to
-# execute). Per-run configuration (template, prompt, etc.) lives in
-# ``data/runs/<active_run>/run.yaml``.
+# YAML file that defines the active run: only ``active_run`` (the name of a
+# YAML in ``data/prompts/``, without the ``.yaml`` suffix). The prompt
+# config itself lives in ``data/prompts/<active_run>.yaml`` and is copied
+# into the run folder as ``run.yaml`` at execution time for a historical
+# snapshot.
 RUNS_FILE = PROJECT_ROOT / "data" / "active_run.yaml"
+# Source-of-truth prompt YAMLs, keyed by run name (filename stem).
+PROMPTS_PATH = PROJECT_ROOT / "data" / "prompts"
 # Per-run root: scripts, downloads and metadata.db all live under
 # ``data/runs/<active_run>/``.
-# Per-run config file name inside each ``data/runs/<name>/`` directory.
-RUN_CONFIG_FILENAME = "run.yaml"
 RUNS_PATH = PROJECT_ROOT / "data" / "runs"
 # Mappings and thesaurus-mappings for the three Uwazi drivers
 # (``uwazi_propose``, ``uwazi_match``, ``uwazi_apply``) are stored
