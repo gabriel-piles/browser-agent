@@ -36,9 +36,12 @@ from browser_agent.configuration import (
     VERIFICATION_SCRIPT_RUN_LIMIT,
     ZENDRIVER_HEADLESS,
 )
+from browser_agent.domain.corpus_finding import CorpusFinding
+from browser_agent.domain.reconciled_pdf import ReconciledPdf
 from browser_agent.domain.verification_request import VerificationRequest
 from browser_agent.domain.verification_report import VerificationReport
 from browser_agent.logging_config import configure_logging
+from browser_agent.use_cases.metadata_db import parse_row_data, query_rows
 from browser_agent.use_cases.reconcile_downloads_use_case import ReconcileDownloadsUseCase
 from browser_agent.use_cases.reconciler_report_writer import ReconcilerReportWriter
 from browser_agent.use_cases.scraping_gap_map_builder import ScrapingGapMapBuilder
@@ -47,6 +50,8 @@ from browser_agent.use_cases.verification_report_writer import VerificationRepor
 from browser_agent.use_cases.verify_downloads_use_case import VerifyDownloadsUseCase
 
 SCRIPTS_DIRNAME = "scripts"
+METADATA_SAMPLE_LIMIT = 25
+SHORT_URL_LIMIT = 80
 
 
 class VerifyDownloadsDriver:
@@ -68,7 +73,7 @@ class VerifyDownloadsDriver:
         script = script_path.read_text(encoding="utf-8")
         explanation = self._read_sidecar_explanation(script_path)
         try:
-            reconciler_section = self._run_reconciler(run_path)
+            reconciler_section, per_row, findings = self._run_reconciler(run_path)
             deps = self._build_deps(run_path)
             request = self._build_request(run, script, run_path, explanation, reconciler_section)
             model = OllamaAdapter(model=VERIFICATION_MODEL).get_model()
@@ -77,18 +82,21 @@ class VerifyDownloadsDriver:
             logger.error("verification could not run: {exc}", exc=exc)
             return 2
         path = VerificationReportWriter(run_path).write(report)
+        self._append_metadata_sample(run_path, path)
+        self._print_summary(report, per_row, findings)
         logger.info("verification report written to {path}", path=path)
         return self._exit_code(report)
 
-    def _run_reconciler(self, run_path: Path) -> str:
-        """Run the deterministic reconciler, persist it, return the markdown section."""
+    def _run_reconciler(self, run_path: Path) -> tuple[str, list[ReconciledPdf], list[CorpusFinding]]:
+        """Run the deterministic reconciler; return (section, per_row, findings)."""
         db_path = run_path / "metadata.db"
         downloads_path = run_path / "downloads"
         per_row, findings = ReconcileDownloadsUseCase(db_path, downloads_path).reconcile()
         md_path, json_path = ReconcilerReportWriter(run_path).write(per_row, findings)
         logger.info("reconciler inventory written to {path}", path=md_path)
         logger.info("reconciler json written to {path}", path=json_path)
-        return ReconcilerReportWriter(run_path).render_section(per_row, findings)
+        section = ReconcilerReportWriter(run_path).render_section(per_row, findings)
+        return section, per_row, findings
 
     @staticmethod
     def _exit_code(report: VerificationReport) -> int:
@@ -153,6 +161,106 @@ class VerifyDownloadsDriver:
             return json.loads(sidecar.read_text(encoding="utf-8")).get("explanation", "")
         except (ValueError, OSError):
             return ""
+
+    @staticmethod
+    def _print_summary(
+        report: VerificationReport,
+        per_row: list[ReconciledPdf],
+        findings: list[CorpusFinding],
+    ) -> None:
+        """Print a scope-separated summary so the two scopes cannot be confused."""
+        _log_inventory(per_row, findings)
+        _log_spot_checks(report)
+        _log_coverage(report)
+
+    def _append_metadata_sample(self, run_path: Path, report_path: Path) -> None:
+        """Append the first N metadata.db rows as a sample section to the report."""
+        rows = query_rows(run_path / "metadata.db")[:METADATA_SAMPLE_LIMIT]
+        section = self._render_metadata_sample(rows)
+        with report_path.open("a", encoding="utf-8") as fh:
+            fh.write("\n\n" + section)
+
+    @staticmethod
+    def _render_metadata_sample(rows: list[tuple[str, str, str]]) -> str:
+        """Render the first-N metadata rows as a markdown table for the report."""
+        header = (
+            "## Metadata Sample (first 25 rows)\n\n"
+            "| # | task_slug | pdf_url | pdf_filename | source_url |\n"
+            "| --- | --- | --- | --- | --- |"
+        )
+        lines = []
+        for idx, row in enumerate(rows, start=1):
+            source_url, slug, data_json = row
+            data = parse_row_data(data_json)
+            pdf_url = _short(data.get("pdf_url", ""))
+            pdf_filename = _short(data.get("pdf_filename", ""))
+            lines.append(f"| {idx} | {slug} | {pdf_url} | {pdf_filename} | {_short(source_url)} |")
+        return header + ("\n" + "\n".join(lines) if lines else "")
+
+
+def _row_counts(per_row: list[ReconciledPdf]) -> dict[str, int]:
+    """Tally reconciler verdicts across all DB rows."""
+    counts = {"total": len(per_row), "present": 0, "missing": 0, "corrupt": 0, "small": 0}
+    for r in per_row:
+        if r.verdict == "present":
+            counts["present"] += 1
+        elif r.verdict == "file_not_downloaded":
+            counts["missing"] += 1
+        elif r.verdict == "corrupt_file":
+            counts["corrupt"] += 1
+        elif r.verdict == "suspiciously_small":
+            counts["small"] += 1
+    return counts
+
+
+def _log_inventory(per_row: list[ReconciledPdf], findings: list[CorpusFinding]) -> None:
+    """Log the ground-truth DB-vs-disk inventory (all rows scope)."""
+    c = _row_counts(per_row)
+    logger.info(
+        "DB vs disk (ground truth, all rows): rows={} present={} missing={} corrupt={} small={} dup_urls={} orphans={}",
+        c["total"],
+        c["present"],
+        c["missing"],
+        c["corrupt"],
+        c["small"],
+        _finding_count(findings, "duplicate_pdf_url"),
+        _finding_count(findings, "orphan_file"),
+    )
+
+
+def _log_spot_checks(report: VerificationReport) -> None:
+    """Log the agent spot-check scope (new candidates only)."""
+    logger.info(
+        "Agent spot-checks (new candidates only): checked={} missing_count={}",
+        len(report.pdf_results),
+        report.missing_count,
+    )
+
+
+def _log_coverage(report: VerificationReport) -> None:
+    """Log the coverage scope (expected vs observed)."""
+    logger.info(
+        "Coverage: expected={} observed={} complete={} missing_paths={}",
+        report.expected_pdf_total,
+        report.observed_pdf_total,
+        report.coverage_complete,
+        len(report.missing_coverage),
+    )
+
+
+def _finding_count(findings: list[CorpusFinding], kind: str) -> int:
+    """Return how many items the corpus finding of ``kind`` lists (0 if absent)."""
+    for f in findings:
+        if f.kind == kind:
+            return len(f.items)
+    return 0
+
+
+def _short(text: str) -> str:
+    """Truncate a long string for table display."""
+    if len(text) <= SHORT_URL_LIMIT:
+        return text
+    return text[: SHORT_URL_LIMIT - 3] + "..."
 
 
 def main() -> None:
