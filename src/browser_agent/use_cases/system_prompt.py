@@ -719,10 +719,13 @@ Script rules (HARD — every script you emit MUST follow these):
     ``save_record(url, {...})``. When the task
     involves extracting data from multiple pages, call save_record(url,
     {...}) per page AS IT IS SCRAPED — not collected in a list and
-    saved at the end. source_url is the page URL (PRIMARY KEY — re-runs
-    replace, not duplicate). data is a JSON-serializable dict of
-    metadata fields, so multi-value fields (e.g. countries, tags) MUST
-    be a Python list of strings, never a comma-joined string or a
+    saved at the end. ``source_url`` is the PRIMARY KEY of the metadata
+    table (re-runs upsert, not duplicate), so it MUST be stable across
+    regenerations: for a page-scrape use the page URL; for a per-PDF
+    download use the content-stable key from rule 13
+    (``f"{page_url}/pdf/{pdf_id}"``), NEVER a position index. data is a
+    JSON-serializable dict of metadata fields, so multi-value fields
+    MUST be a Python list of strings, never a comma-joined string or a
     delimited blob. Uwazi's multiselect properties expect
     ``[{value: ...}, ...]``; a single comma-joined string becomes one
     unmatchable label in the thesaurus. Examples:
@@ -797,19 +800,32 @@ Script rules (HARD — every script you emit MUST follow these):
 
     DB row — store the id and the human-readable fields side by side
     so downstream code joins file to metadata without parsing the
-    filename::
+    filename. The ``source_url`` MUST be a content-stable key derived
+    from the PDF's own URL, NOT a position index. ``pdf_id`` is a pure
+    function of ``pdf_url`` (``pdf_<sha1(url)[:12]>``), so compute it
+    ONCE at discovery time — before any download — and reuse it as the
+    DB key, the stored ``pdf_id`` field, and (post-download) the
+    filename stem. The metadata table keys rows by ``source_url``
+    (PRIMARY KEY); a position-based key (``#pdf3``, ``/pdf/2``) is
+    unstable across regenerations — a re-run whose script uses a
+    different scheme creates a NEW row for the same PDF instead of
+    upserting the old one, and the stale rows then upload to Uwazi as
+    duplicate entities (same ``pdf_url``, two rows). Keying on
+    ``pdf_id`` makes the DB row as stable as the on-disk file (same
+    PDF → same hash → same source_url → upsert), mirroring the file
+    naming in rule 13. At discovery::
 
-        save_record(f"{page_url}/pdf/{pdf_idx}", {
-            ...,
-            "pdf_id": pdf_id,            # content address: pdf_a1b2c3d4e5f6
-            "pdf_url": pdf_url,          # the URL the hash derives from
-            "pdf_filename": pdf_filename,  # pdf_a1b2c3d4e5f6.pdf — unique
-            "pdf_name": pdf_name,        # human label: "Resumen" / "Voto de..."
-            "pdf_type": pdf_type,        # "Resumen" | "Voto" | ...
-            "html_filename": html_filename,  # from save_page_html result; basename
-                                              #   of result["saved_path"]; omitted
-                                              #   when no HTML was captured.
-        })
+        import hashlib
+        pdf_id = "pdf_" + hashlib.sha1(pdf_url.encode()).hexdigest()[:12]
+        source_url = f"{page_url}/pdf/{pdf_id}"
+        records.append({"source_url": source_url, "pdf_id": pdf_id, ...})
+
+    Then at download time, the helper's ``saved_path`` basename equals
+    ``f"{pdf_id}.pdf"`` — assert it does and reuse the discovery
+    ``pdf_id`` (do NOT recompute a different key)::
+
+        save_record(rec["source_url"], {**rec, "pdf_filename": pdf_filename,
+                                         "download_status": "downloaded"})
     HARD RULE (pdf_url encoding):
     - ``pdf_url`` MUST be a percent-encoded absolute URL with no raw spaces. When you build the URL from a relative ``href`` that may contain spaces, use ``from urllib.parse import urljoin, quote; pdf_url = urljoin(base, quote(href, safe="/%"))`` — never bare-concatenate a host onto an href. A raw space in a stored URL breaks every downstream link consumer (Uwazi link property, identity-key matching, re-fetch). Apply encoding before passing ``pdf_url`` to ``save_record``.
 
@@ -833,8 +849,14 @@ Script rules (HARD — every script you emit MUST follow these):
     - Always read ``pdf_filename`` from ``result["saved_path"]`` so the
       DB row matches the actual file on disk exactly.
     - The ``source_url`` passed to save_record MUST be unique per PDF
-      (e.g. ``f"{page_url}/pdf/{pdf_idx}"``), never the bare page URL, so
-      one row per PDF is guaranteed (rule 11 keys on source_url).
+      AND content-stable — use ``pdf_id`` (the ``pdf_<sha1(url)[:12]>``
+      already computed for the filename), e.g.
+      ``f"{page_url}/pdf/{pdf_id}"``. NEVER use a position index
+      (``pdf_idx``, ``#row3``, ``#pdf2``): the metadata table keys on
+      ``source_url`` (rule 11), so a position-based key makes a
+      re-run with a different scheme create a NEW row for the same
+      PDF instead of upserting, and the stale duplicate row uploads
+      to Uwazi as a second entity with the same ``pdf_url``.
     - The validation script MUST download at least 2 PDFs and print their
       final paths to prove the naming produces unique, non-colliding files
       derived from distinct URLs.

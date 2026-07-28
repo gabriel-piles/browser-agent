@@ -77,10 +77,15 @@ def save_record(source_url: str, data: dict) -> None:
     produced the data.
 
     When downloading multiple files per page (PDFs, images), call this
-    once per FILE with a unique source_url (e.g. ``f"{page_url}/pdf/{i}"``)
-    so each file gets its own row. The on-disk filename is derived by
-    the download helper from the file's download URL
-    (``pdf_{sha1(url)[:12]}.pdf``); read it from the helper's result
+    once per FILE with a content-stable source_url derived from the
+    file's own URL — for PDFs use ``f"{page_url}/pdf/{pdf_id}"`` where
+    ``pdf_id = "pdf_" + sha1(pdf_url)[:12]`` (the same hash the download
+    helper uses for the filename). NEVER use a position index
+    (``{i}``, ``#row3``): the metadata table keys on source_url, so a
+    position-based key makes a re-run with a different scheme create a
+    duplicate row for the same file instead of upserting. The on-disk
+    filename is derived by the download helper from the file's download
+    URL (``pdf_{sha1(url)[:12]}.pdf``); read it from the helper's result
     dict (``result["saved_path"]``) and store it in ``data`` as
     ``pdf_id`` / ``pdf_filename``. Keep the human label and type in
     ``pdf_name`` / ``pdf_type``. The path is a pure function of the URL

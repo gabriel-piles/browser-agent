@@ -99,6 +99,11 @@ def _clear_stale_locks(profile_dir):
     crashed or killed previous run — and the next launch would refuse
     the profile with "Profile directory is in use". Live locks are left
     untouched so we never steal an in-use profile from a running Chromium.
+
+    Only ``SingletonLock`` carries a PID; ``SingletonCookie`` holds a
+    numeric cookie ID and ``SingletonSocket`` an absolute path. Neither
+    is PID-checkable, so we leave them in place (Chromium overwrites them
+    on the next launch once ``SingletonLock`` is gone).
     """
     for name in _LOCKFILES:
         path = Path(profile_dir) / name
@@ -110,7 +115,15 @@ def _clear_stale_locks(profile_dir):
 
 
 def _lock_owner_alive(path):
-    """Return True if ``SingletonLock`` points at a currently-running PID."""
+    """Return True if a lockfile points at a currently-running owner.
+
+    Only ``SingletonLock`` (``hostname-PID``) is PID-checkable. Other
+    lockfiles are treated as "owner unknown — leave untouched" so we
+    never crash on a non-PID numeric target (e.g. ``SingletonCookie``'s
+    cookie ID) and never steal a live Chromium's secondary locks.
+    """
+    if path.name != "SingletonLock":
+        return True
     if not path.is_symlink():
         return True
     try:
@@ -134,12 +147,19 @@ def _parse_pid(target):
 
 def _pid_alive(pid):
     """Return True if ``pid`` is currently running on this host."""
+    # A Chromium SingletonLock can point at a bogus, out-of-range PID (e.g.
+    # a huge value left by a crash or a non-Linux host). ``os.kill`` raises
+    # OverflowError for those; treat them as dead so the stale lock is cleared.
+    if pid < 1 or pid > 4194304:
+        return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
+    except (OverflowError, ValueError):
+        return False
     return True
 
 
