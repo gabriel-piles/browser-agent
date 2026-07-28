@@ -56,6 +56,11 @@ async def save_page_html(
     virtualized lists (react-window / react-virtualized) that unmount
     off-screen nodes.
 
+    Before capture, waits for SPA-rendered metadata to finish binding
+    (bounded 8 s timeout, no-op on non-SPA pages) and strips the
+    embedded PDF viewer (``#pdf-container``) so the saved HTML carries
+    metadata and text but not expiring PDF page-image URLs.
+
     Returns ``{"size": int, "skipped": bool, "reason": str,
     "saved_path": str}``.
     """

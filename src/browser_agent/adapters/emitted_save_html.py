@@ -28,6 +28,7 @@ from browser_agent.adapters.emitted_snippets import (
 _HELPERS = (
     "import hashlib\n"
     "import os as _os\n"
+    "import time\n"
     "from pathlib import Path\n"
     "\n\n"
     f"{HTML_FILENAME_SNIPPET}\n\n"
@@ -114,6 +115,18 @@ async def save_page_html(tab, save_path, source_url, filename=None, card_selecto
     unmount off-screen nodes. When ``card_selector`` is omitted, a single
     capture after scrolling to the bottom suffices (the scroll already
     triggered all lazy loads into the DOM).
+
+    SPA METADATA: before capture, waits for SPA-rendered metadata to
+    finish binding by polling ``window.ui_ready_triggered`` (bounded
+    8 s timeout, no-op on non-SPA pages). This prevents capturing an
+    empty anchor div instead of the populated metadata on SPA sites
+    like vLex / Corte IDH where ``networkIdle`` fires before the
+    framework stamps the DOM.
+
+    PDF VIEWER STRIP: before capture, removes ``#pdf-container`` and
+    ``.pdf-viewer`` from the DOM so the saved HTML carries metadata and
+    text but not hundreds of expiring PDF page-image ``<img>`` URLs.
+    No-op when the element does not exist.
 
     Returns a dict with ``saved_path`` so the caller can store the
     exact ``html_filename`` in the DB row:
@@ -211,6 +224,58 @@ async def _strip_reveal_styles(tab):
     )
 
 
+_SPA_READY_TIMEOUT_S = 8.0
+
+
+async def _wait_for_spa_ready(tab):
+    """Wait for SPA-rendered metadata to finish binding.
+
+    Many SPA shells (vLex / Corte IDH) fire a custom ``ui_ready`` event
+    once the client-side app finishes rendering. ``wait_for_page_ready``
+    only waits for ``networkIdle``, which fires when the metadata XHR
+    completes — the DOM is stamped a few hundred ms later by the
+    framework's binding pass. Without this wait, ``get_content()`` can
+    capture an empty anchor div (``<!--anchor-->``) instead of the
+    populated metadata (Categoría, Estado, etc.).
+
+    No-op on pages that don't define ``window.ui_ready_triggered`` —
+    the flag is absent from the raw HTML, so the first poll returns
+    immediately with zero cost. Timeout is bounded by
+    ``_SPA_READY_TIMEOUT_S`` so this can never hang.
+    """
+    deadline = time.monotonic() + _SPA_READY_TIMEOUT_S
+    while True:
+        ready = await tab.evaluate(
+            "typeof window.ui_ready_triggered === 'boolean' "
+            "? window.ui_ready_triggered : true"
+        )
+        if ready:
+            return
+        if time.monotonic() >= deadline:
+            return
+        await tab.sleep(0.2)
+
+
+async def _strip_pdf_viewer(tab):
+    """Remove the embedded PDF viewer from the DOM before capture.
+
+    Sites like vLex render the full PDF inside a ``#pdf-container``
+    element as hundreds of ``<img>`` tags pointing to S3 pre-signed
+    URLs. These are the rendered pages of the document being
+    downloaded as a PDF — including them in the saved HTML bloats the
+    file with expiring image URLs that 404 within an hour. Stripping
+    the viewer before ``get_content()`` keeps the metadata, header,
+    tabs and text while dropping only the PDF page images.
+
+    No-op when the element does not exist.
+    """
+    await tab.evaluate(
+        "document.querySelectorAll("
+        "'#pdf-container, .pdf-viewer'"
+        ").forEach(el => el.remove())"
+    )
+
+
 async def _capture_scrolled_html(tab):
     """Scroll to bottom (triggering lazy loads), then capture the full DOM.
 
@@ -223,6 +288,8 @@ async def _capture_scrolled_html(tab):
     await tab.evaluate("window.scrollTo(0, 0)")
     await tab.sleep(0.3)
     await _strip_reveal_styles(tab)
+    await _wait_for_spa_ready(tab)
+    await _strip_pdf_viewer(tab)
     return await _capture_simple_html(tab)
 
 async def _capture_virtualized_html(tab, card_selector):
@@ -236,6 +303,8 @@ async def _capture_virtualized_html(tab, card_selector):
     appears in the output.
     """
     import json as _json
+    await _wait_for_spa_ready(tab)
+    await _strip_pdf_viewer(tab)
     await tab.evaluate("window.__htmlCaptures = []")
     await tab.evaluate("window.scrollTo(0, 0)")
     await tab.sleep(0.4)

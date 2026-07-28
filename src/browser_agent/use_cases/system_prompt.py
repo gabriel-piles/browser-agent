@@ -828,6 +828,24 @@ Script rules (HARD — every script you emit MUST follow these):
     saved HTML. Use ``card_selector`` whenever exploration (step 5)
     showed the page uses a virtualized list.
 
+    SPA METADATA — the helper waits for SPA-rendered metadata to
+    finish binding before capture. It polls ``window.ui_ready_triggered``
+    (the readiness signal fired by SPA shells like vLex / Corte IDH)
+    with a bounded 8 s timeout. On pages that don't define the flag,
+    the first poll returns immediately — zero cost for non-SPA sites.
+    This prevents capturing an empty anchor div (``<!--anchor-->``)
+    instead of the populated metadata (Estado, Categoría, etc.) when
+    ``networkIdle`` fires before the framework's binding pass stamps
+    the DOM.
+
+    PDF VIEWER STRIPPING — the helper removes ``#pdf-container`` (and
+    ``.pdf-viewer``) from the DOM before capture. SPAs like vLex render
+    the full PDF as hundreds of ``<img>`` tags pointing to S3 pre-signed
+    URLs that expire within an hour — including them would bloat the
+    saved HTML with dead links. The strip keeps metadata, header, tabs
+    and text while dropping only the PDF page images. No-op when the
+    element does not exist.
+
     HARD RULES:
     - NEVER use curl_cffi, requests, httpx, aiohttp, or any HTTP client
       to fetch the HTML — only ``save_page_html`` (which uses the
