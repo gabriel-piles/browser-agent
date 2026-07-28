@@ -38,6 +38,7 @@ from browser_agent.adapters.emitted_snippets import (
     ATOMIC_WRITE_SNIPPET,
     EXISTING_SIZE_SNIPPET,
     PDF_FILENAME_SNIPPET,
+    PDF_MAGIC_SNIPPET,
 )
 
 _SHARED_HELPERS = (
@@ -50,7 +51,8 @@ _SHARED_HELPERS = (
     "_PDF_DOWNLOAD_RETRY_DELAY_S = 1.5\n\n"
     f"{PDF_FILENAME_SNIPPET}\n\n"
     f"{EXISTING_SIZE_SNIPPET}\n\n"
-    f"{ATOMIC_WRITE_SNIPPET}"
+    f"{ATOMIC_WRITE_SNIPPET}\n\n"
+    f"{PDF_MAGIC_SNIPPET}"
 )
 
 _CURL_CFFI_DOWNLOAD = '''\
@@ -132,6 +134,7 @@ async def download_pdf_curl_cffi(url, save_path, tab=None):
                 await asyncio.sleep(_PDF_DOWNLOAD_RETRY_DELAY_S * attempt)
             continue
         _write_atomic(save_path, body)
+        _assert_pdf_magic(save_path, body, url)
         return {"size": len(body), "skipped": False, "reason": "downloaded",
                 "saved_path": str(save_path)}
     raise last_exc'''
@@ -268,6 +271,7 @@ async def _try_browser_fetch(tab, url, save_path):
                     raise RuntimeError(f"empty response for {url}")
                 body = base64.b64decode(result) if _decode else result
                 _write_atomic(save_path, body)
+                _assert_pdf_magic(save_path, body, url)
                 return {"size": len(body), "skipped": False,
                         "reason": "downloaded", "saved_path": str(save_path)}
             except RuntimeError as exc:
@@ -300,6 +304,7 @@ async def _try_curl_cffi(url, save_path):
     if not r.content:
         raise RuntimeError(f"empty response for {url}")
     _write_atomic(save_path, r.content)
+    _assert_pdf_magic(save_path, r.content, url)
     return {"size": len(r.content), "skipped": False, "reason": "downloaded",
             "saved_path": str(save_path)}'''
 
@@ -370,7 +375,8 @@ EMITTED_BROWSER_FETCH_BLOCK = (
     f"{_BROWSER_FETCH_HELPERS}\n\n"
     f"{PDF_FILENAME_SNIPPET}\n\n"
     f"{EXISTING_SIZE_SNIPPET}\n\n"
-    f"{ATOMIC_WRITE_SNIPPET}"
+    f"{ATOMIC_WRITE_SNIPPET}\n\n"
+    f"{PDF_MAGIC_SNIPPET}"
     f"{_BROWSER_FETCH_CDP}"
     f"{_BROWSER_FETCH_TAB}"
     f"{_BROWSER_FETCH_TRY}"

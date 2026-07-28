@@ -18,6 +18,10 @@ from browser_agent.domain.uwazi_mapping import UwaziMapping
 from browser_agent import configuration
 from browser_agent.use_cases.push_progress import PushProgress
 
+# Uwazi's originalname field is limited to 255 characters.
+# Entity titles can be longer, so we truncate for file uploads.
+_UPLOAD_TITLE_MAX_LENGTH = 255
+
 from uwazi_api.client import UwaziClient
 from uwazi_api.domain.entity import Entity
 
@@ -100,7 +104,7 @@ class UwaziPusher:
             file_bytes=payload,
             share_id=shared_id,
             language=language,
-            title=title,
+            title=f"{title}.pdf"[:_UPLOAD_TITLE_MAX_LENGTH],
             file_type=FileType.PDF,
         )
 
@@ -113,7 +117,7 @@ class UwaziPusher:
             file_bytes=payload,
             share_id=shared_id,
             language=language,
-            title=f"{title} (source HTML)",
+            title=f"{title}.html"[:_UPLOAD_TITLE_MAX_LENGTH],
             file_type=str(FileType.HTML),
         )
 

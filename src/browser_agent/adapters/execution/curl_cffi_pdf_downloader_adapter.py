@@ -6,7 +6,7 @@ from typing import Any
 
 from loguru import logger
 
-from browser_agent.adapters.execution.file_ops import existing_size, pdf_filename_for, write_atomic
+from browser_agent.adapters.execution.file_ops import existing_size, pdf_filename_for, write_atomic, assert_pdf_magic
 from browser_agent.configuration import PROJECT_ROOT
 from browser_agent.domain.download_result import DownloadResult
 from browser_agent.ports.pdf_downloader_port import PdfDownloaderPort
@@ -90,6 +90,17 @@ class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
                     await asyncio.sleep(_RETRY_DELAY_S * attempt)
                 continue
             write_atomic(path, r.content)
+            try:
+                assert_pdf_magic(path, r.content, url)
+            except RuntimeError as exc:
+                return DownloadResult(
+                    success=False,
+                    saved_path=str(path),
+                    url=url,
+                    content_type=r.headers.get("content-type", ""),
+                    file_size_bytes=len(r.content),
+                    error=str(exc),
+                )
             return DownloadResult(
                 success=True,
                 saved_path=str(path),

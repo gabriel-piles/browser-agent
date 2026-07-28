@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import signal
 import sys
+import time
 from pathlib import Path
 
 from loguru import logger
@@ -53,15 +55,24 @@ class RunActiveScraperDriver:
             return _EXIT_NO_SCRIPT
 
         logger.info("running scraper script {path}", path=script_path)
-        return await self._run_script(script_path)
+        t0 = time.monotonic()
+        exit_code = await self._run_script(script_path)
+        elapsed = time.monotonic() - t0
+        logger.info(
+            "scraper script finished in {elapsed:.1f}s (exit code {code})",
+            elapsed=elapsed,
+            code=exit_code,
+        )
+        return exit_code
 
     def _latest_script_path(self, run_path: Path) -> Path | None:
-        """Return the most recent ``scripts/*.py`` path, or None."""
+        """Return the most recent ``scripts/*.py`` path whose name starts with
+        ``YYYY_MM_DD``, or None."""
         scripts_dir = run_path / "scripts"
         if not scripts_dir.is_dir():
             logger.warning("no scripts directory at {dir}", dir=scripts_dir)
             return None
-        scripts = sorted(scripts_dir.glob("*.py"), key=lambda p: p.stat().st_mtime)
+        scripts = sorted(p for p in scripts_dir.glob("*.py") if re.match(r"\d{4}_\d{2}_\d{2}", p.name))
         if not scripts:
             logger.warning("no step 0 scripts found in {dir}", dir=scripts_dir)
             return None

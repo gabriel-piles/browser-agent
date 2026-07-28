@@ -592,6 +592,17 @@ Script rules (HARD — every script you emit MUST follow these):
                                            "download_status": "failed",
                                            "download_error": str(e)})
       # — or — browser_fetch strategy (same try/except + save_record pattern)
+
+   HARD RULE (failure row): on the ``except`` branch you MUST set BOTH
+   ``pdf_filename=""`` AND ``download_status="failed"``. NEVER set
+   ``pdf_filename = None`` — the empty string ``""`` is REQUIRED (not
+   None, not omitted), and ``download_status="failed"`` is MANDATORY
+   (never omit it on the failure path). The re-run retry query (rule
+   8a) matches rows where ``download_status == "failed" OR not
+   pdf_filename``; a ``None`` ``pdf_filename`` survives ``not
+   pdf_filename`` but leaves the ``download_status`` column empty in
+   reports, hiding the gap. ``download_status="failed"`` makes the
+   gap explicit so the reconciler report always shows it.
 8a. Retry of failed downloads — before downloading any NEW PDFs, the
     download phase MUST first retry URLs that failed on a prior run.
     Query ``metadata.db`` for rows whose ``download_status`` is
@@ -741,6 +752,17 @@ Script rules (HARD — every script you emit MUST follow these):
         })
     HARD RULE (pdf_url encoding):
     - ``pdf_url`` MUST be a percent-encoded absolute URL with no raw spaces. When you build the URL from a relative ``href`` that may contain spaces, use ``from urllib.parse import urljoin, quote; pdf_url = urljoin(base, quote(href, safe="/%"))`` — never bare-concatenate a host onto an href. A raw space in a stored URL breaks every downstream link consumer (Uwazi link property, identity-key matching, re-fetch). Apply encoding before passing ``pdf_url`` to ``save_record``.
+
+    HARD RULE (skip non-PDF links): filter links at extraction time so
+    the download helper never receives a non-PDF URL. The helper
+    validates ``%PDF`` magic and ``%%EOF`` on every body and RAISES on
+    a mismatch — a non-PDF link (`.xlsx`/`.docx`/`.xls`/`.doc`/`.zip`)
+    enqueues a doomed download that wastes a retry slot and leaves a
+    failed row. Before enqueuing, gate the absolute ``pdf_url`` with a
+    regex like ``/[.]pdf([?]|$)/i`` on the URL, or when the href has no
+    clear extension, require the link's ``Content-Type`` to be
+    ``application/pdf``. Only pass URLs that pass the gate to the
+    download helper.
 
     HARD RULES:
     - NEVER pass a filename as ``save_path`` — pass the downloads
