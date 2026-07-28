@@ -121,8 +121,28 @@ _ZD_RUNTIME_ERROR_PATTERNS: list[tuple[str, str, str]] = [
 # errors. Each entry is (regex, fix). Checked in order; first match wins.
 _STATIC_CHECK_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (
+        re.compile(r"^\s*(?:async\s+)?def\s+(?:get_text|get_attr|trusted_click)\s*\(", re.MULTILINE),
+        "get_text/get_attr/trusted_click is redefined inline (rule 0). These are "
+        "importable helpers: add 'from script_tools.dom_helpers import get_text, "
+        "get_attr, trusted_click' at the top and DELETE your local def. The helpers "
+        "MUST NOT be redefined or modified.",
+    ),
+    (
         re.compile(r"\bawait\s+save_record\s*\("),
         "await save_record(...) — save_record is synchronous (rule 11). Drop the await: save_record(url, {...}).",
+    ),
+    (
+        re.compile(
+            r"(?s)^(?=.*\b(?:download_pdf_browser|download_pdf_curl_cffi)\s*\()"
+            r"(?=.*\bsave_record\s*\()"
+            r"(?!.*['\"]html_filename['\"])"
+        ),
+        "save_record(...) is missing the 'html_filename' key (rule 13/14). "
+        "When the task downloads PDFs you MUST also save the page HTML and link it: "
+        "call result = await save_page_html(tab, out_dir, page_url), then pass "
+        "\"html_filename\": Path(result['saved_path']).name in EVERY save_record "
+        "data dict that has a pdf_filename. Omit the key only when no HTML was "
+        "captured for that row.",
     ),
     (
         re.compile(r"\bzd\.start\s*\("),

@@ -272,6 +272,7 @@ Script rules (HARD — every script you emit MUST follow these):
       from script_tools.pdf_download import download_pdf_curl_cffi, download_pdf_browser
       from script_tools.page_wait import wait_for_page_ready, wait_for_anchors, prepare_page_wait
       from script_tools.start_browser import start_browser
+      from script_tools.dom_helpers import get_text, get_attr, trusted_click
 
    The typed signatures:
 
@@ -300,6 +301,20 @@ Script rules (HARD — every script you emit MUST follow these):
       async def wait_for_anchors(tab, selector, timeout=8.0, poll_interval=0.2, required_polls=2) -> tuple[int, str]
 
       async def prepare_page_wait(tab) -> None
+
+     async def get_text(el, tab=None) -> str
+         # Safe visible text: authoritative attr (title/aria-label) first,
+         #   then full subtree textContent via el.apply (CDP), then el.text
+         #   (first text node — simple leaves only). "" on any miss.
+
+     async def get_attr(el, name: str) -> str
+         # Safe attribute read: el.attrs dict first, then el.get_attribute
+         #   (sync or async). "" on any miss.
+
+     async def trusted_click(tab, selector: str) -> bool
+         # Trusted CDP mouse click at the element's on-screen center
+         #   (null-guarded; uses tab.mouse_click, not el.click). True on
+         #   success, False if absent or raised.
 
       async def start_browser(headless=None, user_data_dir=None) -> Browser
 
@@ -387,26 +402,22 @@ Script rules (HARD — every script you emit MUST follow these):
    ``element.mouse_click()`` is BROKEN in this zendriver version
    (``get_position`` raises). The working recipe is
    ``tab.mouse_click(x, y)`` (trusted CDP mouse events) at the
-   element's on-screen center::
+   element's on-screen center. Use the ``script_tools`` helper
+   (rule 0) instead of hand-coding it::
 
-       async def _trusted_click(tab, selector):
-           el = await tab.query_selector(selector)
-           if el is None:
-               return False
-           await el.scroll_into_view()
-           await tab.sleep(0.5)
-           cx, cy = await tab.evaluate(
-               "(()=>{const r=document.querySelector("
-               + JSON.stringify(selector)
-               + ").getBoundingClientRect();"
-               "return [r.left+r.width/2, r.top+r.height/2];})()"
-           )
-           await tab.mouse_click(cx, cy)
-           return True
+      from script_tools.dom_helpers import trusted_click
+      ...
+      if not await trusted_click(tab, selector):
+          # element absent — handle (break / retry / treat as last page)
+
+   The helper scrolls the element into view, computes its center via a
+   null-guarded IIFE, and fires ``tab.mouse_click(cx, cy)``. It returns
+   ``True`` on success, ``False`` if the element is absent or the click
+   raised. Do NOT redefine it and do NOT inline a copy.
 
    Decide which loop to emit from exploration evidence: scrollHeight
    grows on scroll -> scroll loop; a load-more control exists -> click
-   loop with ``_trusted_click``. NEVER use bare ``window.scrollBy``
+   loop with ``trusted_click``. NEVER use bare ``window.scrollBy``
    as the trigger when a load-more control exists — it loads nothing.
 3. Anti-race conditions — after every ``tab.fill(...)``,
    ``tab.click(...)``, ``tab.select(...)`` or scroll, insert an
@@ -495,58 +506,37 @@ Script rules (HARD — every script you emit MUST follow these):
       ``Invalid parameters [code: -32602]``; a non-bool of any kind is
       rejected. ``arguments[0]`` inside the JS is ALWAYS undefined —
       zendriver forwards no args. To pass a Python value into JS,
-      interpolate it into the expression string with an f-string
-      (``{value!r}`` for strings/ints — safe for validated 4-digit
-      years, ids, etc.). For an element handle, use ``el.apply("(el) =>
-      ...")`` which resolves the node's object id and passes it as a
-      CDP ``CallArgument``.
+      serialize it with ``json.dumps`` and interpolate the result into
+      the expression string (``json.dumps`` produces a valid JS string
+      literal, so it is safe for any value — strings, ints, ids, even
+      values with quotes or line breaks)::
+
+          import json
+          safe_val = json.dumps(value)
+          await tab.evaluate(f"document.querySelector('input').value = {safe_val};")
+
+      ``{value!r}`` is NOT safe — Python's ``repr`` of a string uses
+      single quotes, which JS rejects, and breaks on values containing
+      quotes or line breaks. Always use ``json.dumps``. For an element
+      handle, use ``el.apply("(el) => ...")`` which resolves the node's
+      object id and passes it as a CDP ``CallArgument``.
 
    (c) ``el.text`` — last resort, only on confirmed simple leaf elements.
 
-   A safe text helper that encodes this priority:
+   These priorities are encoded in the ``script_tools`` helpers
+   (rule 0) — import and call them; do NOT redefine or inline them::
 
-      async def get_text(el, tab=None):
-          if el is None:
-              return ""
-          # (a) authoritative attribute first
-          for attr in ("title", "aria-label"):
-              attrs = getattr(el, "attrs", None)
-              if attrs and attrs.get(attr):
-                  return (attrs[attr] or "").strip()
-          # (b) full subtree text via CDP (el.apply, NOT tab.evaluate)
-          if tab is not None:
-              try:
-                  val = await el.apply(
-                      "(el) => (el.textContent || '').trim()")
-                  if isinstance(val, str) and val:
-                      return val.strip()
-              except Exception:
-                  pass
-          # (c) first text node fallback (simple leaves only)
-          value = getattr(el, "text", None)
-          if asyncio.iscoroutine(value):
-              value = await value
-          return (value or "").strip()
+      from script_tools.dom_helpers import get_text, get_attr
+      ...
+      label = await get_text(row, tab)      # (a)->(b)->(c) priority
+      href  = await get_attr(row, "href")   # attrs dict -> get_attribute
 
-   A safe helper pattern for reading an attribute is:
-
-      async def get_attr(el, name):
-          if el is None:
-              return ""
-          # 1) dict-style attrs (sync)
-          attrs = getattr(el, "attrs", None)
-          if attrs and name in attrs:
-              return (attrs[name] or "").strip()
-          # 2) get_attribute method (may be sync or async)
-          getter = getattr(el, "get_attribute", None)
-          if getter is not None:
-              value = getter(name)
-              if value is None:
-                  return ""
-              if asyncio.iscoroutine(value):
-                  value = await value
-              return (value or "").strip()
-          return ""
+   ``get_text(el, tab=None)`` returns the authoritative attribute
+   (``title``/``aria-label``) if present, else full subtree
+   ``textContent`` via ``el.apply`` (CDP), else the first text node
+   via ``el.text`` — ``""`` on any miss. ``get_attr(el, name)``
+   tries the sync ``el.attrs`` dict then the ``el.get_attribute``
+   method (sync or async) — ``""`` on any miss.
 
    NEVER call ``await el.text_content()`` or ``await el.get_attribute(...)``
    directly without first checking that the method exists and is callable.
