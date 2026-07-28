@@ -91,6 +91,7 @@ _ZD_RUNTIME_ERROR_PATTERNS: list[tuple[str, str, str]] = [
     ),
     (
         "ImportError",
+        "ImportError",
         "Wrong import name. Fix: import only from script_tools.<module> (rule 0) — modules: save_record (save_record, load_failed_downloads), save_page_html (save_page_html), pdf_download (download_pdf_curl_cffi, download_pdf_browser), page_wait (wait_for_page_ready, wait_for_anchors, prepare_page_wait), start_browser (start_browser).",
     ),
     (
