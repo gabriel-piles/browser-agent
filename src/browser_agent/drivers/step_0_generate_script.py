@@ -30,6 +30,7 @@ from browser_agent.domain.run_config import RunConfig
 from browser_agent.drivers.generation.script_emitter import ScriptEmitter
 from browser_agent.drivers.generation.script_generator import ScriptGenerator
 from browser_agent.drivers.generation.script_path_builder import ScriptPathBuilder
+from browser_agent.drivers.generation.script_tools_copier import ScriptToolsCopier
 from browser_agent.drivers.generation.script_smoke_tester import (
     SmokeTestResult,
     log_smoke_test_result,
@@ -103,6 +104,7 @@ class GenerateScriptDriver:
         run_path = RunsConfigLoader.load_active_path()
         path_builder = ScriptPathBuilder(run_path)
         emitter = ScriptEmitter(path_builder)
+        ScriptToolsCopier().copy(run_path)
         task = self._read_task(argv, run)
         context = _concurrency_context(run)
         logger.info(

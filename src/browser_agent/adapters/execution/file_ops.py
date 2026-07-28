@@ -1,7 +1,7 @@
 """Shared runtime file helpers for the PDF/HTML download adapters.
 
-The emitted vendored blocks (:mod:`emitted_snippets`) carry their own
-copies of these helpers because they must be self-contained. The live
+The ``script_tools._file_utils`` module carries its own copies of
+these helpers because emitted scripts must be standalone. The live
 adapters import from here so there is one real implementation.
 """
 

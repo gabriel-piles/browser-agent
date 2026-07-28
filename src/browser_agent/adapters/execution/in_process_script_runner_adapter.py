@@ -1,29 +1,20 @@
 """Run the LLM's emitted validation script in-process against the agent's session.
 
-The previous design spawned a subprocess for every validation attempt and
-the subprocess launched its own Chromium via the ``emitted_clean_launch``
-helper. With ``MAX_VALIDATION_ATTEMPTS = 3`` that meant up to four
-Chromium windows per agent run (one persistent session + three
-validation subprocesses) and the user's anti-bot defence saw a fresh
-fingerprint per window.
-
 This adapter runs the LLM's script in the **current** process. It
 opens a fresh tab in the agent's already-running Chromium per
-validation attempt, injects a ``start_browser()`` shim that returns
-that tab inside the agent's browser, installs a wrapped ``zendriver``
-module in ``sys.modules`` so the LLM's ``import zendriver as zd`` also
-picks up the shim, prepends the page-wait and save-record helpers
-(which work on any tab), neutralizes every ``asyncio.run(...)``
-call via :func:`with_emitted_asyncio_run` (so the LLM's
-``asyncio.run(main())`` trailer / bare top-level calls do not raise
-inside the already-running loop), replaces the vendored
-``save_record`` with one that writes to the runner's metadata DB
-path, and runs ``main()`` directly in the agent's event loop.
+validation attempt, injects a ``start_browser()`` shim via
+``sys.modules`` so the LLM's ``from script_tools.start_browser import
+start_browser`` binds the validation-browser shim, inserts the run's
+``scripts/`` dir at ``sys.path[0]`` so every other ``script_tools.*``
+import resolves to the real copied helpers, sets env vars so
+``save_record`` writes to the runner's metadata DB, neutralizes every
+``asyncio.run(...)`` call via :func:`with_emitted_asyncio_run`, and
+runs ``main()`` directly in the agent's event loop.
 
 Trade-off: the agent no longer proves the emitted script is fully
 self-contained by running it in a clean subprocess — but every
-emitted script the operator actually runs is still written through
-the same vendored helpers, so the in-process check is sufficient for
+emitted script the operator actually runs imports the same
+``script_tools/`` helpers, so the in-process check is sufficient for
 selector / scroll / filter logic verification.
 
 HAZARD: LLM-authored validation code runs in the driver's own event
@@ -38,10 +29,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import datetime
 import io
-import json
-import sqlite3
+import os
 import sys
 import traceback
 import types
@@ -51,13 +40,6 @@ from typing import Any
 import zendriver as _real_zendriver
 from loguru import logger
 
-from browser_agent.adapters.emitted_strip_imports import (
-    with_emitted_strip_imports,
-)
-from browser_agent.adapters.emitted_page_wait import with_emitted_page_wait
-from browser_agent.adapters.emitted_save_record import with_emitted_save_record
-from browser_agent.adapters.emitted_save_html import with_emitted_save_html
-from browser_agent.adapters.emitted_pdf_download import with_emitted_all_pdf_downloads
 from browser_agent.adapters.emitted_asyncio_run import with_emitted_asyncio_run
 from browser_agent.domain.script_execution_result import ScriptExecutionResult
 from browser_agent.ports.browser_session_port import BrowserSessionPort
@@ -70,8 +52,8 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
     The runner is bound to a single :class:`BrowserSessionPort` (the
     same one the agent explores with). Each ``run`` call opens a new
     tab in that session's Chromium, executes the LLM's ``main()``
-    with the tab exposed via a vendored-style ``start_browser()``
-    shim, and returns captured stdout/stderr as a
+    with the tab exposed via a ``start_browser()`` shim installed in
+    ``sys.modules``, and returns captured stdout/stderr as a
     :class:`ScriptExecutionResult`.
 
     The LLM's ``await browser.stop()`` is a no-op — closing the
@@ -112,21 +94,19 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
 
     @staticmethod
     def _augment(python_code: str) -> str:
-        code = with_emitted_strip_imports(python_code)
-        code = with_emitted_page_wait(code)
-        code = with_emitted_save_record(code)
-        code = with_emitted_save_html(code)
-        code = with_emitted_all_pdf_downloads(code)
-        return with_emitted_asyncio_run(code)
+        """Neutralize ``asyncio.run(...)`` calls so they don't conflict with the running loop."""
+        return with_emitted_asyncio_run(python_code)
 
     async def _exec_main(self, code: str, namespace: dict[str, Any], buffer: io.StringIO) -> ScriptExecutionResult:
         with _redirect_stdio_into(buffer):
             try:
-                with _shim_zendriver_in_sys_modules(namespace["start_browser"]):
+                with (
+                    _shim_modules(namespace["start_browser"]),
+                    _env_vars_for(self._metadata_db_path, self._task_slug),
+                    _sys_path_insert(self._metadata_db_path),
+                ):
                     compiled = compile(code, "<validation_script>", "exec")
                     exec(compiled, namespace)
-                    if self._metadata_db_path is not None:
-                        namespace["save_record"] = _build_save_record(self._metadata_db_path, self._task_slug)
                     main = namespace.get("main")
                     if main is None:
                         return ScriptExecutionResult(
@@ -162,13 +142,15 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
         are passed through to the real browser so the LLM's
         ``browser.get(url, new_tab=True)`` etc. still work.
 
-        When a metadata DB path is configured, this namespace also
-        carries ``_SAVE_RECORD_DB_PATH`` and ``_SAVE_RECORD_TASK_SLUG``
-        so the vendored save-record helper writes to the runner's
-        ``metadata.db`` instead of deriving a path from ``__file__``.
-        ``__file__`` itself points inside the runner's ``scripts/``
-        directory so any fall-back path resolution stays inside the
-        runner folder.
+        The shim is installed into ``sys.modules["script_tools.start_browser"]``
+        in ``_exec_main`` so the LLM's ``from script_tools.start_browser
+        import start_browser`` binds it. Every other ``script_tools.*``
+        import resolves to the real copied helpers via ``sys.path[0]``.
+
+        ``__file__`` points inside the runner's ``scripts/`` directory
+        so ``save_record``'s ``__main__.__file__`` fallback stays inside
+        the runner folder. The DB path and task slug are set via env
+        vars (``_env_vars``) rather than namespace globals.
         """
         real_browser = _unwrap_browser(self._session)
         wrapper = _ValidationBrowser(real_browser, tab)
@@ -181,8 +163,6 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
             scripts_dir = run_path / "scripts"
             scripts_dir.mkdir(parents=True, exist_ok=True)
             ns["__file__"] = str(scripts_dir / "validation.py")
-            ns["_SAVE_RECORD_DB_PATH"] = str(self._metadata_db_path)
-            ns["_SAVE_RECORD_TASK_SLUG"] = self._task_slug
         else:
             ns["__file__"] = "<validation>"
         ns["start_browser"] = _build_start_browser(wrapper)
@@ -232,77 +212,94 @@ class _ValidationBrowser:
 def _build_start_browser(wrapper: _ValidationBrowser) -> Any:
     """Return an async ``start_browser()`` shim that yields ``wrapper``.
 
-    The shim's signature matches the vendored helper
-    (``headless=False, user_data_dir=None, user_agent=None``) so
-    LLM-emitted code is happy — but the arguments are ignored; the
-    agent owns the real launch.
+    The shim's signature matches the ``script_tools.start_browser``
+    helper so LLM-emitted code is happy — but the arguments are
+    ignored; the agent owns the real launch.
     """
 
     async def start_browser(
-        headless: bool = False,
+        headless: Any = None,
         user_data_dir: Any = None,
-        user_agent: Any = None,
     ) -> _ValidationBrowser:
         return wrapper
 
     return start_browser
 
 
-def _build_save_record(db_path: Path, task_slug: str) -> Any:
-    """Return a ``save_record`` closure bound to ``db_path`` and ``task_slug``.
-
-    The closure writes to the same SQLite file the final emitted
-    script uses, so validation's records and the operator-run
-    scraper's records live side by side in ``metadata.db``.
-    """
-
-    def save_record(source_url: str, data: dict) -> None:
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(db_path))
-        try:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS metadata "
-                "(source_url TEXT PRIMARY KEY, task_slug TEXT NOT NULL, "
-                "scraped_at TEXT NOT NULL, data TEXT NOT NULL)"
-            )
-            conn.execute(
-                "INSERT OR REPLACE INTO metadata (source_url, task_slug, scraped_at, data) VALUES (?, ?, ?, ?)",
-                (
-                    source_url,
-                    task_slug,
-                    datetime.datetime.now(datetime.UTC).isoformat(),
-                    json.dumps(data, ensure_ascii=False),
-                ),
-            )
-            conn.commit()
-        finally:
-            conn.close()
-
-    return save_record
-
-
 @contextlib.contextmanager
-def _shim_zendriver_in_sys_modules(start_browser: Any):
-    """Install a wrapped zendriver in ``sys.modules`` for the duration.
+def _shim_modules(start_browser: Any):
+    """Install shims in ``sys.modules`` for the validation duration.
 
-    The LLM's emitted code does ``import zendriver as zd`` and then
-    ``await zd.start(...)``. We replace the real module with one
-    whose ``start`` is the ``start_browser`` shim (and whose other
-    attributes are passed through). On exit the real module is
-    restored so the rest of the process is unaffected.
+    Replaces ``zendriver`` with a wrapper whose ``start`` is the
+    ``start_browser`` shim (so ``await zd.start(...)`` works), and
+    installs ``script_tools.start_browser`` as a module exposing the
+    same shim (so ``from script_tools.start_browser import start_browser``
+    binds it). Every other ``script_tools.*`` import resolves to the
+    real copied helpers via ``sys.path[0]``. On exit the real modules
+    are restored.
     """
-    wrapper = types.ModuleType("zendriver")
-    wrapper.__dict__.update(_real_zendriver.__dict__)
-    wrapper.start = start_browser
-    previous = sys.modules.get("zendriver")
-    sys.modules["zendriver"] = wrapper
+    zd_wrapper = types.ModuleType("zendriver")
+    zd_wrapper.__dict__.update(_real_zendriver.__dict__)
+    zd_wrapper.start = start_browser
+
+    st_wrapper = types.ModuleType("script_tools.start_browser")
+    st_wrapper.start_browser = start_browser
+
+    previous_zd = sys.modules.get("zendriver")
+    previous_st = sys.modules.get("script_tools.start_browser")
+    sys.modules["zendriver"] = zd_wrapper
+    sys.modules["script_tools.start_browser"] = st_wrapper
     try:
         yield
     finally:
-        if previous is None:
+        if previous_zd is None:
             sys.modules.pop("zendriver", None)
         else:
-            sys.modules["zendriver"] = previous
+            sys.modules["zendriver"] = previous_zd
+        if previous_st is None:
+            sys.modules.pop("script_tools.start_browser", None)
+        else:
+            sys.modules["script_tools.start_browser"] = previous_st
+
+
+@contextlib.contextmanager
+def _env_vars_for(metadata_db_path: Path | None, task_slug: str):
+    """Set save_record env vars around the exec, restoring afterward."""
+    if metadata_db_path is None:
+        yield
+        return
+    saved_db = os.environ.get("BROWSER_AGENT_SAVE_RECORD_DB_PATH")
+    saved_slug = os.environ.get("BROWSER_AGENT_TASK_SLUG")
+    os.environ["BROWSER_AGENT_SAVE_RECORD_DB_PATH"] = str(metadata_db_path)
+    os.environ["BROWSER_AGENT_TASK_SLUG"] = task_slug
+    try:
+        yield
+    finally:
+        if saved_db is None:
+            os.environ.pop("BROWSER_AGENT_SAVE_RECORD_DB_PATH", None)
+        else:
+            os.environ["BROWSER_AGENT_SAVE_RECORD_DB_PATH"] = saved_db
+        if saved_slug is None:
+            os.environ.pop("BROWSER_AGENT_TASK_SLUG", None)
+        else:
+            os.environ["BROWSER_AGENT_TASK_SLUG"] = saved_slug
+
+
+@contextlib.contextmanager
+def _sys_path_insert(metadata_db_path: Path | None):
+    """Insert the run's ``scripts/`` dir at ``sys.path[0]`` for the exec duration."""
+    if metadata_db_path is None:
+        yield
+        return
+    scripts_dir = metadata_db_path.parent / "scripts"
+    sys.path.insert(0, str(scripts_dir))
+    try:
+        yield
+    finally:
+        try:
+            sys.path.remove(str(scripts_dir))
+        except ValueError:
+            pass
 
 
 @contextlib.contextmanager

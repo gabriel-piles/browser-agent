@@ -1,21 +1,18 @@
-"""Shared Python-source snippets reused across every vendored ``emitted*`` block.
+"""Shared file utilities for script_tools helpers.
 
-The emitted helpers are self-contained plain-Python strings prepended to
-the LLM's script (the final script MUST NOT import from this project).
-Several utility functions are identical across blocks — atomic file
-writes, deterministic filename derivation, existence checks. Defining
-each once here and composing the blocks from these snippets keeps the
-vendored code in sync without a runtime dependency.
-
-Every snippet is a ``str`` of Python source with no leading/trailing
-blank lines; the emitted blocks join them with the project's own
-``\n\n`` separators. Snippets are deliberately dependency-free (stdlib
-only) so they stay valid inside a self-contained emitted script.
+Moved verbatim from ``browser_agent.adapters.emitted_snippets`` — atomic
+writes, PDF magic-byte checks, existence checks, deterministic filename
+derivation. Stdlib-only so every script that imports any script_tools
+helper works without extra dependencies.
 """
 
 from __future__ import annotations
 
-ATOMIC_WRITE_SNIPPET = '''\
+import hashlib
+import os as _os
+from pathlib import Path
+
+
 def _write_atomic(path, data):
     """Write ``data`` to ``path`` atomically (temp + rename). On any failure,
     remove the temp file. Renames are atomic on POSIX so a crash mid-write
@@ -39,10 +36,9 @@ def _write_atomic(path, data):
                 part.unlink()
         except OSError:
             pass
-        raise'''
+        raise
 
 
-PDF_MAGIC_SNIPPET = '''\
 def _assert_pdf_magic(path, data, url):
     """Delete ``path`` and raise if ``data`` is not a real PDF.
 
@@ -56,12 +52,9 @@ def _assert_pdf_magic(path, data, url):
             Path(path).unlink()
         except OSError:
             pass
-        raise RuntimeError(
-            f"non-PDF body for {url} (first 4 bytes: {data[:4]!r})"
-        )'''
+        raise RuntimeError(f"non-PDF body for {url} (first 4 bytes: {data[:4]!r})")
 
 
-EXISTING_SIZE_SNIPPET = '''\
 def _existing_size(path):
     """Return existing on-disk size in bytes, or 0 when missing/empty/corrupt."""
     try:
@@ -70,10 +63,9 @@ def _existing_size(path):
         return 0
     except OSError:
         return 0
-    return st.st_size if st.st_size > 0 else 0'''
+    return st.st_size if st.st_size > 0 else 0
 
 
-PDF_FILENAME_SNIPPET = '''\
 def _pdf_filename_for(url):
     """Deterministic, collision-safe on-disk filename for ``url``.
 
@@ -81,10 +73,9 @@ def _pdf_filename_for(url):
     download URL, so "file exists at path" == "this exact PDF was
     already downloaded" regardless of page order or label reuse.
     """
-    return f"pdf_{hashlib.sha1(url.encode()).hexdigest()[:12]}.pdf"'''
+    return f"pdf_{hashlib.sha1(url.encode()).hexdigest()[:12]}.pdf"
 
 
-HTML_FILENAME_SNIPPET = '''\
 def _html_filename_for(url):
     """Deterministic, collision-safe on-disk filename for ``url``.
 
@@ -93,4 +84,4 @@ def _html_filename_for(url):
     already saved" regardless of page order. Mirrors the PDF naming
     scheme so the two never collide (different prefix + extension).
     """
-    return f"html_{hashlib.sha1(url.encode()).hexdigest()[:12]}.html"'''
+    return f"html_{hashlib.sha1(url.encode()).hexdigest()[:12]}.html"

@@ -6,8 +6,10 @@ import re
 from browser_agent.domain.lint_finding import LintFinding
 
 _HTTP_MODULES = frozenset({"requests", "httpx", "aiohttp", "urllib", "urllib3"})
-_HTTP_MSG = "no HTTP libraries; use tab.get() and vendored download helpers"
-_SELF_MSG = "script must be self-contained; only browser_agent.runtime_helpers is allowed (stripped at emit time)"
+_HTTP_MSG = "no HTTP libraries; use tab.get() and script_tools download helpers"
+_SELF_MSG = (
+    "script imports must be stdlib, zendriver, or script_tools.* (real modules copied beside the script at emit time)"
+)
 _EVAL_IIFE_TAIL = re.compile(r"\)\s*\(\s*\)")
 
 
@@ -161,7 +163,7 @@ def _check_bare_paths(python_code: str) -> list[LintFinding]:
 
 
 def _bad_self_root(root: str) -> bool:
-    return root.startswith("browser_agent.") and root != "browser_agent.runtime_helpers"
+    return root == "browser_agent" or root.startswith("browser_agent.")
 
 
 def _check_self_contained(python_code: str) -> list[LintFinding]:
@@ -208,14 +210,100 @@ _ZENDRIVER_RULE_NAMES: dict[str, str] = {
 }
 
 
+def _check_skeleton(python_code: str) -> list[LintFinding]:
+    """Enforce the fixed script skeleton (rule 1): trailer, start_browser first, finally-stop."""
+    findings: list[LintFinding] = []
+    trailer_ok = python_code.rstrip().endswith('if __name__ == "__main__":\n    asyncio.run(main())')
+    if not trailer_ok:
+        findings.append(
+            LintFinding(
+                rule="1",
+                severity="error",
+                message='script MUST end with exactly: if __name__ == "__main__": then asyncio.run(main())',
+                line=None,
+            )
+        )
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return findings
+    main_fn = None
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "main":
+            main_fn = node
+            break
+    if main_fn is None:
+        findings.append(
+            LintFinding(
+                rule="1",
+                severity="error",
+                message="missing top-level async def main()",
+                line=None,
+            )
+        )
+        return findings
+    if not main_fn.body:
+        findings.append(
+            LintFinding(
+                rule="1",
+                severity="error",
+                message="first statement of main() MUST be browser = await start_browser(headless=False)",
+                line=main_fn.lineno,
+            )
+        )
+    else:
+        first = main_fn.body[0]
+        is_start = (
+            isinstance(first, ast.Assign)
+            and isinstance(first.value, ast.Await)
+            and isinstance(first.value.value, ast.Call)
+            and isinstance(first.value.value.func, ast.Name)
+            and first.value.value.func.id == "start_browser"
+        )
+        if not is_start:
+            findings.append(
+                LintFinding(
+                    rule="1",
+                    severity="error",
+                    message="first statement of main() MUST be browser = await start_browser(headless=False)",
+                    line=first.lineno if hasattr(first, "lineno") else main_fn.lineno,
+                )
+            )
+    has_finally_stop = False
+    for node in ast.walk(main_fn):
+        if isinstance(node, ast.Try) and node.finalbody:
+            for stmt in node.finalbody:
+                if (
+                    isinstance(stmt, ast.Expr)
+                    and isinstance(stmt.value, ast.Await)
+                    and isinstance(stmt.value.value, ast.Call)
+                    and isinstance(stmt.value.value.func, ast.Attribute)
+                    and stmt.value.value.func.attr == "stop"
+                ):
+                    has_finally_stop = True
+                    break
+        if has_finally_stop:
+            break
+    if not has_finally_stop:
+        findings.append(
+            LintFinding(
+                rule="1",
+                severity="error",
+                message="browser.stop() MUST be awaited inside a finally: block so the browser closes on errors",
+                line=None,
+            )
+        )
+    return findings
+
+
 class EmittedScriptLinter:
     """Lint the RAW LLM python_code (before emit transforms)."""
 
     def __init__(self) -> None:
         self._checks = (
             _check_syntax,
+            _check_skeleton,
             _check_save_record,
-            _check_file_size_key,
             _check_zd_start,
             _check_http_imports,
             _check_playwright_selectors,

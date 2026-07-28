@@ -1,63 +1,13 @@
-"""Self-contained page-wait helper inlined into every emitted script.
+"""Minimal CDP tracker for emitted scripts.
 
-Both the final script the operator runs and the in-process
-validation script need the same page-load readiness signal the
-persistent :class:`ZendriverBrowserSession` gives the agent (CDP
-``Page.frameStoppedLoading`` + network-idle), so the helper is
-shipped as a plain-Python string and prepended to every emitted
-``python_code``.
-
-Three call sites:
-
-* :func:`prepare_page_wait` — call once at the top of ``main`` BEFORE the
-  first ``tab.get(url)`` so the tracker receives the
-  ``frameStoppedLoading`` and ``Network.*`` events for the first
-  navigation. If the tracker is not pre-attached, the first
-  ``wait_for_page_ready`` call will miss the events of the navigation
-  that is already in flight.
-* :func:`wait_for_page_ready` — drop in for ``tab.sleep(...)`` after
-  every ``tab.get(url)``. Waits for the active navigation's frame to
-  stop loading AND for the network to be quiet for ``~500ms``. Pass
-  the URL you navigated to so the helper can handle same-URL reloads
-  (where Chrome does not fire a fresh ``frameStoppedLoading``).
-* :func:`wait_for_anchors` — drop in for ``tab.sleep(...)`` before
-  reading elements populated by a filter / XHR. Polls a CSS selector
-  until it matches at least one element for ``required_polls`` consecutive
-  polls, bounded by ``timeout`` seconds.
-
-The helper caches a tracker on the tab (``tab._emitted_wait_tracker``) so
-subsequent navigations on the same tab reuse the same CDP subscriptions
-instead of re-enabling the ``Page`` and ``Network`` domains.
-
-Update the string in lockstep with the standalone tracker if the CDP
-contract changes. The two implementations must stay aligned so validation
-behaviour matches the live browser session.
+Moved verbatim from ``browser_agent.adapters.emitted_page_wait``.
+Mirrors the relevant subset of ``browser_agent.adapters.cdp_page_tracker``
+so the helper works the same way the persistent session does. One
+instance is cached on the tab for the script's lifetime.
 """
 
 from __future__ import annotations
 
-
-def with_emitted_page_wait(python_code: str) -> str:
-    """Prepend the vendored page-wait helper to ``python_code``.
-
-    Both the in-process validation runner
-    (:class:`InProcessScriptRunnerAdapter`) and the final-script
-    emit path (``generate_script._emit``) call this so the helper
-    appears at the top of every script that runs. The helper is
-    idempotent: if the script already contains the block marker it
-    is returned unchanged.
-    """
-    if "BEGIN emitted page-wait helper" in python_code:
-        return python_code
-    return f"{EMITTED_PAGE_WAIT_BLOCK}{python_code}"
-
-
-# This block is intentionally a single literal string. The
-# in-process validation runner and the ``generate_script`` driver
-# concatenate it in front of the LLM's emitted code so the script gets a
-# real page-load signal without importing from this project.
-EMITTED_PAGE_WAIT_BLOCK = '''\
-# ── BEGIN emitted page-wait helper (vendored from browser_agent) ──
 import asyncio
 import time
 
@@ -252,8 +202,9 @@ async def prepare_page_wait(tab):
     await _get_tracker(tab)
 
 
-async def wait_for_page_ready(tab, url=None, timeout=_PAGE_WAIT_DEFAULT_TIMEOUT_S,
-                              quiet_window_ms=_PAGE_WAIT_QUIET_WINDOW_MS):
+async def wait_for_page_ready(
+    tab, url=None, timeout=_PAGE_WAIT_DEFAULT_TIMEOUT_S, quiet_window_ms=_PAGE_WAIT_QUIET_WINDOW_MS
+):
     """Block until the active navigation has loaded and the network is idle.
 
     Drop-in replacement for ``await tab.sleep(...)`` after ``tab.get(url)``.
@@ -272,16 +223,18 @@ async def wait_for_page_ready(tab, url=None, timeout=_PAGE_WAIT_DEFAULT_TIMEOUT_
     tracker.begin_navigation(None)
     frame_budget = max(1.0, timeout * 0.75)
     if not await tracker.wait_for_frame_stopped(frame_budget, expected_url=url):
-        raise TimeoutError(
-            f"frame did not stop loading within {frame_budget:.1f}s"
-        )
+        raise TimeoutError(f"frame did not stop loading within {frame_budget:.1f}s")
     quiet_budget = max(0.5, timeout - frame_budget)
     await tracker.wait_for_network_quiet(quiet_window_ms, quiet_budget)
 
 
-async def wait_for_anchors(tab, selector, timeout=_ANCHOR_DEFAULT_TIMEOUT_S,
-                           poll_interval=_ANCHOR_POLL_INTERVAL_S,
-                           required_polls=_ANCHOR_REQUIRED_STABLE_POLLS):
+async def wait_for_anchors(
+    tab,
+    selector,
+    timeout=_ANCHOR_DEFAULT_TIMEOUT_S,
+    poll_interval=_ANCHOR_POLL_INTERVAL_S,
+    required_polls=_ANCHOR_REQUIRED_STABLE_POLLS,
+):
     """Block until ``selector`` matches at least one non-empty element.
 
     Drop-in replacement for ``await tab.sleep(...)`` before reading
@@ -298,9 +251,7 @@ async def wait_for_anchors(tab, selector, timeout=_ANCHOR_DEFAULT_TIMEOUT_S,
     last_count = 0
     while True:
         try:
-            result = await tab.evaluate(
-                f"document.querySelectorAll({selector!r}).length"
-            )
+            result = await tab.evaluate(f"document.querySelectorAll({selector!r}).length")
             count = int(result) if result is not None else 0
         except Exception:
             count = 0
@@ -308,10 +259,7 @@ async def wait_for_anchors(tab, selector, timeout=_ANCHOR_DEFAULT_TIMEOUT_S,
             stable += 1
             if stable >= required_polls:
                 try:
-                    sample = await tab.evaluate(
-                        f"(document.querySelector({selector!r})"
-                        f" || {{}}).textContent || ''"
-                    )
+                    sample = await tab.evaluate(f"(document.querySelector({selector!r}) || {{}}).textContent || ''")
                 except Exception:
                     sample = ""
                 return count, (sample or "").strip()[:200]
@@ -319,9 +267,5 @@ async def wait_for_anchors(tab, selector, timeout=_ANCHOR_DEFAULT_TIMEOUT_S,
         else:
             stable = 0
         if time.monotonic() >= deadline:
-            raise TimeoutError(
-                f"selector {selector!r} matched 0 elements after {timeout:.1f}s"
-            )
+            raise TimeoutError(f"selector {selector!r} matched 0 elements after {timeout:.1f}s")
         await asyncio.sleep(poll_interval)
-# ── END emitted page-wait helper ──
-'''

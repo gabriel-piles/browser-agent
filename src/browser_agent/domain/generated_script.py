@@ -32,9 +32,9 @@ class GeneratedScript(BaseModel):
         description=(
             "A completely self-contained, executable async Python script "
             "utilizing zendriver and asyncio.run(). Must not import from "
-            "this project EXCEPT ``browser_agent.runtime_helpers``, which "
-            "is stripped and inlined at emit time; it must be runnable "
-            "as a standalone file."
+            "this project; helper imports come only from ``script_tools.*`` "
+            "(copied next to the script at emit time); runnable standalone "
+            "with ``python <file>``."
         ),
     )
     pdf_download_strategy: str = Field(

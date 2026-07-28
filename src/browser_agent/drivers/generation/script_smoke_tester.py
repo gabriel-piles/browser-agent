@@ -6,11 +6,11 @@ declaring success." This module delivers that promise.
 
 The validation runner (``InProcessScriptRunnerAdapter``) tests the
 LLM's *raw* code in-process with shimmed ``start_browser``. The final
-emitted script has vendored helpers prepended and ``zd.start()``
+emitted script imports from ``script_tools/`` and has ``zd.start()``
 rewritten — a *different* artifact. Running it once as a real
 subprocess catches the class of bugs that only surface in the final
-form: stripped imports that shadowed vendored helpers, JS string
-concatenation errors, missing helper definitions, etc.
+form: missing ``script_tools/`` copy, JS string concatenation errors,
+import shadowing, etc.
 
 The smoke test is **best-effort**: a timeout is a PASS (the script is
 running, doing real work — we don't want to wait for a full scrape).
@@ -18,13 +18,14 @@ Only an early crash (exit before the timeout with a non-zero code)
 is a FAIL. The result is logged prominently and surfaced to the
 operator so a broken script is never silently delivered.
 
-SCRATCH ISOLATION: the script is launched with ``_SAVE_RECORD_DB_PATH``
-and ``_SAVE_RECORD_TASK_SLUG`` injected as globals (via a ``-c``
-wrapper preamble) so the smoke test writes rows into a scratch
-``metadata.db`` and PDFs into a scratch ``downloads/`` dir under the
-run's ``smoke/`` folder — NOT the real run directory. This prevents
-the 60-second window from dirtying the run with partial rows and
-locked PDFs that step 1 then has to untangle.
+SCRATCH ISOLATION: the script is launched with
+``BROWSER_AGENT_SAVE_RECORD_DB_PATH`` and
+``BROWSER_AGENT_TASK_SLUG`` env vars set so the smoke test writes
+rows into a scratch ``metadata.db`` and PDFs into a scratch
+``downloads/`` dir under the run's ``smoke/`` folder — NOT the real
+run directory. This prevents the 60-second window from dirtying the
+run with partial rows and locked PDFs that step 1 then has to
+untangle.
 
 PROCESS GROUP: the subprocess is launched with
 ``start_new_session=True`` so the Python process and the Chromium it
@@ -50,10 +51,6 @@ from loguru import logger
 # still running at the timeout, it passed the smoke test.
 SMOKE_TEST_TIMEOUT_S = 60.0
 
-# The preamble sets _SAVE_RECORD_DB_PATH / _SAVE_RECORD_TASK_SLUG in
-# the script's globals before exec'ing the file, redirecting DB writes
-# and downloads into the scratch dir. Mirrors the in-process runner's
-# injection (in_process_script_runner_adapter.py:193).
 _ZD_RUNTIME_ERROR_PATTERNS: list[tuple[str, str, str]] = [
     (
         "tab.evaluate",
@@ -103,14 +100,6 @@ _ZD_RUNTIME_ERROR_PATTERNS: list[tuple[str, str, str]] = [
 ]
 
 
-_PREAMBLE = """\
-import runpy, sys
-g = {{"_SAVE_RECORD_DB_PATH": {db!r}, "_SAVE_RECORD_TASK_SLUG": "smoke"}}
-runpy.run_path({path!r}, run_name="__smoke__", init_globals=g)
-sys.exit(0)
-"""
-
-
 @dataclass
 class SmokeTestResult:
     """Outcome of running the emitted script as a subprocess."""
@@ -130,15 +119,20 @@ async def smoke_test_script(script_path: Path) -> SmokeTestResult:
     """
     scratch_dir = _scratch_dir(script_path)
     db_path = str(scratch_dir / "metadata.db")
-    preamble = _PREAMBLE.format(db=db_path, path=str(script_path))
-    cmd = [sys.executable, "-c", preamble]
+    cmd = [sys.executable, str(script_path)]
+    env = {
+        **os.environ,
+        "ZENDRIVER_HEADLESS": "true",
+        "BROWSER_AGENT_SAVE_RECORD_DB_PATH": db_path,
+        "BROWSER_AGENT_TASK_SLUG": "smoke",
+    }
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             start_new_session=True,
-            env={**os.environ, "ZENDRIVER_HEADLESS": "true"},
+            env=env,
         )
     except OSError as exc:
         return SmokeTestResult(success=False, output=f"failed to launch: {exc}", timed_out=False)

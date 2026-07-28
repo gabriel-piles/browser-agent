@@ -90,14 +90,13 @@ _ZD_RUNTIME_ERROR_PATTERNS: list[tuple[str, str, str]] = [
         "Malformed Python. Fix: check for unbalanced parens/quotes, especially in f-strings and tab.evaluate JS strings.",
     ),
     (
-        "ImportError: cannot import name '",
         "ImportError",
-        "Wrong import name. Fix: import only from browser_agent.runtime_helpers (rule 0) — the names are save_record, save_page_html, download_pdf_curl_cffi, download_pdf_browser, wait_for_page_ready, wait_for_anchors, prepare_page_wait, start_browser.",
+        "Wrong import name. Fix: import only from script_tools.<module> (rule 0) — modules: save_record (save_record, load_failed_downloads), save_page_html (save_page_html), pdf_download (download_pdf_curl_cffi, download_pdf_browser), page_wait (wait_for_page_ready, wait_for_anchors, prepare_page_wait), start_browser (start_browser).",
     ),
     (
         "ModuleNotFoundError: No module named '",
         "ModuleNotFoundError",
-        "Missing module. Fix: only zendriver, asyncio, and stdlib are available; the vendored helpers are inlined automatically (rule 0/5).",
+        "Missing module. Fix: only zendriver, asyncio, stdlib, and script_tools.* are available (rule 0/5); the script_tools/ folder is copied beside the script at emit time.",
     ),
     (
         "AttributeError: '",

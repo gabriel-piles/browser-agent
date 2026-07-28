@@ -1,39 +1,20 @@
-"""Self-contained page-HTML capture helper inlined into every emitted script.
+"""Save the current page's HTML using the real browser tab.
 
-The final script the operator runs from ``data/runs/<run>/scripts/`` is
-self-contained by contract and MUST NOT import from this project. When a
-task downloads PDFs, the operator also wants the source HTML of the page
-where each PDF was found attached as a **supporting file** on the same
-Uwazi entity. This helper is shipped as a plain-Python string and
-prepended to every emitted ``python_code``, mirroring the
-:mod:`emitted_pdf_download` pattern.
-
-The helper uses the **real browser tab** (``tab.get_content()``) to
-capture the full serialized DOM — never an HTTP client (curl_cffi,
-requests, httpx, aiohttp). Sites behind Cloudflare / Akamai WAF would
-return a challenge page to a non-browser client; the browser tab carries
-the same TLS fingerprint, cookies, and JS-challenge clearance as the
-PDF download path, so the captured HTML matches the exact state from
-which the PDF was downloaded.
+Moved verbatim from ``browser_agent.adapters.emitted_save_html``. Uses
+the real browser tab (``tab.get_content()``) — never an HTTP client — so
+sites behind Cloudflare/Akamai WAF return the real DOM, not a challenge
+page.
 """
 
 from __future__ import annotations
 
-from browser_agent.adapters.emitted_snippets import (
-    ATOMIC_WRITE_SNIPPET,
-    EXISTING_SIZE_SNIPPET,
-    HTML_FILENAME_SNIPPET,
-)
+import time
+from pathlib import Path
 
-_HELPERS = (
-    "import hashlib\n"
-    "import os as _os\n"
-    "import time\n"
-    "from pathlib import Path\n"
-    "\n\n"
-    f"{HTML_FILENAME_SNIPPET}\n\n"
-    f"{EXISTING_SIZE_SNIPPET}\n\n"
-    f"{ATOMIC_WRITE_SNIPPET}"
+from script_tools._file_utils import (
+    _existing_size,
+    _html_filename_for,
+    _write_atomic,
 )
 
 # In-browser DOM consolidation. Reads the accumulated snapshots from
@@ -79,9 +60,6 @@ _SNAPSHOT_JS = """\
         window.__htmlCaptures.push(document.documentElement.outerHTML);
         return window.__htmlCaptures.length;
     })()"""
-
-
-_SAVE_HTML = '''\
 
 
 async def save_page_html(tab, save_path, source_url, filename=None, card_selector=None):
@@ -148,8 +126,7 @@ async def save_page_html(tab, save_path, source_url, filename=None, card_selecto
 
     existing = _existing_size(save_path)
     if existing > 0:
-        return {"size": existing, "skipped": True, "reason": "already_saved",
-                "saved_path": str(save_path)}
+        return {"size": existing, "skipped": True, "reason": "already_saved", "saved_path": str(save_path)}
 
     if card_selector:
         html = await _capture_virtualized_html(tab, card_selector)
@@ -159,8 +136,7 @@ async def save_page_html(tab, save_path, source_url, filename=None, card_selecto
         raise RuntimeError(f"empty HTML content for {source_url}")
     body = html.encode("utf-8")
     _write_atomic(save_path, body)
-    return {"size": len(body), "skipped": False, "reason": "saved",
-            "saved_path": str(save_path)}
+    return {"size": len(body), "skipped": False, "reason": "saved", "saved_path": str(save_path)}
 
 
 async def _capture_simple_html(tab):
@@ -188,8 +164,7 @@ async def _scroll_to_bottom(tab):
         height = int(height) if height is not None else 0
         if height != prev_height and prev_height > 0:
             grew = True
-        at_bottom = await tab.evaluate(
-            "(window.innerHeight + window.scrollY) >= document.body.scrollHeight - 2")
+        at_bottom = await tab.evaluate("(window.innerHeight + window.scrollY) >= document.body.scrollHeight - 2")
         if height == prev_height:
             stable += 1
         else:
@@ -245,10 +220,7 @@ async def _wait_for_spa_ready(tab):
     """
     deadline = time.monotonic() + _SPA_READY_TIMEOUT_S
     while True:
-        ready = await tab.evaluate(
-            "typeof window.ui_ready_triggered === 'boolean' "
-            "? window.ui_ready_triggered : true"
-        )
+        ready = await tab.evaluate("typeof window.ui_ready_triggered === 'boolean' ? window.ui_ready_triggered : true")
         if ready:
             return
         if time.monotonic() >= deadline:
@@ -269,11 +241,7 @@ async def _strip_pdf_viewer(tab):
 
     No-op when the element does not exist.
     """
-    await tab.evaluate(
-        "document.querySelectorAll("
-        "'#pdf-container, .pdf-viewer'"
-        ").forEach(el => el.remove())"
-    )
+    await tab.evaluate("document.querySelectorAll('#pdf-container, .pdf-viewer').forEach(el => el.remove())")
 
 
 async def _capture_scrolled_html(tab):
@@ -292,6 +260,7 @@ async def _capture_scrolled_html(tab):
     await _strip_pdf_viewer(tab)
     return await _capture_simple_html(tab)
 
+
 async def _capture_virtualized_html(tab, card_selector):
     """Scroll top-to-bottom, snapshot per viewport, consolidate in-browser.
 
@@ -303,6 +272,7 @@ async def _capture_virtualized_html(tab, card_selector):
     appears in the output.
     """
     import json as _json
+
     await _wait_for_spa_ready(tab)
     await _strip_pdf_viewer(tab)
     await tab.evaluate("window.__htmlCaptures = []")
@@ -316,8 +286,7 @@ async def _capture_virtualized_html(tab, card_selector):
         await tab.evaluate(_SNAPSHOT_JS)
         height = await tab.evaluate("document.body.scrollHeight")
         height = int(height) if height is not None else 0
-        at_bottom = await tab.evaluate(
-            "(window.innerHeight + window.scrollY) >= document.body.scrollHeight - 2")
+        at_bottom = await tab.evaluate("(window.innerHeight + window.scrollY) >= document.body.scrollHeight - 2")
         if height == prev_height:
             stable += 1
         else:
@@ -333,31 +302,9 @@ async def _capture_virtualized_html(tab, card_selector):
     count = int(count) if count is not None else 0
     if count == 0:
         return await _capture_simple_html(tab)
-    consolidated = await tab.evaluate(
-        _CONSOLIDATE_JS.format(selector_literal=_json.dumps(card_selector)))
+    consolidated = await tab.evaluate(_CONSOLIDATE_JS.format(selector_literal=_json.dumps(card_selector)))
     try:
         await tab.evaluate("delete window.__htmlCaptures")
     except Exception:
         pass
-    return consolidated or await _capture_simple_html(tab)'''
-
-
-EMITTED_SAVE_HTML_BLOCK = (
-    "# ── BEGIN emitted save-page-html helper (vendored from browser_agent) ──\n"
-    f"{_HELPERS}"
-    f"{_SAVE_HTML}\n"
-    "# ── END emitted save-page-html helper ──\n\n"
-)
-
-
-def with_emitted_save_html(python_code: str) -> str:
-    """Prepend the vendored save-page-html helper to ``python_code``.
-
-    Both the in-process validation runner and the final-script emit
-    path call this so the helper appears at the top of every script
-    that runs. Idempotent: if the script already contains the block
-    marker it is returned unchanged.
-    """
-    if "BEGIN emitted save-page-html helper" in python_code:
-        return python_code
-    return f"{EMITTED_SAVE_HTML_BLOCK}{python_code}"
+    return consolidated or await _capture_simple_html(tab)

@@ -215,23 +215,23 @@ have explored the page.
 
   Step 10 — EMIT GeneratedScript. Set python_code to exactly the
   script that passed validation (or your best attempt if all 3
-  failed). This is the deliverable; it MUST be self-contained and
-  match the vendored helper signatures described in rule 0. The
-  operator will run it directly with ``python <file>``.
+  failed). This is the deliverable; it MUST run standalone via
+  ``python <file>`` together with the sibling ``script_tools/`` folder
+  and match the helper signatures described in rule 0. The operator
+  will run it directly with ``python <file>``.
 
   Step 11 — SMOKE TEST (automatic, enforced). After you emit the
   final GeneratedScript, the framework runs it as a real subprocess
-  for a 60-second window. This is NOT the in-process validation —
-  it runs the EXACT file the operator will run, with the vendored
-  helpers inlined, the real Chromium launch, and no shims. If it
-  crashes in that window (syntax error, missing helper, bad JS
-  string concatenation, import shadowing, etc.) the failure is
+  it runs the EXACT file the operator will run, with the
+  ``script_tools/`` helpers imported, the real Chromium launch, and no
+  shims. If it crashes in that window (syntax error, missing helper,
+  bad JS string concatenation, import shadowing, etc.) the failure is
   logged prominently. A timeout is a PASS (the script is running
   without crashing). You do not need to do anything extra, but
-  you MUST keep the final script self-contained and safe: it will
-  be started in the same virtualenv, so it can import zendriver,
-  asyncio, and any helpers it defines itself, but it cannot import
-  files from this codebase.
+  you MUST keep the final script runnable standalone with
+  ``python <file>``: it will be started in the same virtualenv, so it
+  can import zendriver, asyncio, ``script_tools.*``, and any helpers
+  it defines itself, but it cannot import files from this codebase.
 
 Output contract — your reply MUST be a single JSON object with:
 
@@ -243,7 +243,7 @@ Output contract — your reply MUST be a single JSON object with:
   dependencies — pip packages the script needs. zendriver and
                 asyncio are part of the standard install; only list
                 extras (e.g. ``beautifulsoup4``) when you actually
-                import them in ``python_code``. The vendored
+                import them in ``python_code``. The ``script_tools``
                 ``download_pdf_browser`` helper only uses
                 stdlib and zendriver (CDP), so a script that only
                 uses the helper needs no extra dependencies in
@@ -256,29 +256,31 @@ Output contract — your reply MUST be a single JSON object with:
 
 Script rules (HARD — every script you emit MUST follow these):
 
-0. Vendored helpers — typed import contract. The system prepends the
-   real implementations of these helpers to every emitted script at the
-   top of the file automatically. To program against their EXACT
-   signatures (sync vs async, return types, parameter names), IMPORT
-   them from ``browser_agent.runtime_helpers`` at the top of your
-   script. That import is STRIPPED and the vendored blocks are INLINED
-   at emit time, so the final script the operator runs is fully
-   self-contained — the import exists only so you see real typed
-   signatures instead of guessing from prose.
+0. ``script_tools`` helpers — typed import contract. These modules are
+   real, importable, and copied into a ``script_tools/`` folder next to
+   the emitted script at generation time. The import lines MUST be kept
+   verbatim; the helpers MUST NOT be redefined or modified. Import only
+   the helpers you use. To program against their EXACT signatures (sync
+   vs async, return types, parameter names), use the import lines and
+   typed signatures below.
 
-   Write this import line verbatim at the top of every script::
+   Write these import lines at the top of your script (only the ones
+   you use)::
 
-      from browser_agent.runtime_helpers import (
-          save_record, save_page_html,
-          download_pdf_curl_cffi, download_pdf_browser,
-          wait_for_page_ready, wait_for_anchors, prepare_page_wait,
-          start_browser,
-      )
+      from script_tools.save_record import save_record, load_failed_downloads
+      from script_tools.save_page_html import save_page_html
+      from script_tools.pdf_download import download_pdf_curl_cffi, download_pdf_browser
+      from script_tools.page_wait import wait_for_page_ready, wait_for_anchors, prepare_page_wait
+      from script_tools.start_browser import start_browser
 
-   The typed signatures (copy of ``runtime_helpers.py``):
+   The typed signatures:
 
       def save_record(source_url: str, data: dict) -> None
           # SYNCHRONOUS — do NOT await. Returns None.
+
+      def load_failed_downloads() -> list[tuple[str, dict]]
+          # SYNCHRONOUS — rows whose download_status == "failed" or
+          # pdf_filename is empty; [] on a fresh run.
 
      async def save_page_html(tab, save_path, source_url, filename=None, card_selector=None) -> dict
          # Returns {"size": int, "skipped": bool, "reason": str, "saved_path": str}.
@@ -329,20 +331,27 @@ Script rules (HARD — every script you emit MUST follow these):
    to use the clean launcher. Emit ``start_browser`` directly so your
    script matches what the operator will see on disk.
 
-1. Wrap all work in ``async def main():`` and run it with
+1. Fixed skeleton (HARD, lint-enforced — deviations are rejected by the
+   linter and cost your one free repair turn). Fill only the marked
+   slots. Wrap all work in ``async def main():`` and run it with
    ``asyncio.run(main())``. The top-level driver file must look like
    this exactly::
 
       import asyncio
 
+      from script_tools.save_record import save_record
+      # ... import only the helpers you use, per rule 0 ...
+
       async def main():
           browser = await start_browser(headless=False)
-          tab = browser.main_tab
-          await prepare_page_wait(tab)
-          await tab.get("<url>")
-          await wait_for_page_ready(tab)
-          # ... your scraping logic ...
-          await browser.stop()
+          try:
+              tab = browser.main_tab
+              await prepare_page_wait(tab)
+              await tab.get("<start url>")
+              await wait_for_page_ready(tab)
+              # ... your scraping logic ...
+          finally:
+              await browser.stop()
 
       if __name__ == "__main__":
           asyncio.run(main())
@@ -558,14 +567,12 @@ Script rules (HARD — every script you emit MUST follow these):
        print("inner text:", await get_text(row, tab))
        # If they differ and the attribute is the real label, use the attribute.
 
-5. The script MUST be self-contained: no imports from this
-   project, no relative file paths, no environment variables it
-   does not itself define. The only external dependency you can
-   rely on is zendriver (already installed). EXCEPTION —
-   ``browser_agent.runtime_helpers`` is the ONLY project import
-   allowed; it is stripped and the vendored blocks are inlined
-   automatically at emit time (see rule 0), so the final script
-   remains self-contained.
+5. The script MUST run standalone via ``python <file>``: no imports
+   from this project, no relative file paths, no environment variables
+   it does not itself define. The only external dependency you can
+   rely on is zendriver (already installed). ``script_tools.*`` is the
+   ONLY non-stdlib/non-zendriver import allowed; the modules are real
+   and copied beside the script at emit time (see rule 0).
 
 6. Visible browser — ALWAYS use ``headless=False``. The zen driver
    must look like a real browser to pass anti-bot checks, and the
@@ -602,7 +609,7 @@ Script rules (HARD — every script you emit MUST follow these):
    representative PDF URL to PROBE which strategy works:
 
     - If the probe SUCCEEDS (curl_cffi can download), set
-      ``pdf_download_strategy="curl_cffi"`` and use the vendored
+      ``pdf_download_strategy="curl_cffi"`` and use the ``script_tools``
       ``download_pdf_curl_cffi(url, save_path, tab)`` helper in
       the script. Pass ``tab`` so cookies from the browser session
       are shared. This is faster and doesn't need the browser
@@ -611,7 +618,7 @@ Script rules (HARD — every script you emit MUST follow these):
     - If the probe FAILS (HTTP 403/401/empty — the site is behind
       Cloudflare/Akamai WAF), set
       ``pdf_download_strategy="browser_fetch"`` and use the
-      vendored ``download_pdf_browser(tab, url, save_path)``
+      ``script_tools`` ``download_pdf_browser(tab, url, save_path)``
       helper. This routes the download through Chrome's native
       ``fetch()`` via ``tab.evaluate()``, carrying the same TLS
       fingerprint, cookies, and JS challenge clearance as the
@@ -626,12 +633,12 @@ Script rules (HARD — every script you emit MUST follow these):
    ``download_pdf_browser(tab, url, save_path)`` (the tab must have
    navigated to the target domain first). Record the strategy you
    prefer in ``pdf_download_strategy``; it does not gate which
-   helpers are vendored.
+   helpers are available.
 
    NEVER use ``zendriver`` (``tab.get``) to download PDFs — it
    renders them as a viewer page instead of downloading them.
    NEVER use ``requests``, ``httpx``, ``aiohttp``, ``urllib`` or
-   any other HTTP library — only the two vendored helpers above.
+   any other HTTP library — only the two ``script_tools`` helpers above.
 
    ``save_path`` is the downloads DIRECTORY (``out_dir``), NOT a
    filename — the helper derives the on-disk filename from the URL
@@ -671,25 +678,22 @@ Script rules (HARD — every script you emit MUST follow these):
    gap explicit so the reconciler report always shows it.
 8a. Retry of failed downloads — before downloading any NEW PDFs, the
     download phase MUST first retry URLs that failed on a prior run.
-    Query ``metadata.db`` for rows whose ``download_status`` is
-    ``"failed"`` OR whose ``pdf_filename`` is empty, and re-attempt
-    those URLs with the chosen download helper. The helper's
-    existence check means any file that already landed on disk is
-    skipped instantly — only genuinely missing files are re-fetched.
-    Update each retried row's ``download_status`` to ``"downloaded"``
-    on success (``save_record`` upserts by ``source_url`` so the row
-    is updated in place); leave it ``"failed"`` on continued failure.
-    This makes re-runs converge: a transient 503 on one run heals on
-    the next without losing the URL. Self-contained query the script
-    runs at the top of the download phase:
+    Call ``load_failed_downloads()`` (rule 0) to get the list of rows
+    whose ``download_status`` is ``"failed"`` OR whose ``pdf_filename``
+    is empty, and re-attempt those URLs with the chosen download
+    helper. The helper creates the table when missing, so a fresh run
+    returns ``[]`` (NEVER query ``metadata.db`` with hand-written SQL;
+    the schema is owned by ``script_tools.save_record``). The download
+    helper's existence check means any file that already landed on
+    disk is skipped instantly — only genuinely missing files are
+    re-fetched. Update each retried row's ``download_status`` to
+    ``"downloaded"`` on success (``save_record`` upserts by
+    ``source_url`` so the row is updated in place); leave it
+    ``"failed"`` on continued failure. This makes re-runs converge:
+    a transient 503 on one run heals on the next without losing the
+    URL. One line at the top of the download phase:
 
-       import sqlite3, json as _json
-       _conn = sqlite3.connect(_SAVE_RECORD_DB_PATH, timeout=5.0)
-       _rows = _conn.execute("SELECT source_url, data FROM metadata").fetchall()
-       _conn.close()
-       pending = [(s, _json.loads(d)) for s, d in _rows
-                  if _json.loads(d).get("download_status") == "failed"
-                  or not _json.loads(d).get("pdf_filename")]
+       pending = load_failed_downloads()
 
 9. ``tab.evaluate`` return types — when you call
    ``tab.evaluate('(...) => { ... return obj; }')`` the return
@@ -717,7 +721,7 @@ Script rules (HARD — every script you emit MUST follow these):
    ``type(result)`` in the validation script.
 
 11. Metadata persistence — ``save_record(source_url, data)`` is a
-    vendored helper (see rule 0 for the typed signature). It is
+    ``script_tools`` helper (see rule 0 for the typed signature). It is
     SYNCHRONOUS (``def``, not ``async def``) returning ``None``; NEVER
     write ``await save_record(...)`` — awaiting ``None`` raises
     ``TypeError: object NoneType can't be used in 'await' expression``
@@ -752,7 +756,7 @@ Script rules (HARD — every script you emit MUST follow these):
 12. Output paths — When you create a directory for downloaded files or
     any other output, compute the path relative to the script file's own
     location so it resolves to the *run* directory, not inside ``scripts/``.
-    Use the same pattern the vendored ``save_record`` helper uses::
+    Use the same pattern the ``script_tools`` ``save_record`` helper uses::
 
         from pathlib import Path
         out_dir = Path(__file__).resolve().parent.parent / "downloads"

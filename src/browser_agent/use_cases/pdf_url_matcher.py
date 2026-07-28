@@ -16,11 +16,11 @@ from urllib.parse import urlsplit, urlunsplit
 def expected_pdf_filename(pdf_url: str) -> str:
     """Return ``pdf_<sha1(url)[:12]>.pdf``, the downloader's naming scheme.
 
-    Mirrors ``_pdf_filename_for`` in ``emitted_snippets.py``: the on-disk
-    name is a pure function of the download URL. The downloader upgrades
-    ``http://`` to ``https://`` *before* hashing, so callers MUST pass the
-    normalized (``https``) form through :class:`PdfUrlMatcher` rather than
-    calling this directly with a raw ``http`` URL.
+    Mirrors ``_pdf_filename_for`` in ``script_tools/_file_utils.py``: the
+    on-disk name is a pure function of the download URL. The downloader
+    upgrades ``http://`` to ``https://`` *before* hashing, so callers
+    MUST pass the normalized (``https``) form through
+    :class:`PdfUrlMatcher` rather than
     """
     return f"pdf_{hashlib.sha1(pdf_url.encode()).hexdigest()[:12]}.pdf"
 

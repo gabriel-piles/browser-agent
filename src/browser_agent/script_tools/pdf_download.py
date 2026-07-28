@@ -1,59 +1,29 @@
-"""Self-contained PDF download helpers inlined into every emitted script.
+"""PDF download helpers for emitted scripts.
 
-The final script the operator runs from ``data/runs/<run>/scripts/``
-is self-contained by contract and MUST NOT import from this project.
-
-Two strategies are supported:
-
-* **curl_cffi** — ``download_pdf_curl_cffi(url, save_path, tab=None)``
-  uses ``curl_cffi.AsyncSession`` with Chrome TLS impersonation.  When
-  a ``tab`` is passed, cookies are extracted from the active browser
-  session so cookie-gated downloads work.  Faster and simpler; works
-  for sites without JS-challenge anti-bot protection.
-
-* **browser_fetch** — ``download_pdf_browser(tab, url, save_path)``
-  tries, in order: a CDP ``Network.loadNetworkResource`` fetch
-  (:func:`_fetch_pdf_via_cdp_navigation`), which routes through
-  Chrome's network stack at the browser-process level and bypasses
-  renderer-enforced CORS/CSP; the in-tab ``fetch()``, which is faster
-  for same-origin, non-gated resources; and ``curl_cffi`` as the final
-  fallback.  Used for sites behind Cloudflare/Akamai WAF or where
-  cross-origin downloads are blocked.
-
-The agent records its preferred strategy via ``pdf_download_strategy``
-(set by the ``download_pdf`` tool probe), but **both** helpers are
-vendored into every emitted script — both the in-process validation
-runner and the operator-run final script — so a ``curl_cffi`` →
-``browser_fetch`` fallback the LLM writes on TLS/SSL/403/handshake
-errors always resolves at runtime.  See
-:func:`browser_agent.drivers.generation.script_emitter.ScriptEmitter._finalize_source`
-and :func:`with_emitted_all_pdf_downloads`.
+Moved verbatim from ``browser_agent.adapters.emitted_pdf_download``.
+Two strategies: curl_cffi (Chrome TLS impersonation) and browser_fetch
+(CDP Network.loadNetworkResource + in-tab fetch + curl_cffi fallback).
+``curl_cffi`` is imported lazily inside the functions so scripts using
+only ``download_pdf_browser`` work without curl_cffi installed.
 """
 
 from __future__ import annotations
 
-from browser_agent.adapters.emitted_snippets import (
-    ATOMIC_WRITE_SNIPPET,
-    EXISTING_SIZE_SNIPPET,
-    PDF_FILENAME_SNIPPET,
-    PDF_MAGIC_SNIPPET,
+import asyncio
+import base64
+import json
+from pathlib import Path
+
+from script_tools._file_utils import (
+    _assert_pdf_magic,
+    _existing_size,
+    _pdf_filename_for,
+    _write_atomic,
 )
 
-_SHARED_HELPERS = (
-    "import asyncio\n"
-    "import hashlib\n"
-    "import os as _os\n"
-    "from pathlib import Path\n"
-    "\n\n"
-    "_PDF_DOWNLOAD_RETRIES = 3\n"
-    "_PDF_DOWNLOAD_RETRY_DELAY_S = 1.5\n\n"
-    f"{PDF_FILENAME_SNIPPET}\n\n"
-    f"{EXISTING_SIZE_SNIPPET}\n\n"
-    f"{ATOMIC_WRITE_SNIPPET}\n\n"
-    f"{PDF_MAGIC_SNIPPET}"
-)
-
-_CURL_CFFI_DOWNLOAD = '''\
+_PDF_DOWNLOAD_TIMEOUT_S = 90.0
+_PDF_DOWNLOAD_RETRIES = 3
+_PDF_DOWNLOAD_RETRY_DELAY_S = 1.5
 
 
 async def download_pdf_curl_cffi(url, save_path, tab=None):
@@ -96,16 +66,15 @@ async def download_pdf_curl_cffi(url, save_path, tab=None):
 
     existing = _existing_size(save_path)
     if existing > 0:
-        return {"size": existing, "skipped": True, "reason": "already_downloaded",
-                "saved_path": str(save_path)}
+        return {"size": existing, "skipped": True, "reason": "already_downloaded", "saved_path": str(save_path)}
 
     cookies = {}
     if tab is not None:
         try:
             from zendriver.cdp import network as _net
+
             cdp_cookies = await tab.send(_net.get_cookies([url]))
-            cookies = {c.name: c.value for c in cdp_cookies
-                       if getattr(c, "name", None) and getattr(c, "value", None)}
+            cookies = {c.name: c.value for c in cdp_cookies if getattr(c, "name", None) and getattr(c, "value", None)}
         except Exception:
             pass
 
@@ -113,8 +82,7 @@ async def download_pdf_curl_cffi(url, save_path, tab=None):
     for attempt in range(1, _PDF_DOWNLOAD_RETRIES + 1):
         try:
             async with AsyncSession() as s:
-                r = await s.get(url, impersonate="chrome",
-                                cookies=cookies, timeout=60.0)
+                r = await s.get(url, impersonate="chrome", cookies=cookies, timeout=60.0)
         except Exception as e:
             last_exc = RuntimeError(f"curl_cffi request failed for {url}: {e}")
             if attempt < _PDF_DOWNLOAD_RETRIES:
@@ -133,32 +101,8 @@ async def download_pdf_curl_cffi(url, save_path, tab=None):
             continue
         _write_atomic(save_path, body)
         _assert_pdf_magic(save_path, body, url)
-        return {"size": len(body), "skipped": False, "reason": "downloaded",
-                "saved_path": str(save_path)}
-    raise last_exc'''
-
-
-EMITTED_CURL_CFFI_BLOCK = (
-    "# ── BEGIN emitted curl_cffi pdf-download helper (vendored from browser_agent) ──\n"
-    f"{_SHARED_HELPERS}"
-    f"{_CURL_CFFI_DOWNLOAD}\n"
-    "# ── END emitted curl_cffi pdf-download helper ──\n\n"
-)
-
-_BROWSER_FETCH_HELPERS = """\
-import asyncio
-import base64
-import hashlib
-import json
-import os as _os
-from pathlib import Path
-
-_PDF_DOWNLOAD_TIMEOUT_S = 90.0
-_PDF_DOWNLOAD_RETRIES = 3
-_PDF_DOWNLOAD_RETRY_DELAY_S = 1.5"""
-
-
-_BROWSER_FETCH_CDP = '''\
+        return {"size": len(body), "skipped": False, "reason": "downloaded", "saved_path": str(save_path)}
+    raise last_exc
 
 
 async def _fetch_pdf_via_cdp_navigation(tab, url):
@@ -172,6 +116,7 @@ async def _fetch_pdf_via_cdp_navigation(tab, url):
     from zendriver.cdp import network as _net
     from zendriver.cdp import io as _io
     from zendriver.cdp import page as _pg
+
     frame_id = None
     try:
         await tab.send(_pg.enable())
@@ -179,19 +124,18 @@ async def _fetch_pdf_via_cdp_navigation(tab, url):
         frame_id = tree.frame.id_
     except Exception:
         frame_id = None
-    res = await tab.send(_net.load_network_resource(
-        url=url,
-        options=_net.LoadNetworkResourceOptions(
-            disable_cache=True,
-            include_credentials=True,
-        ),
-        frame_id=frame_id,
-    ))
-    if not res.success:
-        raise RuntimeError(
-            f"CDP fetch failed net_error={res.net_error} "
-            f"({res.net_error_name}) for {url}"
+    res = await tab.send(
+        _net.load_network_resource(
+            url=url,
+            options=_net.LoadNetworkResourceOptions(
+                disable_cache=True,
+                include_credentials=True,
+            ),
+            frame_id=frame_id,
         )
+    )
+    if not res.success:
+        raise RuntimeError(f"CDP fetch failed net_error={res.net_error} ({res.net_error_name}) for {url}")
     if res.http_status_code and res.http_status_code >= 400:
         raise RuntimeError(f"HTTP {int(res.http_status_code)} for {url}")
     handle = res.stream
@@ -208,10 +152,7 @@ async def _fetch_pdf_via_cdp_navigation(tab, url):
     body = b"".join(chunks)
     if not body:
         raise RuntimeError(f"empty CDP stream for {url}")
-    return body'''
-
-
-_BROWSER_FETCH_TAB = '''\
+    return body
 
 
 async def _fetch_pdf_once(tab, url):
@@ -241,10 +182,7 @@ async def _fetch_pdf_once(tab, url):
         # re-challenges, network resets) as ProtocolException with
         # "TypeError: Failed to fetch" in the message. Convert to
         # RuntimeError so the caller can retry/handle uniformly.
-        raise RuntimeError(f"fetch failed for {url}: {exc}") from exc'''
-
-
-_BROWSER_FETCH_TRY = '''\
+        raise RuntimeError(f"fetch failed for {url}: {exc}") from exc
 
 
 async def _try_browser_fetch(tab, url, save_path):
@@ -270,16 +208,12 @@ async def _try_browser_fetch(tab, url, save_path):
                 body = base64.b64decode(result) if _decode else result
                 _write_atomic(save_path, body)
                 _assert_pdf_magic(save_path, body, url)
-                return {"size": len(body), "skipped": False,
-                        "reason": "downloaded", "saved_path": str(save_path)}
+                return {"size": len(body), "skipped": False, "reason": "downloaded", "saved_path": str(save_path)}
             except RuntimeError as exc:
                 last_exc = exc
                 if attempt < _PDF_DOWNLOAD_RETRIES:
                     await asyncio.sleep(_PDF_DOWNLOAD_RETRY_DELAY_S * attempt)
-    raise last_exc'''
-
-
-_BROWSER_FETCH_CURL_FALLBACK = '''\
+    raise last_exc
 
 
 async def _try_curl_cffi(url, save_path):
@@ -303,11 +237,7 @@ async def _try_curl_cffi(url, save_path):
         raise RuntimeError(f"empty response for {url}")
     _write_atomic(save_path, r.content)
     _assert_pdf_magic(save_path, r.content, url)
-    return {"size": len(r.content), "skipped": False, "reason": "downloaded",
-            "saved_path": str(save_path)}'''
-
-
-_BROWSER_FETCH_MAIN = '''\
+    return {"size": len(r.content), "skipped": False, "reason": "downloaded", "saved_path": str(save_path)}
 
 
 async def download_pdf_browser(tab, url, save_path):
@@ -359,61 +289,9 @@ async def download_pdf_browser(tab, url, save_path):
     save_path = save_dir / _pdf_filename_for(url)
     existing = _existing_size(save_path)
     if existing > 0:
-        return {"size": existing, "skipped": True, "reason": "already_downloaded",
-                "saved_path": str(save_path)}
+        return {"size": existing, "skipped": True, "reason": "already_downloaded", "saved_path": str(save_path)}
     try:
         return await _try_browser_fetch(tab, url, save_path)
     except RuntimeError:
         pass
-    return await _try_curl_cffi(url, save_path)'''
-
-
-EMITTED_BROWSER_FETCH_BLOCK = (
-    "# ── BEGIN emitted browser-fetch pdf-download helper (vendored from browser_agent) ──\n"
-    f"{_BROWSER_FETCH_HELPERS}\n\n"
-    f"{PDF_FILENAME_SNIPPET}\n\n"
-    f"{EXISTING_SIZE_SNIPPET}\n\n"
-    f"{ATOMIC_WRITE_SNIPPET}\n\n"
-    f"{PDF_MAGIC_SNIPPET}"
-    f"{_BROWSER_FETCH_CDP}"
-    f"{_BROWSER_FETCH_TAB}"
-    f"{_BROWSER_FETCH_TRY}"
-    f"{_BROWSER_FETCH_CURL_FALLBACK}"
-    f"{_BROWSER_FETCH_MAIN}\n"
-    "# ── END emitted browser-fetch pdf-download helper ──\n\n"
-)
-
-
-def with_emitted_pdf_download(
-    python_code: str,
-    strategy: str = "browser_fetch",
-) -> str:
-    """Prepend the vendored pdf-download helper to ``python_code``.
-
-    ``strategy`` is either ``"curl_cffi"`` or ``"browser_fetch"``.
-    The matching helper block is prepended.  Idempotent: if the
-    script already contains the block marker it is returned
-    unchanged.
-    """
-    if strategy == "curl_cffi":
-        if "BEGIN emitted curl_cffi pdf-download helper" in python_code:
-            return python_code
-        return f"{EMITTED_CURL_CFFI_BLOCK}{python_code}"
-    # Default: browser_fetch
-    if "BEGIN emitted browser-fetch pdf-download helper" in python_code:
-        return python_code
-    return f"{EMITTED_BROWSER_FETCH_BLOCK}{python_code}"
-
-
-def with_emitted_all_pdf_downloads(python_code: str) -> str:
-    """Prepend BOTH pdf-download helpers to ``python_code``.
-
-    Used by the in-process validation runner so the LLM's validation
-    script can test either strategy before deciding which one the
-    final script should use.
-    """
-    if "BEGIN emitted curl_cffi pdf-download helper" not in python_code:
-        python_code = f"{EMITTED_CURL_CFFI_BLOCK}{python_code}"
-    if "BEGIN emitted browser-fetch pdf-download helper" not in python_code:
-        python_code = f"{EMITTED_BROWSER_FETCH_BLOCK}{python_code}"
-    return python_code
+    return await _try_curl_cffi(url, save_path)

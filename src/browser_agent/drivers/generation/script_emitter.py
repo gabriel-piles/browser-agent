@@ -1,29 +1,17 @@
-"""Apply the post-LLM transforms, lint, and write the executable script to disk.
+"""Apply the post-LLM normalize-launch transform, lint, and write the script to disk.
 
-Hides the chain of source-level rewrites the agent's emitted
-code needs before it can run as a standalone script:
-
-0. ``with_emitted_strip_imports`` removes the
-   ``from browser_agent.runtime_helpers import ...`` line the LLM
-   writes so it can see typed signatures during generation. The
-   import is a development-time anchor; the final script is
-   self-contained.
-1. ``with_emitted_normalize_launch`` rewrites ``zd.start(...)`` to
-   ``start_browser(...)`` so the script does not pass automation-
-   flagging Chrome args that trigger anti-bot checks.
-2. ``with_emitted_inject_profile_path`` points the emitted script
-   at the agent's warm profile directory.
-3. The remaining transforms prepend the vendored helper
-   definitions the script depends on.
-
-Before writing, the raw LLM ``python_code`` is persisted to a
-``.raw.py`` sidecar so a crash in the transform chain never loses
-the generation. The transformed source is then linted (rule check),
-written to the path :class:`ScriptPathBuilder` computed, and a
-sidecar ``.json`` is written with ``explanation``, ``dependencies``,
+The emitter applies a single source-level rewrite — ``zd.start(...)`` →
+``start_browser(...)`` (``with_emitted_normalize_launch``) — then lints
+the raw LLM code, persists it to a ``.raw.py`` sidecar, writes the
+transformed source to the path :class:`ScriptPathBuilder` computed, and
+writes a sidecar ``.json`` with ``explanation``, ``dependencies``,
 ``pdf_download_strategy``, the lint findings, and (later) the
 smoke-test result. The printed JSON payload drops ``python_code``
 (it is already the file).
+
+Helper code is no longer inlined — scripts import from the
+``script_tools/`` folder copied beside them by
+:class:`ScriptToolsCopier`.
 """
 
 from __future__ import annotations
@@ -33,20 +21,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from browser_agent.adapters.emitted_clean_launch import (
-    with_emitted_clean_launch,
-    with_emitted_inject_nopecha,
-    with_emitted_inject_profile_path,
-    with_emitted_normalize_launch,
-)
-from browser_agent.adapters.nopecha_extension import NopechaExtension
-from browser_agent.adapters.emitted_page_wait import with_emitted_page_wait
-from browser_agent.adapters.emitted_pdf_download import with_emitted_all_pdf_downloads
-from browser_agent.adapters.emitted_save_html import with_emitted_save_html
-from browser_agent.adapters.emitted_save_record import with_emitted_save_record
-from browser_agent.adapters.emitted_strip_imports import (
-    with_emitted_strip_imports,
-)
+from browser_agent.adapters.emitted_normalize_launch import with_emitted_normalize_launch
 from browser_agent.domain.emit_result import EmitResult
 from browser_agent.domain.lint_finding import LintFinding
 from browser_agent.domain.generated_script import GeneratedScript
@@ -55,7 +30,7 @@ from browser_agent.use_cases.emitted_script_linter import EmittedScriptLinter
 
 
 class ScriptEmitter:
-    """Apply post-LLM transforms, lint, write the script + sidecar JSON."""
+    """Normalize-launch transform, lint, write the script + sidecar JSON."""
 
     def __init__(self, path_builder: ScriptPathBuilder) -> None:
         self._path_builder = path_builder
@@ -81,29 +56,9 @@ class ScriptEmitter:
         )
 
     def _finalize_source(self, script: GeneratedScript, run_path: Path) -> tuple[str, list[str]]:
-        """Run every source-level transform, logging which ones matched."""
+        """Run the normalize-launch transform, logging if it matched."""
         code = script.python_code
-        applied: list[str] = []
-        code, n = self._apply(with_emitted_strip_imports, code, "strip_imports")
-        applied.extend(n)
-        code, n = self._apply(with_emitted_normalize_launch, code, "normalize_launch")
-        applied.extend(n)
-        code = with_emitted_inject_profile_path(code, self._profile_path(run_path))
-        code, n = self._apply(with_emitted_clean_launch, code, "clean_launch")
-        applied.extend(n)
-        code = with_emitted_inject_nopecha(code, NopechaExtension().ensure_ready())
-        code, n = self._apply(with_emitted_page_wait, code, "page_wait")
-        applied.extend(n)
-        code, n = self._apply(with_emitted_save_record, code, "save_record")
-        applied.extend(n)
-        code, n = self._apply(with_emitted_save_html, code, "save_html")
-        applied.extend(n)
-        code, n = self._apply(
-            with_emitted_all_pdf_downloads,
-            code,
-            "pdf_download",
-        )
-        applied.extend(n)
+        code, applied = self._apply(with_emitted_normalize_launch, code, "normalize_launch")
         return code, applied
 
     @staticmethod
@@ -111,10 +66,6 @@ class ScriptEmitter:
         """Run ``transform`` and record ``name`` if the output changed."""
         out = transform(code)
         return out, [name] if out != code else []
-
-    def _profile_path(self, run_path: Path) -> str:
-        """Return the absolute profile path the emitted script must reuse."""
-        return str((run_path / "profile").resolve())
 
     @staticmethod
     def _raw_path(script_path: Path) -> Path:

@@ -137,12 +137,19 @@ class MatchDriver:
         """Process every thesaurus the groups bucket into."""
         llm = OllamaAdapter()
         for thesaurus_name, thesaurus_groups in self._groups_builder.bucket_by_thesaurus(groups).items():
+            out_path = self._paths.default_thesaurus_path(thesaurus_name)
+            if out_path.exists():
+                logger.info(
+                    "thesaurus mapping exists at {path} — using existing file (delete to regenerate)",
+                    path=out_path,
+                )
+                continue
             await self._processor.process(
                 thesaurus_name=thesaurus_name,
                 groups=thesaurus_groups,
                 llm=llm,
                 mapping_default_language=context.mapping.default_language,
-                out_path=self._paths.default_thesaurus_path(thesaurus_name),
+                out_path=out_path,
             )
         print("\nDone. Review the YAML files in thesauri_mappings/ before running step_5_upload_to_uwazi.py.")
 
