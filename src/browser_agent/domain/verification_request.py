@@ -26,10 +26,6 @@ class VerificationRequest(BaseModel):
     task_prompt: str = Field(description="The original run prompt from run.yaml.")
     generated_script: str = Field(description="The step 0 script source code.")
     gap_map: str = Field(description="Coverage summary from the DB.")
-    step0_explanation: str = Field(
-        default="",
-        description="The step 0 agent's explanation of selectors, scroll strategy, and mutation order, from the sidecar JSON.",
-    )
     reconciler_inventory: str = Field(
         default="",
         description="Deterministic DB-vs-disk inventory from the reconciler (ground truth).",
@@ -40,8 +36,6 @@ class VerificationRequest(BaseModel):
             f"## Original Task\n{self.task_prompt}\n\n---\n\n",
             f"## Generated Script (from step 0)\n```python\n{self.generated_script}\n```\n\n---\n\n",
         ]
-        if self.step0_explanation:
-            parts.append(f"## Step 0 Agent Explanation\n{self.step0_explanation}\n\n---\n\n")
         parts.append(f"## Scraping Coverage (gap map)\n{self.gap_map}\n\n---\n\n")
         if self.reconciler_inventory:
             parts.append(

@@ -78,9 +78,7 @@ async def trusted_click(tab, selector: str) -> bool:
         await el.scroll_into_view()
         await tab.sleep(0.5)
         js = (
-            "(()=>{const r=document.querySelector("
-            + json.dumps(selector)
-            + ").getBoundingClientRect();"
+            "(()=>{const r=document.querySelector(" + json.dumps(selector) + ").getBoundingClientRect();"
             "return [r.left+r.width/2, r.top+r.height/2];})()"
         )
         cx, cy = await tab.evaluate(js)

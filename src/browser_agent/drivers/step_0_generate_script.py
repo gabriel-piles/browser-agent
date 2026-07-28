@@ -150,18 +150,35 @@ class GenerateScriptDriver:
         """Generate, lint-repair, emit, smoke-repair, return exit code."""
         script, use_case = await self._generator.generate(task, run_path, context)
         script = await self._lint_repair_loop(use_case, script)
+        emit_results: list[EmitResult] = []
         emit_result = emitter.emit(task, script, run_path)
+        emit_results.append(emit_result)
         logger.info("emitted script at {path}", path=emit_result.script_path)
         await self._log_emit_zendriver_summary(emit_result)
         smoke_result = await self._smoke_test_with_sidecar(emit_result, emitter)
         if smoke_result.success:
             await self._generator.close(use_case)
+            self._cleanup_emit_artifacts(emit_results)
             return 0
         script = await self._smoke_repair_loop(use_case, script, smoke_result)
         emit_result = emitter.emit(task, script, run_path)
+        emit_results.append(emit_result)
         smoke_result = await self._smoke_test_with_sidecar(emit_result, emitter)
         await self._generator.close(use_case)
+        self._cleanup_emit_artifacts(emit_results)
         return 0 if smoke_result.success else EXIT_SMOKE_FAILED
+
+    @staticmethod
+    def _cleanup_emit_artifacts(emit_results: list[EmitResult]) -> None:
+        """Keep only the final .py; remove all .raw.py, .json, and earlier .py files."""
+        if not emit_results:
+            return
+        keeper = emit_results[-1].script_path
+        for emit_result in emit_results:
+            for path in (emit_result.script_path, emit_result.raw_code_path, emit_result.sidecar_path):
+                if path != keeper and path.is_file():
+                    path.unlink()
+                    logger.debug("removed intermediate artifact {path}", path=path)
 
     def _log_zendriver_findings(self, findings: list[LintFinding]) -> None:
         """Log lint findings that indicate the agent misunderstands zendriver APIs."""

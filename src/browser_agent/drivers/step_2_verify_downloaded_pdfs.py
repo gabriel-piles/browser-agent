@@ -16,7 +16,6 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 
 from loguru import logger
@@ -71,11 +70,10 @@ class VerifyDownloadsDriver:
         if script_path is None:
             return 2
         script = script_path.read_text(encoding="utf-8")
-        explanation = self._read_sidecar_explanation(script_path)
         try:
             reconciler_section, per_row, findings = self._run_reconciler(run_path)
             deps = self._build_deps(run_path)
-            request = self._build_request(run, script, run_path, explanation, reconciler_section)
+            request = self._build_request(run, script, run_path, reconciler_section)
             model = OllamaAdapter(model=VERIFICATION_MODEL).get_model()
             report = await VerifyDownloadsUseCase(deps, model).execute(request)
         except Exception as exc:
@@ -126,7 +124,6 @@ class VerifyDownloadsDriver:
         run,
         script: str,
         run_path: Path,
-        explanation: str,
         reconciler_section: str,
     ) -> VerificationRequest:
         """Build the verification request from the run prompt, script, gap map, and reconciler."""
@@ -135,7 +132,6 @@ class VerifyDownloadsDriver:
             task_prompt=run.prompt,
             generated_script=script,
             gap_map=gap_map,
-            step0_explanation=explanation,
             reconciler_inventory=reconciler_section,
         )
 
@@ -150,17 +146,6 @@ class VerifyDownloadsDriver:
             logger.warning("no step 0 scripts found in {dir}", dir=scripts_dir)
             return None
         return scripts[-1]
-
-    @staticmethod
-    def _read_sidecar_explanation(script_path: Path) -> str:
-        """Return the ``explanation`` from the sidecar JSON, or empty string."""
-        sidecar = script_path.with_suffix(".json")
-        if not sidecar.is_file():
-            return ""
-        try:
-            return json.loads(sidecar.read_text(encoding="utf-8")).get("explanation", "")
-        except (ValueError, OSError):
-            return ""
 
     @staticmethod
     def _print_summary(
