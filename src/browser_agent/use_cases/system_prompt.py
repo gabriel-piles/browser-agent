@@ -618,6 +618,16 @@ Script rules (HARD — every script you emit MUST follow these):
       active browser session. The tab MUST have navigated to the
       target domain first so any challenge is cleared.
 
+   BOTH helpers are always present in the emitted script. When a
+   site serves a mix of reachable and TLS-restricted PDFs, a
+   ``curl_cffi`` → ``browser_fetch`` fallback is supported and
+   recommended: call ``download_pdf_curl_cffi`` first, and on a
+   TLS/SSL/403/handshake ``RuntimeError`` fall back to
+   ``download_pdf_browser(tab, url, save_path)`` (the tab must have
+   navigated to the target domain first). Record the strategy you
+   prefer in ``pdf_download_strategy``; it does not gate which
+   helpers are vendored.
+
    NEVER use ``zendriver`` (``tab.get``) to download PDFs — it
    renders them as a viewer page instead of downloading them.
    NEVER use ``requests``, ``httpx``, ``aiohttp``, ``urllib`` or

@@ -20,16 +20,14 @@ Two strategies are supported:
   fallback.  Used for sites behind Cloudflare/Akamai WAF or where
   cross-origin downloads are blocked.
 
-The agent determines which strategy to use by calling the
-``download_pdf`` tool (which tries curl_cffi).  If curl_cffi succeeds,
-``pdf_download_strategy="curl_cffi"``; if it fails (HTTP 403 etc.),
-``pdf_download_strategy="browser_fetch"``.  The final emitted script
-only includes the helper for the chosen strategy.
-
-Both the in-process validation runner and the operator-run final script
-get the helper — see
-:func:`browser_agent.drivers.generate_script._emit` and
-:meth:`InProcessScriptRunnerAdapter.run`.
+The agent records its preferred strategy via ``pdf_download_strategy``
+(set by the ``download_pdf`` tool probe), but **both** helpers are
+vendored into every emitted script — both the in-process validation
+runner and the operator-run final script — so a ``curl_cffi`` →
+``browser_fetch`` fallback the LLM writes on TLS/SSL/403/handshake
+errors always resolves at runtime.  See
+:func:`browser_agent.drivers.generation.script_emitter.ScriptEmitter._finalize_source`
+and :func:`with_emitted_all_pdf_downloads`.
 """
 
 from __future__ import annotations

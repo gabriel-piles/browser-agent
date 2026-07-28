@@ -109,7 +109,7 @@ class RunActiveScraperDriver:
             return _EXIT_NO_SCRIPT
 
         try:
-            output = await asyncio.wait_for(
+            await asyncio.wait_for(
                 self._stream_output(proc),
                 timeout=_RUN_TIMEOUT_S,
             )
@@ -126,9 +126,6 @@ class RunActiveScraperDriver:
             logger.info("scraper completed successfully (exit code 0)")
         else:
             logger.error("scraper failed with exit code {code}", code=exit_code)
-
-        if output.strip():
-            logger.info("scraper output:\n{output}", output=output)
 
         return exit_code
 

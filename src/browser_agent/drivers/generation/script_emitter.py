@@ -41,7 +41,7 @@ from browser_agent.adapters.emitted_clean_launch import (
 )
 from browser_agent.adapters.nopecha_extension import NopechaExtension
 from browser_agent.adapters.emitted_page_wait import with_emitted_page_wait
-from browser_agent.adapters.emitted_pdf_download import with_emitted_pdf_download
+from browser_agent.adapters.emitted_pdf_download import with_emitted_all_pdf_downloads
 from browser_agent.adapters.emitted_save_html import with_emitted_save_html
 from browser_agent.adapters.emitted_save_record import with_emitted_save_record
 from browser_agent.adapters.emitted_strip_imports import (
@@ -99,7 +99,7 @@ class ScriptEmitter:
         code, n = self._apply(with_emitted_save_html, code, "save_html")
         applied.extend(n)
         code, n = self._apply(
-            lambda c: with_emitted_pdf_download(c, script.pdf_download_strategy),
+            with_emitted_all_pdf_downloads,
             code,
             "pdf_download",
         )
