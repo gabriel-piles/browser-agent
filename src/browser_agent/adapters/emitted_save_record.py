@@ -113,6 +113,20 @@ def save_record(source_url: str, data: dict) -> None:
     so the download helper's existence check means "already downloaded
     this URL".
 
+    Download status — call ``save_record`` for EVERY discovered PDF,
+    success OR failure, so a failed download leaves a row that a
+    re-run can retry (the URL would otherwise be lost). On success set
+    ``download_status="downloaded"`` and ``pdf_filename`` to the
+    on-disk name. On failure set ``download_status="failed"``,
+    ``pdf_filename=""`` (empty string, not omitted, so downstream code
+    can distinguish "discovered but not downloaded" from "never
+    discovered"), and ``download_error`` to the exception message. The
+    retry-queue query (rule 8a) selects rows where ``download_status``
+    is ``"failed"`` OR ``pdf_filename`` is empty; existing rows from
+    prior runs that predate this key are treated as already-downloaded
+    and skipped (they have a non-empty ``pdf_filename`` and no
+    ``download_status``).
+
     When the task also captures the source HTML of the page where each
     PDF was found (supporting file), store the HTML helper's basename
     in ``data`` as ``html_filename`` (read it from the

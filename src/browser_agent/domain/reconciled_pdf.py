@@ -35,3 +35,7 @@ class ReconciledPdf(BaseModel):
         description="One of: present, file_not_downloaded, corrupt_file, " + "empty_pdf_url, suspiciously_small.",
     )
     notes: str = Field(default="", description="Human-readable detail.")
+    download_status: str = Field(
+        default="",
+        description="The download_status stored in the row data ('downloaded', 'failed', or '' for rows from before this key existed).",
+    )

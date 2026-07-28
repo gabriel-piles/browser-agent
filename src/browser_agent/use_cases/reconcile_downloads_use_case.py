@@ -67,14 +67,16 @@ class ReconcileDownloadsUseCase:
     def _reconcile_row(self, row: tuple[str, str, str], disk_files: set[str]) -> ReconciledPdf:
         source_url, _slug, data_json = row
         data = parse_row_data(data_json)
+        download_status = data.get("download_status", "") or ""
         pdf_url = data.get("pdf_url", "") or ""
         if not pdf_url:
             return ReconciledPdf(
                 source_url=source_url,
                 verdict="empty_pdf_url",
                 notes="row has no pdf_url",
+                download_status=download_status,
             )
-        return self._check_file_for_url(source_url, pdf_url, data, disk_files)
+        return self._check_file_for_url(source_url, pdf_url, data, disk_files, download_status)
 
     def _check_file_for_url(
         self,
@@ -82,6 +84,7 @@ class ReconcileDownloadsUseCase:
         pdf_url: str,
         data: dict[str, Any],
         disk_files: set[str],
+        download_status: str,
     ) -> ReconciledPdf:
         db_filename = data.get("pdf_filename", "") or ""
         expected_norm, expected_orig = PdfUrlMatcher.expected_filenames_for(pdf_url)
@@ -99,6 +102,7 @@ class ReconcileDownloadsUseCase:
                 filename_mismatch=filename_mismatch,
                 verdict="file_not_downloaded",
                 notes=f"expected {expected_norm} (also tried {expected_orig}); not on disk",
+                download_status=download_status,
             )
         return self._validate_matched(
             source_url,
@@ -108,6 +112,7 @@ class ReconcileDownloadsUseCase:
             matched,
             mode,
             filename_mismatch,
+            download_status,
         )
 
     def _match_on_disk(
@@ -132,6 +137,7 @@ class ReconcileDownloadsUseCase:
         matched: Path,
         mode: str,
         filename_mismatch: bool,
+        download_status: str,
     ) -> ReconciledPdf:
         integrity = PdfIntegrityValidator.validate(matched)
         verdict = self._row_verdict(integrity)
@@ -149,6 +155,7 @@ class ReconcileDownloadsUseCase:
             filename_mismatch=filename_mismatch,
             verdict=verdict,
             notes=integrity.notes,
+            download_status=download_status,
         )
 
     @staticmethod

@@ -72,17 +72,18 @@ class ReconcilerReportWriter:
     def _table(self, per_row: list[ReconciledPdf]) -> str:
         header = (
             "## Per-row inventory\n\n"
-            "| pdf_url | verdict | match_mode | file | size | notes |\n"
-            "| --- | --- | --- | --- | --- | --- |"
+            "| pdf_url | verdict | match_mode | file | size | dl_status | notes |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |"
         )
         rows = [self._table_row(r) for r in per_row]
         return header + ("\n" + "\n".join(rows) if rows else "")
 
     def _table_row(self, r: ReconciledPdf) -> str:
         url = _short(r.pdf_url or r.source_url)
+        dl_status = r.download_status or "-"
         return (
             f"| {url} | {r.verdict} | {r.match_mode} | "
-            f"{r.matched_filename or '-'} | {r.file_size_bytes} | {_inline(r.notes)} |"
+            f"{r.matched_filename or '-'} | {r.file_size_bytes} | {dl_status} | {_inline(r.notes)} |"
         )
 
     def _findings_section(self, findings: list[CorpusFinding]) -> str:

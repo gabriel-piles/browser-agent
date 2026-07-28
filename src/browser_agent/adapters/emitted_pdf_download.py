@@ -41,10 +41,13 @@ from browser_agent.adapters.emitted_snippets import (
 )
 
 _SHARED_HELPERS = (
+    "import asyncio\n"
     "import hashlib\n"
     "import os as _os\n"
     "from pathlib import Path\n"
     "\n\n"
+    "_PDF_DOWNLOAD_RETRIES = 3\n"
+    "_PDF_DOWNLOAD_RETRY_DELAY_S = 1.5\n\n"
     f"{PDF_FILENAME_SNIPPET}\n\n"
     f"{EXISTING_SIZE_SNIPPET}\n\n"
     f"{ATOMIC_WRITE_SNIPPET}"
@@ -79,8 +82,9 @@ async def download_pdf_curl_cffi(url, save_path, tab=None):
         result = await download_pdf_curl_cffi(pdf_url, out_dir, tab)
         save_record(..., {"pdf_filename": Path(result["saved_path"]).name, ...})
 
-    Raises ``RuntimeError`` on failure (HTTP error, network error,
-    empty response).
+    Retries transient failures (network error, HTTP >= 400, empty
+    body) up to ``_PDF_DOWNLOAD_RETRIES`` times with linear backoff
+    before raising ``RuntimeError`` on final failure.
     """
     from curl_cffi import AsyncSession
 
@@ -105,23 +109,32 @@ async def download_pdf_curl_cffi(url, save_path, tab=None):
         except Exception:
             pass
 
-    try:
-        async with AsyncSession() as s:
-            r = await s.get(url, impersonate="chrome",
-                            cookies=cookies, timeout=60.0)
-    except Exception as e:
-        raise RuntimeError(f"curl_cffi request failed for {url}: {e}")
-
-    if r.status_code >= 400:
-        raise RuntimeError(f"HTTP {r.status_code} for {url}")
-
-    body = r.content
-    if not body:
-        raise RuntimeError(f"empty response for {url}")
-
-    _write_atomic(save_path, body)
-    return {"size": len(body), "skipped": False, "reason": "downloaded",
-            "saved_path": str(save_path)}'''
+    last_exc = None
+    for attempt in range(1, _PDF_DOWNLOAD_RETRIES + 1):
+        try:
+            async with AsyncSession() as s:
+                r = await s.get(url, impersonate="chrome",
+                                cookies=cookies, timeout=60.0)
+        except Exception as e:
+            last_exc = RuntimeError(f"curl_cffi request failed for {url}: {e}")
+            if attempt < _PDF_DOWNLOAD_RETRIES:
+                await asyncio.sleep(_PDF_DOWNLOAD_RETRY_DELAY_S * attempt)
+            continue
+        if r.status_code >= 400:
+            last_exc = RuntimeError(f"HTTP {r.status_code} for {url}")
+            if attempt < _PDF_DOWNLOAD_RETRIES:
+                await asyncio.sleep(_PDF_DOWNLOAD_RETRY_DELAY_S * attempt)
+            continue
+        body = r.content
+        if not body:
+            last_exc = RuntimeError(f"empty response for {url}")
+            if attempt < _PDF_DOWNLOAD_RETRIES:
+                await asyncio.sleep(_PDF_DOWNLOAD_RETRY_DELAY_S * attempt)
+            continue
+        _write_atomic(save_path, body)
+        return {"size": len(body), "skipped": False, "reason": "downloaded",
+                "saved_path": str(save_path)}
+    raise last_exc'''
 
 
 EMITTED_CURL_CFFI_BLOCK = (

@@ -32,6 +32,14 @@ class RunConfig(BaseModel):
         default=True,
         description="When False, uwazi_apply builds the plan but does not mutate the remote instance.",
     )
+    run_filter: str | None = Field(
+        default=None,
+        description=(
+            "Optional task_slug to filter metadata.db rows by when building an "
+            "upload plan. When set, only rows with this task_slug are pushed. "
+            "When None, every row in the metadata db is included."
+        ),
+    )
     parallel_runners: int | None = Field(
         default=None,
         ge=1,

@@ -46,6 +46,8 @@ UWAZI_USER = os.environ.get("UWAZI_USER", "admin")
 UWAZI_PASSWORD = os.environ.get("UWAZI_PASSWORD", "admin")
 # Default language code sent to Uwazi when a mapping does not pin one.
 UWAZI_DEFAULT_LANGUAGE = os.environ.get("UWAZI_DEFAULT_LANGUAGE", "en")
+# Max worker threads for concurrent Uwazi entity push.
+UWAZI_PUSH_MAX_WORKERS = 8
 
 MAX_LLM_CALLS = 50
 SNAPSHOT_MAX_CHARS = 50_000

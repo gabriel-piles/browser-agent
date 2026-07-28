@@ -572,15 +572,47 @@ Script rules (HARD — every script you emit MUST follow these):
    hash (``pdf_<sha1(url)[:12]>.pdf``) so naming is deterministic and
    order-independent. The helper returns a dict with ``saved_path``
    (the absolute path it wrote); extract the filename from it for the
-   DB row. Call the chosen helper for each download (wrap in
-   ``try / except RuntimeError as e`` to keep going after a
-   failure):
+   DB row. Call the chosen helper for each download. EVERY download
+   attempt — success OR failure — MUST persist a DB row via
+   ``save_record``, so re-runs can retry URLs that failed on a prior
+   run. Wrap in ``try / except RuntimeError as e``; on success set
+   ``pdf_filename`` to the on-disk name and ``download_status="downloaded"``;
+   on failure set ``pdf_filename=""`` (empty string, not omitted) and
+   ``download_status="failed"`` plus ``download_error``:
 
       # curl_cffi strategy
-      result = await download_pdf_curl_cffi(pdf_url, out_dir, tab)
-      # — or — browser_fetch strategy
-      result = await download_pdf_browser(tab, pdf_url, out_dir)
-      pdf_filename = Path(result["saved_path"]).name  # for save_record
+      try:
+          result = await download_pdf_curl_cffi(pdf_url, out_dir, tab)
+          pdf_filename = Path(result["saved_path"]).name
+          save_record(rec["source_url"], {**rec, "pdf_filename": pdf_filename,
+                                           "download_status": "downloaded"})
+      except RuntimeError as e:
+          print(f"ERR {rec['pdf_url']}: {e}")
+          save_record(rec["source_url"], {**rec, "pdf_filename": "",
+                                           "download_status": "failed",
+                                           "download_error": str(e)})
+      # — or — browser_fetch strategy (same try/except + save_record pattern)
+8a. Retry of failed downloads — before downloading any NEW PDFs, the
+    download phase MUST first retry URLs that failed on a prior run.
+    Query ``metadata.db`` for rows whose ``download_status`` is
+    ``"failed"`` OR whose ``pdf_filename`` is empty, and re-attempt
+    those URLs with the chosen download helper. The helper's
+    existence check means any file that already landed on disk is
+    skipped instantly — only genuinely missing files are re-fetched.
+    Update each retried row's ``download_status`` to ``"downloaded"``
+    on success (``save_record`` upserts by ``source_url`` so the row
+    is updated in place); leave it ``"failed"`` on continued failure.
+    This makes re-runs converge: a transient 503 on one run heals on
+    the next without losing the URL. Self-contained query the script
+    runs at the top of the download phase:
+
+       import sqlite3, json as _json
+       _conn = sqlite3.connect(_SAVE_RECORD_DB_PATH, timeout=5.0)
+       _rows = _conn.execute("SELECT source_url, data FROM metadata").fetchall()
+       _conn.close()
+       pending = [(s, _json.loads(d)) for s, d in _rows
+                  if _json.loads(d).get("download_status") == "failed"
+                  or not _json.loads(d).get("pdf_filename")]
 
 9. ``tab.evaluate`` return types — when you call
    ``tab.evaluate('(...) => { ... return obj; }')`` the return
@@ -837,9 +869,14 @@ Script rules (HARD — every script you emit MUST follow these):
              async with sem:
                  try:
                      result = await download_pdf_browser(tab, rec["pdf_url"], out_dir)
-                     save_record(rec["source_url"], {**rec, "pdf_filename": ...})
-                 except Exception as e:
+                     pdf_filename = Path(result["saved_path"]).name
+                     save_record(rec["source_url"], {**rec, "pdf_filename": pdf_filename,
+                                                      "download_status": "downloaded"})
+                 except RuntimeError as e:
                      print(f"ERR {rec['pdf_url']}: {e}")
+                     save_record(rec["source_url"], {**rec, "pdf_filename": "",
+                                                      "download_status": "failed",
+                                                      "download_error": str(e)})
          await asyncio.gather(*(download_one(worker_tabs[i % len(worker_tabs)], r)
                                  for i, r in enumerate(records)))
 

@@ -32,10 +32,9 @@ class ApplyResultPrinter:
         """Print every skip-reason row, plus a per-reason summary count.
 
         Without the summary the operator only sees the first five
-        rows; with a mix of ``no_local_pdf`` and ``already_on_uwazi``
+        rows; with a mix of skip reasons (e.g. ``already_on_uwazi``)
         the rest is invisible. The summary line is the cheapest way
-        to make the trade-off (skip-by-pdf vs skip-by-duplicate)
-        scannable in a few characters.
+        to make the trade-off scannable in a few characters.
         """
         skip_rows = list(result.skip_reasons)
         if not skip_rows:

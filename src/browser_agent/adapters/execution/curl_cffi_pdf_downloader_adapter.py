@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,8 @@ _DEFAULT_DOWNLOADS_PATH = PROJECT_ROOT / "data" / "downloads"
 _IMPERSONATE = "chrome"
 _TIMEOUT_S = 60.0
 _MAX_SIZE_BYTES = 100 * 1024 * 1024
+_RETRIES = 3
+_RETRY_DELAY_S = 1.5
 
 
 class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
@@ -47,7 +50,9 @@ class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
         the download is skipped and a ``DownloadResult`` with
         ``success=True, skipped=True`` is returned.  Writes are atomic
         (temp + rename) so a crash mid-write never leaves a partial
-        file at the target path.
+        file at the target path. Transient failures (network error,
+        HTTP >= 400, empty body) are retried up to ``_RETRIES`` times
+        with linear backoff before returning ``success=False``.
         """
         from curl_cffi import AsyncSession
 
@@ -68,27 +73,34 @@ class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
             )
 
         cookie_dict = self._build_cookie_dict(cookies)
-        try:
-            async with AsyncSession() as s:
-                r = await s.get(url, impersonate=_IMPERSONATE, cookies=cookie_dict, timeout=_TIMEOUT_S)
-        except Exception as e:
+        last_error = ""
+        for attempt in range(1, _RETRIES + 1):
+            try:
+                async with AsyncSession() as s:
+                    r = await s.get(url, impersonate=_IMPERSONATE, cookies=cookie_dict, timeout=_TIMEOUT_S)
+            except Exception as e:
+                last_error = str(e)
+                if attempt < _RETRIES:
+                    await asyncio.sleep(_RETRY_DELAY_S * attempt)
+                continue
+            error = self._validate_response(r, len(r.content) if r.content else 0)
+            if error:
+                last_error = error
+                if attempt < _RETRIES:
+                    await asyncio.sleep(_RETRY_DELAY_S * attempt)
+                continue
+            write_atomic(path, r.content)
             return DownloadResult(
-                success=False, saved_path=str(path), url=url, content_type="", file_size_bytes=0, error=str(e)
+                success=True,
+                saved_path=str(path),
+                url=url,
+                content_type=r.headers.get("content-type", ""),
+                file_size_bytes=len(r.content),
+                skipped=False,
+                reason="downloaded",
             )
-        error = self._validate_response(r, len(r.content) if r.content else 0)
-        if error:
-            return DownloadResult(
-                success=False, saved_path=str(path), url=url, content_type="", file_size_bytes=0, error=error
-            )
-        write_atomic(path, r.content)
         return DownloadResult(
-            success=True,
-            saved_path=str(path),
-            url=url,
-            content_type=r.headers.get("content-type", ""),
-            file_size_bytes=len(r.content),
-            skipped=False,
-            reason="downloaded",
+            success=False, saved_path=str(path), url=url, content_type="", file_size_bytes=0, error=last_error
         )
 
     @staticmethod

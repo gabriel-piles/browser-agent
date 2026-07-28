@@ -101,9 +101,15 @@ def _title_of_record(record: dict, source_url: str, mapping: UwaziMapping) -> st
 
 
 def _row_action(record, source_url, mapping, entities_by_key) -> tuple[SyncAction, str | None]:
-    """Return the action + skip reason for one record."""
-    if mapping.upload_pdf and not (record.get("pdf_filename") or "").strip():
-        return SyncAction.SKIP, "no_local_pdf"
+    """Return the action + skip reason for one record.
+
+    A row whose PDF file is missing (download failed or never
+    attempted) is still ``CREATE``: the entity is created on Uwazi
+    with its metadata (including ``pdf_url`` when the operator mapped
+    it to a property), and no primary document is uploaded — the
+    pusher guards the upload with ``if row.pdf_path``. A later run
+    that downloads the file can re-push.
+    """
     if mapping.identity.key_source is not KeySource.KEY_FIELD_AND_PROPERTY:
         return SyncAction.CREATE, None
     key_value = resolve_key_value(record, source_url, mapping.identity, mapping)

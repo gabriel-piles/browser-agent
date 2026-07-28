@@ -8,11 +8,14 @@ PDF and the supporting HTML, and recording the per-row outcome in an
 
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from browser_agent.domain.apply_result import ApplyResult
 from browser_agent.domain.sync_plan import SyncAction, SyncPlan
 from browser_agent.domain.uwazi_mapping import UwaziMapping
+from browser_agent import configuration
 from browser_agent.use_cases.push_progress import PushProgress
 
 from uwazi_api.client import UwaziClient
@@ -33,30 +36,50 @@ class UwaziPusher:
         total = len(plan.rows)
         active = sum(1 for row in plan.rows if row.action is not SyncAction.SKIP)
         progress = PushProgress(total, active)
-        for i, row in enumerate(plan.rows, start=1):
-            self._push_row(client, out, row, plan.mapping, i, total, progress)
+        lock = threading.Lock()
+        rows = list(enumerate(plan.rows, start=1))
+        with ThreadPoolExecutor(max_workers=configuration.UWAZI_PUSH_MAX_WORKERS) as pool:
+            futures = [
+                pool.submit(self._push_row, client, out, row, plan.mapping, i, total, progress, lock) for i, row in rows
+            ]
+            for _ in as_completed(futures):
+                pass
         return out
 
     def _push_row(
-        self, client, out: ApplyResult, row, mapping: UwaziMapping, i: int, total: int, progress: PushProgress
+        self,
+        client,
+        out: ApplyResult,
+        row,
+        mapping: UwaziMapping,
+        i: int,
+        total: int,
+        progress: PushProgress,
+        lock: threading.Lock,
     ) -> None:
         """Push one :class:`SyncPlanRow` to Uwazi and update ``out`` accordingly."""
         try:
             if row.action is SyncAction.CREATE:
-                progress.begin_active()
+                with lock:
+                    progress.begin_active()
                 shared_id = self._create_entity(client, row, mapping)
-                progress.end_active()
-                print(f"  [{i}/{total}] {progress.format_prefix()} | created {row.language} '{row.title}' -> {shared_id}")
+                with lock:
+                    progress.end_active()
+                    self._record_result(out, row.language, row.action)
+                    print(
+                        f"  [{i}/{total}] {progress.format_prefix()} | created {row.language} '{row.title}' -> {shared_id}"
+                    )
             elif row.action is SyncAction.SKIP:
-                self._record_skip(out, row.language, row.source_url, row.skip_reason or "skipped_by_plan")
-                print(
-                    f"  [{i}/{total}] {progress.format_prefix()} | skipped {row.language} '{row.title}': {row.skip_reason}"
-                )
+                with lock:
+                    self._record_skip(out, row.language, row.source_url, row.skip_reason or "skipped_by_plan")
+                    print(
+                        f"  [{i}/{total}] {progress.format_prefix()} | skipped {row.language} '{row.title}': {row.skip_reason}"
+                    )
                 return
-            self._record_result(out, row.language, row.action)
         except Exception as exc:  # noqa: BLE001 - any failure is recorded
-            progress.end_active()
-            self._record_error(out, row.language, row.source_url, str(exc))
+            with lock:
+                progress.end_active()
+                self._record_error(out, row.language, row.source_url, str(exc))
 
     def _create_entity(self, client: UwaziClient, row, mapping: UwaziMapping) -> str:
         """Create a fresh Uwazi entity for one CREATE row, return the new shared id."""
