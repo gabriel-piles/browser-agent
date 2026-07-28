@@ -132,6 +132,16 @@ have explored the page.
   When you need to verify the DOM near a specific element (e.g. a
   result row or filter dropdown), use ``inspect`` with the element's
   selector to see a short HTML snippet around it.
+  LOAD-MORE PROBE — if Step 5 found scroll_height does NOT grow but
+  the page offers a "load more"/"Mas resultados"/pager control instead
+  of infinite scroll, click it ONCE with action="click", then re-`extract`
+  and compare `extracted_count` with the pre-click count. If the count
+  grew, the control loads results — the emitted script MUST use the
+  trusted-click recipe from rule 2 (``tab.mouse_click(x, y)`` at the
+  element center), never bare ``element.click()`` or ``window.scrollBy``.
+  If the count did NOT grow, retry the trusted click once more (a
+  covering overlay can intercept the first click); if it still does not
+  grow, treat the first page as the full set and say so in the script.
 
   Step 7 — WRITE THE FULL SCRIPT. Write a SINGLE self-contained
   script that implements the COMPLETE data-collection strategy.
@@ -148,6 +158,14 @@ have explored the page.
       the change in the output).
     - If the task involves scrolling, scroll once and print the height
       before/after so you can see whether content loaded.
+    - LOAD-MORE / INFINITE-SCROLL PROOF — when the task requires
+      scrolling or clicking to load additional results, the validation
+      run MUST perform the trigger at least TWICE and print the
+      target-link count after each trigger (e.g. 10 -> 20 -> 30). A run
+      whose count never grows past the first page is a FAILED
+      validation: switch the trigger to a trusted click (rule 2) and
+      re-run. NEVER emit a final script whose collection loop was not
+      shown to grow beyond the first page.
     - PDF NAMES VALIDATION — follow the label-vs-badge rule (rule 4c):
       for EACH row you extract a label from, print BOTH the row's
       authoritative attribute (``title``/``aria-label``) AND the inner
@@ -346,6 +364,41 @@ Script rules (HARD — every script you emit MUST follow these):
 
    Never guess a fixed number of scrolls.
 
+   CLICK-TO-LOAD-MORE — when results paginate via a control ("load
+   more", "Mas resultados", a pager LI) instead of by scroll, the loop
+   MUST track the count of extracted TARGET links (not scrollHeight)
+   and MUST trigger the control with a TRUSTED click (below), keeping
+   the 3-consecutive-no-growth termination the task requires.
+
+   TRUSTED CLICKS — ``element.click()`` runs a synthetic JS
+   ``el.click()`` whose event is untrusted (``isTrusted: false``);
+   some sites (vLex among them) IGNORE untrusted clicks on load-more
+   controls — the call "succeeds" yet nothing loads, and the loop
+   exits after its no-growth strikes with only the first page.
+   ``element.mouse_click()`` is BROKEN in this zendriver version
+   (``get_position`` raises). The working recipe is
+   ``tab.mouse_click(x, y)`` (trusted CDP mouse events) at the
+   element's on-screen center::
+
+       async def _trusted_click(tab, selector):
+           el = await tab.query_selector(selector)
+           if el is None:
+               return False
+           await el.scroll_into_view()
+           await tab.sleep(0.5)
+           cx, cy = await tab.evaluate(
+               "(()=>{const r=document.querySelector("
+               + JSON.stringify(selector)
+               + ").getBoundingClientRect();"
+               "return [r.left+r.width/2, r.top+r.height/2];})()"
+           )
+           await tab.mouse_click(cx, cy)
+           return True
+
+   Decide which loop to emit from exploration evidence: scrollHeight
+   grows on scroll -> scroll loop; a load-more control exists -> click
+   loop with ``_trusted_click``. NEVER use bare ``window.scrollBy``
+   as the trigger when a load-more control exists — it loads nothing.
 3. Anti-race conditions — after every ``tab.fill(...)``,
    ``tab.click(...)``, ``tab.select(...)`` or scroll, insert an
    explicit ``await tab.sleep(0.5)`` (or longer for AJAX-heavy
@@ -531,7 +584,10 @@ Script rules (HARD — every script you emit MUST follow these):
    (class, tag, attribute) and verify the text with
    ``getattr(el, "text", "")`` in Python. If no stable selector
    exists, fall back to ``tab.evaluate`` with a vanilla JS
-   ``document.querySelector`` + ``.click()`` call.
+   ``document.querySelector`` + ``.click()`` call. A JS ``.click()``
+   dispatches an untrusted event; if validation shows the click had no
+   effect (URL/height/count unchanged), use the trusted-click recipe
+   from rule 2 (``tab.mouse_click(x, y)`` at the element center) instead.
 
 8. Browser only — zendriver is the ONLY way to reach the web for
    navigation, clicking, scrolling, and API calls. NEVER use

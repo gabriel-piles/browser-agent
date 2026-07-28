@@ -257,11 +257,29 @@ class ZendriverBrowserSession(BrowserSessionPort):
         element = await self._query(selector)
         if element is None:
             return self._error_snapshot(f"click: no element matches {selector!r}")
-        err = await self._try_interact(element.click(), selector, "click")
+        err = await self._trusted_click(selector, element)
+        if err:
+            err = await self._try_interact(element.click(), selector, "click")
         if err:
             return self._error_snapshot(err)
         await self._settle(_DEFAULT_SETTLE_SECONDS)
         return await self._snapshot(f"clicked {selector!r}", previous_url=pre_url, previous_height=pre_height)
+
+    async def _trusted_click(self, selector: str, element: Any) -> str:
+        """CDP trusted click at the element center; "" on success, error str."""
+        try:
+            await element.scroll_into_view()
+            await self._tab.sleep(0.5)
+            box = (
+                "(()=>{const r=document.querySelector("
+                + json.dumps(selector)
+                + ").getBoundingClientRect();return [r.left+r.width/2, r.top+r.height/2];})()"
+            )
+            cx, cy = await self._tab.evaluate(box)
+            await self._tab.mouse_click(cx, cy)
+        except Exception as exc:
+            return f"trusted click failed for {selector!r}: {exc}"
+        return ""
 
     async def _do_scroll(self, action: PageAction) -> PageSnapshot:
         pre_url = self._tab.url or ""

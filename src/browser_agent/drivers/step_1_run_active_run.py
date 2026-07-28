@@ -72,7 +72,9 @@ class RunActiveScraperDriver:
         if not scripts_dir.is_dir():
             logger.warning("no scripts directory at {dir}", dir=scripts_dir)
             return None
-        scripts = sorted(p for p in scripts_dir.glob("*.py") if re.match(r"\d{4}_\d{2}_\d{2}", p.name))
+        scripts = sorted(
+            p for p in scripts_dir.glob("*.py") if re.match(r"\d{4}_\d{2}_\d{2}", p.name) and not p.name.endswith(".raw.py")
+        )
         if not scripts:
             logger.warning("no step 0 scripts found in {dir}", dir=scripts_dir)
             return None
