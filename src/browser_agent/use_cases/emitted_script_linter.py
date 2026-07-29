@@ -99,6 +99,20 @@ def _check_zd_start(python_code: str) -> list[LintFinding]:
     return out
 
 
+def _check_el_text_content(python_code: str) -> list[LintFinding]:
+    out: list[LintFinding] = []
+    for match in re.finditer(r"\.text_content\s*\(", python_code):
+        out.append(
+            LintFinding(
+                rule="4b",
+                severity="error",
+                message="el.text_content() does not exist in zendriver; use get_text from script_tools.dom_helpers",
+                line=_line_of(python_code, match.start()),
+            )
+        )
+    return out
+
+
 def _import_roots(node: ast.Import | ast.ImportFrom) -> list[str]:
     if isinstance(node, ast.Import):
         return [alias.name for alias in node.names]
@@ -218,6 +232,7 @@ def _check_self_contained(python_code: str) -> list[LintFinding]:
 _ZENDRIVER_RULES: frozenset[str] = frozenset(
     {
         "0",  # zd.start() vs start_browser()
+        "4b",  # el.text_content() is a Playwright method, not zendriver
         "7",  # Playwright-only selectors (CDP rejects them)
         "8",  # HTTP libs instead of tab.get()
         "10",  # tab.evaluate calling convention
@@ -233,6 +248,7 @@ def _is_zendriver_rule(rule: str) -> bool:
 
 _ZENDRIVER_RULE_NAMES: dict[str, str] = {
     "0": "browser launcher — uses zd.start() instead of start_browser()",
+    "4b": "element handle — used el.text_content() which is not a zendriver method (use get_text)",
     "7": "selectors — uses Playwright-only pseudo-selectors rejected by CDP",
     "8": "HTTP client — uses raw HTTP lib instead of zendriver tab.get()",
     "10": "tab.evaluate — wrong calling convention (extra positional args or bare arrow function)",
@@ -339,6 +355,7 @@ class EmittedScriptLinter:
             _check_download_status,
             _check_http_imports,
             _check_playwright_selectors,
+            _check_el_text_content,
             _check_evaluate_iife,
             _check_evaluate_args,
             _check_bare_paths,
