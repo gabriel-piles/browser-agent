@@ -155,18 +155,22 @@ class GenerateScriptDriver:
         emit_results.append(emit_result)
         logger.info("emitted script at {path}", path=emit_result.script_path)
         await self._log_emit_zendriver_summary(emit_result)
-        smoke_result = await self._smoke_test_with_sidecar(emit_result, emitter)
+        smoke_result = await self._smoke_test_with_sidecar(emit_result, emitter, attempt=1)
         if smoke_result.success:
             await self._generator.close(use_case)
             self._cleanup_emit_artifacts(emit_results)
             return 0
         script = await self._smoke_repair_loop(use_case, script, smoke_result)
+        logger.info("re-emitting script after smoke-test repair")
         emit_result = emitter.emit(task, script, run_path)
         emit_results.append(emit_result)
-        smoke_result = await self._smoke_test_with_sidecar(emit_result, emitter)
+        smoke_result = await self._smoke_test_with_sidecar(emit_result, emitter, attempt=2)
         await self._generator.close(use_case)
         self._cleanup_emit_artifacts(emit_results)
-        return 0 if smoke_result.success else EXIT_SMOKE_FAILED
+        if smoke_result.success:
+            logger.warning("smoke-test recovery: attempt 1 FAILED → repair → attempt 2 PASSED — script is good")
+            return 0
+        return EXIT_SMOKE_FAILED
 
     @staticmethod
     def _cleanup_emit_artifacts(emit_results: list[EmitResult]) -> None:
@@ -225,17 +229,18 @@ class GenerateScriptDriver:
         if smoke_result.success:
             return script
         logger.warning("smoke test FAILED; running repair turn")
-        _log_zendriver_errors_in_smoke_output(smoke_result.output, "smoke test")
         return await self._generator.repair(use_case, format_smoke_repair(smoke_result.output))
 
     def _error_findings(self, script: GeneratedScript) -> list[LintFinding]:
         """Return error-severity lint findings for ``script``."""
         return [f for f in self._linter.lint(script.python_code) if f.severity == "error"]
 
-    async def _smoke_test_with_sidecar(self, emit_result: EmitResult, emitter: ScriptEmitter) -> SmokeTestResult:
+    async def _smoke_test_with_sidecar(
+        self, emit_result: EmitResult, emitter: ScriptEmitter, attempt: int = 1
+    ) -> SmokeTestResult:
         """Run the smoke test and merge its result into the sidecar JSON."""
         result = await smoke_test_script(emit_result.script_path)
-        log_smoke_test_result(result, emit_result.script_path)
+        log_smoke_test_result(result, emit_result.script_path, attempt=attempt)
         emitter.update_sidecar_smoke(emit_result.sidecar_path, _smoke_payload(result))
         return result
 
@@ -307,31 +312,6 @@ _ZD_RUNTIME_ERROR_PATTERNS: list[tuple[str, str, str]] = [
         "agent used asyncio.run() inside running loop",
     ),
 ]
-
-
-async def _log_zendriver_errors_in_smoke_output(output: str, context: str) -> None:
-    """Scan ``output`` for patterns indicating zendriver API misuse and log them.
-
-    ``context`` is a label (``"smoke test"`` or ``"validation"``) used in the
-    log message so the operator can trace the error to the right phase.
-    """
-    found: list[str] = []
-    for pattern, label, description in _ZD_RUNTIME_ERROR_PATTERNS:
-        if pattern in output:
-            found.append(description)
-            logger.warning(
-                "[SMOKE ZD-ERROR] {context} — {label}: {description}",
-                context=context,
-                label=label,
-                description=description,
-            )
-    if found:
-        logger.warning(
-            "zendriver runtime errors in {context}: {count} issue(s) — {gaps}",
-            context=context,
-            count=len(found),
-            gaps="; ".join(found),
-        )
 
 
 def _smoke_payload(result: SmokeTestResult) -> dict[str, object]:

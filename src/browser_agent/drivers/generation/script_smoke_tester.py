@@ -172,7 +172,7 @@ async def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
             proc.kill()
 
 
-def _log_smoke_failure(output: str) -> None:
+def _log_smoke_failure(output: str, attempt: int = 1) -> None:
     """Catch-all: log the root error line from any smoke test failure."""
     lines = output.strip().split("\n")
     error_line = ""
@@ -187,10 +187,10 @@ def _log_smoke_failure(output: str) -> None:
             error_line = stripped
             break
     summary = f" — root error: {error_line}" if error_line else ""
-    logger.warning("smoke test FAILED{summary}", summary=summary)
+    logger.warning("smoke test FAILED (attempt {n}){summary}", n=attempt, summary=summary)
 
 
-def _log_zendriver_errors_in_output(output: str) -> None:
+def _log_zendriver_errors_in_output(output: str, attempt: int = 1) -> None:
     """Scan ``output`` for patterns indicating zendriver API misuse and log them."""
     found: list[str] = []
     for pattern, label, description in _ZD_RUNTIME_ERROR_PATTERNS:
@@ -203,25 +203,27 @@ def _log_zendriver_errors_in_output(output: str) -> None:
             )
     if found:
         logger.warning(
-            "smoke test — zendriver runtime errors: {count} issue(s) — {gaps}",
+            "smoke test (attempt {n}) — zendriver runtime errors: {count} issue(s) — {gaps}",
+            n=attempt,
             count=len(found),
             gaps="; ".join(found),
         )
 
 
-def log_smoke_test_result(result: SmokeTestResult, script_path: Path) -> None:
+def log_smoke_test_result(result: SmokeTestResult, script_path: Path, attempt: int = 1) -> None:
     """Log the smoke-test result prominently so the operator sees it."""
     if result.success:
         if result.timed_out:
             logger.info(
-                "smoke test PASSED (timed out after {t}s — script running without crash): {path}",
+                "smoke test PASSED (attempt {n}) (timed out after {t}s — script running without crash): {path}",
+                n=attempt,
                 t=int(SMOKE_TEST_TIMEOUT_S),
                 path=script_path,
             )
         else:
-            logger.info("smoke test PASSED: {path}", path=script_path)
+            logger.info("smoke test PASSED (attempt {n}): {path}", n=attempt, path=script_path)
         return
-    logger.error("smoke test FAILED: {path}", path=script_path)
-    _log_smoke_failure(result.output)
-    _log_zendriver_errors_in_output(result.output)
+    logger.error("smoke test FAILED (attempt {n}): {path}", n=attempt, path=script_path)
+    _log_smoke_failure(result.output, attempt=attempt)
+    _log_zendriver_errors_in_output(result.output, attempt=attempt)
     logger.error("smoke test output:\n{output}", output=result.output)
