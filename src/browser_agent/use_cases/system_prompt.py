@@ -468,19 +468,164 @@ Script rules (HARD — every script you emit MUST follow these):
          "#theSelect")`` first, OR
      (b) null-check inside the JS and no-op on miss, e.g.::
 
-         await tab.evaluate(
-             "(function(){"
-             "var s=document.querySelector('#ddlPMYear');"
-             "if(!s){return false;}"
-             "s.value='2025';"
-             "s.dispatchEvent(new Event('change',{bubbles:true}));"
-             "return true;"
-             "})()"
-         )
+       await tab.evaluate(
+           "(function(){"
+           "var s=document.querySelector('#ddlPMYear');"
+           "if(!s){return false;}"
+           "s.value='2025';"
+           "s.dispatchEvent(new Event('change',{bubbles:true}));"
+           "return true;"
+           "})()"
+       )
 
    Use BOTH: the wait for the first iteration and the null-check for
    robustness across a loop of many selections (the dropdown can
    disappear between iterations when the page re-renders results).
+
+4a-bis. Iterated <select> driving — when the loop body selects many values
+   through the same <select>, FIVE failure modes stack. The robust pattern
+   addresses every one of them. The most common user-visible bug is
+   ``SKIP (dropdown not found)`` reported for healthy options: rule
+   (ii) below shows why, and rule (i)/(iv) are the structural fixes.
+
+     (i) Re-read the option list each iteration. After a previous
+         selection the page may re-render the <select> with a
+         different subset of options (server returns valid values
+         for the new state, framework replaces innerHTML, etc.).
+         NEVER iterate against a list captured BEFORE the loop.
+         Read the option text/values INSIDE the loop body, just
+         before matching. If a year you expected is missing from
+         the live list, treat it as "no data" and continue — do
+         NOT report a SKIP, the absence is the answer.
+
+     (ii) Wait for the post-selection page to settle BEFORE the next
+          iteration. ``await tab.sleep(1.5)`` between iterations is
+          NOT enough: between dispatching the change event and the
+          sleep window expiring, the page may be mid-navigation or
+          mid-render and the <select> is temporarily not in the DOM.
+          When the next iteration's ``tab.evaluate`` runs, it sees
+          ``s = null`` and the script reports a SKIP for a year that
+          is actually a healthy option. The fix: ``await
+          wait_for_page_ready(tab)`` (handles network-idle + load
+          events on the new page) followed by ``await
+          wait_for_anchors(tab, "#ddlPMYear")``. Only after that
+          resolves is the dropdown guaranteed to be present and
+          hydrated for the next iteration.
+
+     (iii) Verify the selection actually took effect. After dispatch,
+           re-read the <select>'s ``.value`` (or
+           ``options[selectedIndex].text``). If it does not match
+           the value you set, the change event was ignored (inline
+           ``onchange`` that mutated state but did NOT navigate, or
+           the page is still rendering) and the loop body will
+           silently re-extract the previous page's rows. Skip + log;
+           do NOT corrupt the result set with duplicate rows.
+
+     (iv) ``json.dumps`` must emit a quoted JSON string for the
+          strict-equality match in JS. ``safe_year = json.dumps(year)``
+          works when ``year`` is already a ``str`` (``json.dumps("2025")``
+          → ``'"2025"'``). When ``year`` is an ``int`` from a counter
+          or list index, ``json.dumps(2025)`` → ``'2025'`` (no quotes)
+          and JS strict equality against ``o.value`` (ALWAYS a string)
+          is ALWAYS false — the match silently never fires. ALWAYS
+          coerce: ``safe_year = json.dumps(str(year))`` so the emitted
+          JS compares two quoted strings.
+
+     (v) Direct-URL fallback for navigation-mapped dropdowns. When
+         the <select>'s handler navigates to a URL you can replicate
+         (you can detect this by inspecting the ``onchange`` attribute
+         or by observing the URL after one explore-page click — it
+         typically looks like ``<base>?<param>=<value>`` or
+         ``<base>#?<param>=<value>``), use ``await tab.get(f"{base_url}?<param>={year}")``
+         instead of driving the dropdown at all. The dropdown
+         re-render race is eliminated entirely. Only fall back to the
+         JS-mutation form when the <select> is purely a client-side
+         filter with no URL side-effect. Detect this once in
+         exploration: click ONE option with explore_page and see if
+         ``url_changed`` is true; if yes, you have a direct-URL form.
+
+   Reference template the agent MUST emit when iterating many values
+   through one <select> (replace selectors, value formatter and
+   fallback URL to fit the page)::
+
+        async def select_filter_value(tab, selector, value):
+            '''Return True iff ``value`` was selected AND the page is ready.'''
+            value_str = str(value)
+            safe = json.dumps(value_str)  # see (iv)
+            try:
+                await wait_for_anchors(tab, selector, timeout=8.0)
+            except TimeoutError:
+                return False  # dropdown absent — caller logs + continues
+            options = await tab.evaluate(f'''(() => {{
+                const s = document.querySelector({json.dumps(selector)});
+                return s ? Array.from(s.options).map(
+                    o => String(o.value || o.text).trim()
+                ) : [];
+            }})()''')
+            if not options or value_str not in options:
+                return False  # (i) — option absent in living dropdown
+            ok = await tab.evaluate(f'''(() => {{
+                const s = document.querySelector({json.dumps(selector)});
+                if (!s) return false;
+                const opt = Array.from(s.options).find(
+                    o => String(o.value || o.text).trim() === {safe}
+                );
+                if (!opt) return false;
+                s.value = opt.value !== '' ? opt.value : opt.text;
+                s.dispatchEvent(new Event('change', {{bubbles: true}}));
+                if (s.form && typeof s.form.submit === 'function') {{
+                    try {{ s.form.submit(); }} catch(e) {{}}
+                }}
+                return true;
+            }})()''')
+            if not ok:
+                return False
+            await wait_for_page_ready(tab)
+            await tab.sleep(0.3)
+            # (iii) — confirm the dropdown now reflects our value
+            current = await tab.evaluate(f'''(() => {{
+                const s = document.querySelector({json.dumps(selector)});
+                if (!s) return null;
+                const v = String(s.value || '').trim();
+                if (v) return v;
+                const idx = s.selectedIndex;
+                return idx >= 0 ? String(s.options[idx].text || '').trim() : null;
+            }})()''')
+            return current == value_str
+
+   Use the iteration loop pattern below. The CORRECT form is the one
+   the agent MUST emit. The BROKEN form is the one the actual bug
+   comes from — the script in this conversation reproduces it::
+
+     CORRECT — list can be captured before the loop but each iteration
+     re-reads the LIVE dropdown options before selecting and waits for
+     the new page to settle before the next iteration starts::
+
+       years = await tab.evaluate(
+           "Array.from(document.querySelector('#ddlPMYear').options)"
+           ".map(o => String(o.value || o.text).trim())"
+       )
+       for year in years:
+           print(f"  Year {year}...", end=" ", flush=True)
+           if not await select_filter_value(tab, "#ddlPMYear", year):
+               print("skip (option absent or page not ready)")
+               continue
+           rows = await extract_pdf_links(tab, ...)
+           print(f"{len(rows)} rows")
+           all_records.extend(rows)
+
+     BROKEN — captured list used directly without re-reading the live
+     dropdown or waiting for the page to settle between iterations.
+     This is the form the agent emitted before this rule was added
+     and the reason healthy options were reported as ``SKIP``::
+
+       for year in years:
+           ok = await tab.evaluate("...")  # null-check only, no wait
+           if not ok:
+               print("SKIP (dropdown not found)")  # the bug
+               continue
+           await tab.sleep(1.5)  # arbitrary sleep vs readiness
+           rows = await extract_pdf_links(tab, ...)  # extracts prev page
 
 4b. Element handle API — the objects returned by ``tab.query_selector``,
    ``tab.query_selector_all``, and ``row.query_selector`` are zendriver
