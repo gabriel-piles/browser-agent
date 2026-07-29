@@ -9,7 +9,6 @@ so no ``import zendriver`` is needed.
 from __future__ import annotations
 
 import asyncio
-import json
 
 
 async def get_text(el, tab=None) -> str:
@@ -66,10 +65,11 @@ async def trusted_click(tab, selector: str) -> bool:
 
     ``element.click()`` dispatches an untrusted JS event (``isTrusted:
     false``) that some sites ignore on load-more controls. This helper
-    scrolls the element into view, computes its on-screen center via a
-    null-guarded IIFE, and fires ``tab.mouse_click(cx, cy)`` (trusted CDP
-    mouse events). Returns ``True`` on success, ``False`` if the element
-    is absent or the click raised.
+    scrolls the element into view, computes its on-screen center via
+    ``el.apply`` on the same handle (no DOM re-query), and fires
+    ``tab.mouse_click(cx, cy)`` (trusted CDP mouse events). Returns
+    ``True`` on success, ``False`` if the element is absent, hidden
+    (zero-size rect), or the click raised.
     """
     try:
         el = await tab.query_selector(selector)
@@ -77,11 +77,14 @@ async def trusted_click(tab, selector: str) -> bool:
             return False
         await el.scroll_into_view()
         await tab.sleep(0.5)
-        js = (
-            "(()=>{const r=document.querySelector(" + json.dumps(selector) + ").getBoundingClientRect();"
-            "return [r.left+r.width/2, r.top+r.height/2];})()"
+        result = await el.apply(
+            "(el) => { const r = el.getBoundingClientRect();"
+            "if (r.width === 0 || r.height === 0) return null;"
+            "return [r.left + r.width/2, r.top + r.height/2]; }"
         )
-        cx, cy = await tab.evaluate(js)
+        if result is None:
+            return False
+        cx, cy = result
         await tab.mouse_click(cx, cy)
     except Exception as e:
         print(f"  [trusted_click] {selector} failed: {type(e).__name__}: {e}")

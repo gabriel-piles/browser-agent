@@ -306,16 +306,23 @@ class ZendriverBrowserSession(BrowserSessionPort):
         return await self._snapshot(f"clicked {selector!r}", previous_url=pre_url, previous_height=pre_height)
 
     async def _trusted_click(self, selector: str, element: Any) -> str:
-        """CDP trusted click at the element center; "" on success, error str."""
+        """CDP trusted click at the element center; "" on success, error str.
+
+        Uses ``element.apply`` to read the bounding rect on the same handle
+        found by the caller — no DOM re-query, so the element cannot be
+        stale or null between the find and the coordinate read.
+        """
         try:
             await element.scroll_into_view()
             await self._tab.sleep(0.5)
-            box = (
-                "(()=>{const r=document.querySelector("
-                + json.dumps(selector)
-                + ").getBoundingClientRect();return [r.left+r.width/2, r.top+r.height/2];})()"
+            result = await element.apply(
+                "(el) => { const r = el.getBoundingClientRect();"
+                "if (r.width === 0 || r.height === 0) return null;"
+                "return [r.left + r.width/2, r.top + r.height/2]; }"
             )
-            cx, cy = await self._tab.evaluate(box)
+            if result is None:
+                return f"trusted click failed for {selector!r}: element has zero size (hidden)"
+            cx, cy = result
             await self._tab.mouse_click(cx, cy)
         except Exception as exc:
             return f"trusted click failed for {selector!r}: {exc}"
