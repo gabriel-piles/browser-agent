@@ -109,6 +109,35 @@ class SmokeTestResult:
     timed_out: bool
 
 
+def _use_smoke_profile(script_path: Path, scratch_dir: Path) -> tuple[Path | None, str | None]:
+    """Temporarily override ``run_config.py`` to use a scratch profile.
+
+    The generation pipeline's Chromium may still hold a lock on the
+    run's real profile directory. The smoke-test subprocess cannot
+    launch another Chromium instance against the same profile, so we
+    redirect ``PROFILE_PATH`` to an empty scratch dir.
+
+    Returns ``(run_config_path, original_content)`` — or ``(None, None)``
+    if ``run_config.py`` does not exist (defensive).
+    """
+    run_config_path = script_path.parent / "script_tools" / "run_config.py"
+    if not run_config_path.exists():
+        return None, None
+
+    original = run_config_path.read_text(encoding="utf-8")
+    smoke_profile = scratch_dir / "profile"
+    smoke_profile.mkdir(parents=True, exist_ok=True)
+    temp_config = f"PROFILE_PATH = {str(smoke_profile.resolve())!r}\nNOPECHA_EXTENSION_DIR = None\n"
+    run_config_path.write_text(temp_config, encoding="utf-8")
+    return run_config_path, original
+
+
+def _restore_run_config(path: Path | None, content: str | None) -> None:
+    """Restore original ``run_config.py`` content (no-op if nothing was swapped)."""
+    if path is not None and content is not None:
+        path.write_text(content, encoding="utf-8")
+
+
 async def smoke_test_script(script_path: Path) -> SmokeTestResult:
     """Run ``script_path`` as a subprocess with a short timeout.
 
@@ -119,6 +148,11 @@ async def smoke_test_script(script_path: Path) -> SmokeTestResult:
     """
     scratch_dir = _scratch_dir(script_path)
     db_path = str(scratch_dir / "metadata.db")
+
+    # Use a scratch profile so the smoke test does not collide with
+    # the generation pipeline's still-running Chromium instance.
+    run_config_path, original_run_config = _use_smoke_profile(script_path, scratch_dir)
+
     cmd = [sys.executable, str(script_path)]
     env = {
         **os.environ,
@@ -127,26 +161,29 @@ async def smoke_test_script(script_path: Path) -> SmokeTestResult:
         "BROWSER_AGENT_TASK_SLUG": "smoke",
     }
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            start_new_session=True,
-            env=env,
-        )
-    except OSError as exc:
-        return SmokeTestResult(success=False, output=f"failed to launch: {exc}", timed_out=False)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+                env=env,
+            )
+        except OSError as exc:
+            return SmokeTestResult(success=False, output=f"failed to launch: {exc}", timed_out=False)
 
-    try:
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=SMOKE_TEST_TIMEOUT_S)
-    except asyncio.TimeoutError:
-        await _kill_process_group(proc)
-        return SmokeTestResult(success=True, output="[smoke test timed out — script is running]", timed_out=True)
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=SMOKE_TEST_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            await _kill_process_group(proc)
+            return SmokeTestResult(success=True, output="[smoke test timed out — script is running]", timed_out=True)
 
-    output = stdout.decode("utf-8", errors="replace") if stdout else ""
-    if proc.returncode == 0:
-        return SmokeTestResult(success=True, output=output, timed_out=False)
-    return SmokeTestResult(success=False, output=output, timed_out=False)
+        output = stdout.decode("utf-8", errors="replace") if stdout else ""
+        if proc.returncode == 0:
+            return SmokeTestResult(success=True, output=output, timed_out=False)
+        return SmokeTestResult(success=False, output=output, timed_out=False)
+    finally:
+        _restore_run_config(run_config_path, original_run_config)
 
 
 def _scratch_dir(script_path: Path) -> Path:
