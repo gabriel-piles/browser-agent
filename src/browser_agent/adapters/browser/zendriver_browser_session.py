@@ -97,30 +97,70 @@ class ZendriverBrowserSession(BrowserSessionPort):
         )
         self._analyzer = PageAnalyzer()
 
-    async def start(self) -> None:
+    async def start(self, _max_port_retries: int = 5) -> None:
         if self._browser is not None:
             return
-        self._port = free_port()
-        if self._user_data_dir is not None:
-            self._user_data_dir.mkdir(parents=True, exist_ok=True)
-            seed_profile_if_empty(self._user_data_dir)
-            user_data_dir = str(self._user_data_dir)
-            logger.info("launching clean Chromium (headless={}, profile={})", self._headless, user_data_dir)
-        else:
-            user_data_dir = tempfile.mkdtemp(prefix="zd_profile_")
-            logger.info("launching clean Chromium (headless={})", self._headless)
-        extension_dir = None
-        if NOPECHA_ENABLED:
-            extension_dir = NopechaExtension().ensure_ready()
-        self._process = launch_chromium(
-            port=self._port,
-            user_data_dir=user_data_dir,
-            headless=self._headless,
-            extension_dir=extension_dir,
-        )
-        self._browser, self._tab = await connect_and_prepare(port=self._port)
-        self._tracker = CdpPageTracker(self._tab)
-        await self._tracker.attach()
+
+        # Cache user-data-dir setup so we only do it on the first attempt
+        # (subsequent retries reuse the same dir).
+        _prepared = False
+        user_data_dir: str | None = None
+        extension_dir: str | None = None
+
+        for attempt in range(_max_port_retries):
+            self._port = free_port()
+
+            if not _prepared:
+                if self._user_data_dir is not None:
+                    self._user_data_dir.mkdir(parents=True, exist_ok=True)
+                    seed_profile_if_empty(self._user_data_dir)
+                    user_data_dir = str(self._user_data_dir)
+                    logger.info(
+                        "launching clean Chromium (headless={}, profile={})",
+                        self._headless,
+                        user_data_dir,
+                    )
+                else:
+                    user_data_dir = tempfile.mkdtemp(prefix="zd_profile_")
+                    logger.info("launching clean Chromium (headless={})", self._headless)
+                if NOPECHA_ENABLED:
+                    extension_dir = NopechaExtension().ensure_ready()
+                _prepared = True
+
+            self._process = launch_chromium(
+                port=self._port,
+                user_data_dir=user_data_dir,
+                headless=self._headless,
+                extension_dir=extension_dir,
+            )
+
+            try:
+                self._browser, self._tab = await connect_and_prepare(port=self._port)
+            except Exception as exc:
+                logger.warning(
+                    "port {} busy or connection failed (attempt {}/{}): {}",
+                    self._port,
+                    attempt + 1,
+                    _max_port_retries,
+                    exc,
+                )
+                # The subprocess likely failed to bind — clean it up.
+                if self._process is not None:
+                    self._process.kill()
+                    try:
+                        self._process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    self._process = None
+                self._port = None
+                continue
+
+            # Connected successfully.
+            self._tracker = CdpPageTracker(self._tab)
+            await self._tracker.attach()
+            return
+
+        raise RuntimeError(f"could not start browser after {_max_port_retries} port retries")
 
     async def close(self) -> None:
         browser = self._browser

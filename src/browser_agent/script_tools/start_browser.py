@@ -284,7 +284,6 @@ async def start_browser(headless=None, user_data_dir=None):
     if headless is None:
         headless = _EMITTED_HEADLESS
 
-    port = _free_port()
     owns_profile = user_data_dir is None and not PROFILE_PATH
     profile = user_data_dir or PROFILE_PATH or tempfile.mkdtemp(prefix="zd_script_")
 
@@ -292,8 +291,22 @@ async def start_browser(headless=None, user_data_dir=None):
     _seed_profile_if_empty(profile)
     _clear_stale_locks(profile)
 
-    process = _launch_chromium(_build_chromium_args(port, profile, headless))
-    _wait_for_port(process, port, _STARTUP_TIMEOUT_S)
+    # Retry port allocation: _free_port() has a TOC/TOU race when multiple
+    # scripts start concurrently; retry with a fresh port if the first
+    # attempt fails.
+    _MAX_PORT_RETRIES = 5
+    for attempt in range(_MAX_PORT_RETRIES):
+        port = _free_port()
+        process = _launch_chromium(_build_chromium_args(port, profile, headless))
+        try:
+            _wait_for_port(process, port, _STARTUP_TIMEOUT_S)
+        except RuntimeError as exc:
+            _terminate(process)
+            _close_stderr(process)
+            if attempt < _MAX_PORT_RETRIES - 1:
+                continue
+            raise
+        break
 
     browser = await zd.start(host="127.0.0.1", port=port)
     tab = browser.main_tab
