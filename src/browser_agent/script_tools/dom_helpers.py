@@ -83,6 +83,7 @@ async def trusted_click(tab, selector: str) -> bool:
         )
         cx, cy = await tab.evaluate(js)
         await tab.mouse_click(cx, cy)
-    except Exception:
+    except Exception as e:
+        print(f"  [trusted_click] {selector} failed: {type(e).__name__}: {e}")
         return False
     return True
