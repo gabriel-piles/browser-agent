@@ -39,6 +39,37 @@ def _check_save_record(python_code: str) -> list[LintFinding]:
     return out
 
 
+def _call_args(python_code: str, open_paren: int) -> str:
+    """Text from the '(' at open_paren through its matching ')' (inclusive)."""
+    depth = 1
+    i = open_paren + 1
+    while i < len(python_code) and depth > 0:
+        if python_code[i] == "(":
+            depth += 1
+        elif python_code[i] == ")":
+            depth -= 1
+        i += 1
+    return python_code[open_paren:i]
+
+
+def _check_download_status(python_code: str) -> list[LintFinding]:
+    out: list[LintFinding] = []
+    for match in re.finditer(r"\bsave_record\s*\(", python_code):
+        call_text = _call_args(python_code, match.end() - 1)
+        has_pdf = '"pdf_filename"' in call_text or "'pdf_filename'" in call_text
+        has_dl = '"download_status"' in call_text or "'download_status'" in call_text
+        if has_pdf and not has_dl:
+            out.append(
+                LintFinding(
+                    rule="14",
+                    severity="error",
+                    message="save_record with pdf_filename must include download_status",
+                    line=_line_of(python_code, match.start()),
+                )
+            )
+    return out
+
+
 def _check_file_size_key(python_code: str) -> list[LintFinding]:
     out: list[LintFinding] = []
     pat = re.compile(r"""(?:\[\s*["']file_size["']\s*\]|\.get\(\s*["']file_size["']\s*\))""")
@@ -305,6 +336,7 @@ class EmittedScriptLinter:
             _check_skeleton,
             _check_save_record,
             _check_zd_start,
+            _check_download_status,
             _check_http_imports,
             _check_playwright_selectors,
             _check_evaluate_iife,
