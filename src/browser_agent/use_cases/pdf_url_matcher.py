@@ -10,19 +10,21 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit, unquote, quote
 
 
 def expected_pdf_filename(pdf_url: str) -> str:
     """Return ``pdf_<sha1(url)[:12]>.pdf``, the downloader's naming scheme.
 
     Mirrors ``_pdf_filename_for`` in ``script_tools/_file_utils.py``: the
-    on-disk name is a pure function of the download URL. The downloader
-    upgrades ``http://`` to ``https://`` *before* hashing, so callers
-    MUST pass the normalized (``https``) form through
-    :class:`PdfUrlMatcher` rather than
+    on-disk name is a pure function of the canonical download URL.
+    Routes through :meth:`PdfUrlMatcher.normalize` so the
+    percent-encoded and raw-unicode forms of the same path hash to the
+    same filename. The downloader upgrades ``http://`` to ``https://``
+    *before* hashing, so callers MUST pass the normalized (``https``)
+    form.
     """
-    return f"pdf_{hashlib.sha1(pdf_url.encode()).hexdigest()[:12]}.pdf"
+    return f"pdf_{hashlib.sha1(PdfUrlMatcher.normalize(pdf_url).encode()).hexdigest()[:12]}.pdf"
 
 
 @dataclass(frozen=True)
@@ -42,7 +44,9 @@ class PdfUrlMatcher:
         """Return the canonical form used for comparison.
 
         Lowercases scheme+host, upgrades ``http`` to ``https`` (mirrors the
-        downloader), drops the fragment, and sorts query params.
+        downloader), percent-canonicalizes the path (unquote then
+        re-quote so encoded and raw-unicode forms collapse), drops the
+        fragment, and sorts query params.
         """
         if not url:
             return ""
@@ -50,7 +54,8 @@ class PdfUrlMatcher:
         scheme = "https" if parts.scheme in {"http", "https"} else parts.scheme.lower()
         netloc = parts.netloc.lower()
         query = _sorted_query(parts.query)
-        return urlunsplit((scheme, netloc, parts.path, query, ""))
+        path = quote(unquote(parts.path), safe="/%@") if parts.path else ""
+        return urlunsplit((scheme, netloc, path, query, ""))
 
     @staticmethod
     def match(candidate: str, stored: str) -> UrlMatch:

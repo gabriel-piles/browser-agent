@@ -47,7 +47,7 @@ class RunActiveScraperDriver:
     async def _run_async(self) -> int:
         """Load the active run, find the latest script, and run it."""
         run = RunsConfigLoader.load_active()
-        run_path = RunsConfigLoader.load_active_path()
+        run_path = RunsConfigLoader.resolve_active_path()
         logger.info("step 1 (run active scraper) starting run={run}", run=run.name)
 
         script_path = self._latest_script_path(run_path)

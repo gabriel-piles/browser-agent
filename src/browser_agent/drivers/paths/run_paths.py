@@ -22,8 +22,12 @@ class RunPaths:
         self._root = self._ensure(self._root_path())
 
     def _root_path(self) -> Path:
-        """Return the root path for the active run from :class:`RunsConfigLoader`."""
-        return RunsConfigLoader.load_active_path()
+        """Return the root path for the active run from :class:`RunsConfigLoader`.
+
+        Uses the non-copying resolver so the prompt snapshot is not
+        re-copied on every access — step 0 already placed it there.
+        """
+        return RunsConfigLoader.resolve_active_path()
 
     def _ensure(self, path: Path) -> Path:
         """Return ``path`` after creating it (and parents) on disk."""

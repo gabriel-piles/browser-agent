@@ -40,7 +40,7 @@ class ProposeDriver:
 
     async def _run_async(self) -> None:
         """Load the run, build the catalog, ask the LLM, print the result."""
-        run_config = RunsConfigLoader.load_active()
+        run_config = RunsConfigLoader.load_run_config_from_run()
         if not self._has_template(run_config):
             return
         db_path = self._paths.metadata_db_path()

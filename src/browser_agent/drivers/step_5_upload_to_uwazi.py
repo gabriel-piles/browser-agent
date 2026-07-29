@@ -43,7 +43,7 @@ class ApplyDriver:
 
     def run(self) -> None:
         """Module entry: load the run, build the plan, push to Uwazi."""
-        run_config = RunsConfigLoader.load_active()
+        run_config = RunsConfigLoader.load_run_config_from_run()
         mapping = self._loader.load_or_die(self._paths.default_mapping_path())
         client = self._uwazi.build()
         plan = self._build_plan(client, mapping, run_config)

@@ -41,6 +41,19 @@ class RunsConfigLoader:
         return _load_run_config(active_name)
 
     @staticmethod
+    def resolve_active_path() -> Path:
+        """Return the directory path for the active run, created on disk.
+
+        Unlike :meth:`load_active_path`, this does NOT copy the prompt
+        snapshot — the caller expects the prompt was already copied by
+        step 0.
+        """
+        active_name = _load_active_name()
+        path = RUNS_PATH / active_name
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @staticmethod
     def load_active_path() -> Path:
         """Return the directory path for the active run, created on disk.
 
@@ -52,6 +65,24 @@ class RunsConfigLoader:
         """
         active_name = _load_active_name()
         return _run_path(active_name)
+
+    @staticmethod
+    def load_run_config_from_run() -> RunConfig:
+        """Load :class:`RunConfig` from the prompt copy inside the run folder.
+
+        The prompt YAML must already exist in the run folder (copied
+        there by step 0 via :meth:`load_active_path`).  Raises
+        :class:`FileNotFoundError` when the copy is missing.
+        """
+        active_name = _load_active_name()
+        run_path = RUNS_PATH / active_name
+        config_path = run_path / f"{active_name}.yaml"
+        if not config_path.is_file():
+            raise FileNotFoundError(
+                f"No prompt copy found at {config_path}. Run step 0 first to copy the prompt into the run folder."
+            )
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        return RunConfig.model_validate({"name": active_name, **data})
 
 
 def _load_active_name() -> str:

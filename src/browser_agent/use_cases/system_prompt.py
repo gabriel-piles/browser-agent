@@ -273,6 +273,7 @@ Script rules (HARD — every script you emit MUST follow these):
       from script_tools.page_wait import wait_for_page_ready, wait_for_anchors, prepare_page_wait
       from script_tools.start_browser import start_browser
       from script_tools.dom_helpers import get_text, get_attr, trusted_click
+      from script_tools._file_utils import pdf_id_for
 
    The typed signatures:
 
@@ -295,6 +296,12 @@ Script rules (HARD — every script you emit MUST follow these):
 
       async def download_pdf_browser(tab, url, save_path) -> dict
           # Returns {"size": int, "skipped": bool, "reason": str, "saved_path": str}.
+
+     def pdf_id_for(url: str) -> str
+         # "pdf_<sha1(canonical_url)[:12]>" — the download helper's id
+         # stem. Use at discovery time so the DB source_url key, the
+         # stored pdf_id, and the on-disk filename stem all derive from
+         # the SAME canonical URL. NEVER inline the sha1 yourself.
 
       async def wait_for_page_ready(tab, url=None, timeout=30.0, quiet_window_ms=500) -> None
 
@@ -802,10 +809,16 @@ Script rules (HARD — every script you emit MUST follow these):
     so downstream code joins file to metadata without parsing the
     filename. The ``source_url`` MUST be a content-stable key derived
     from the PDF's own URL, NOT a position index. ``pdf_id`` is a pure
-    function of ``pdf_url`` (``pdf_<sha1(url)[:12]>``), so compute it
-    ONCE at discovery time — before any download — and reuse it as the
-    DB key, the stored ``pdf_id`` field, and (post-download) the
-    filename stem. The metadata table keys rows by ``source_url``
+    function of ``pdf_url`` (``pdf_id_for(pdf_url)`` =
+    ``pdf_<sha1(canonical_url)[:12]>``), so compute it ONCE at
+    discovery time — before any download — and reuse it as the DB
+    key, the stored ``pdf_id`` field, and (post-download) the
+    filename stem. ALWAYS use the ``pdf_id_for`` helper — NEVER
+    inline ``hashlib.sha1(pdf_url.encode())``: the helper
+    percent-canonicalizes the URL first, so the percent-encoded and
+    raw-unicode forms of the same URL collapse to one id (and one DB
+    row); the inline hash skips that and creates a duplicate row for
+    the same PDF. The metadata table keys rows by ``source_url``
     (PRIMARY KEY); a position-based key (``#pdf3``, ``/pdf/2``) is
     unstable across regenerations — a re-run whose script uses a
     different scheme creates a NEW row for the same PDF instead of
@@ -815,8 +828,8 @@ Script rules (HARD — every script you emit MUST follow these):
     PDF → same hash → same source_url → upsert), mirroring the file
     naming in rule 13. At discovery::
 
-        import hashlib
-        pdf_id = "pdf_" + hashlib.sha1(pdf_url.encode()).hexdigest()[:12]
+        from script_tools._file_utils import pdf_id_for
+        pdf_id = pdf_id_for(pdf_url)
         source_url = f"{page_url}/pdf/{pdf_id}"
         records.append({"source_url": source_url, "pdf_id": pdf_id, ...})
 
@@ -825,9 +838,11 @@ Script rules (HARD — every script you emit MUST follow these):
     ``pdf_id`` (do NOT recompute a different key)::
 
         save_record(rec["source_url"], {**rec, "pdf_filename": pdf_filename,
+                                         "source_page_url": page_url,
                                          "download_status": "downloaded"})
     HARD RULE (pdf_url encoding):
     - ``pdf_url`` MUST be a percent-encoded absolute URL with no raw spaces. When you build the URL from a relative ``href`` that may contain spaces, use ``from urllib.parse import urljoin, quote; pdf_url = urljoin(base, quote(href, safe="/%"))`` — never bare-concatenate a host onto an href. A raw space in a stored URL breaks every downstream link consumer (Uwazi link property, identity-key matching, re-fetch). Apply encoding before passing ``pdf_url`` to ``save_record``.
+    - For the DB key and filename, the helpers canonicalize the URL automatically — you do NOT need to pre-encode ``pdf_url`` for ``pdf_id_for`` or the download helpers; they accept either the percent-encoded or the raw-unicode form and treat them as the same document. The rule above (no raw spaces) is about not handing a broken URL to the HTTP request, not about the dedup key.
 
     HARD RULE (skip non-PDF links): filter links at extraction time so
     the download helper never receives a non-PDF URL. The helper
@@ -869,6 +884,13 @@ Script rules (HARD — every script you emit MUST follow these):
     was downloaded (same Cloudflare / WAF clearance). Store the result's
     ``saved_path`` basename in the ``data`` dict as ``html_filename``
     alongside ``pdf_filename`` (see the save_record example in rule 13).
+    Also store the URL of the page whose HTML was saved (the
+    ``source_url`` you passed to ``save_page_html``) as
+    ``source_page_url`` in the same ``data`` dict, so downstream Uwazi
+    mapping can place it on a ``link``-type property. This is the
+    SOURCE PAGE URL — never the PDF download URL (``pdf_url``).
+    Omit ``source_page_url`` when no HTML was captured for a row
+    (same omission rule as ``html_filename``).
 
     Default: save the HTML of the page the scraper is on when it
     downloads the PDF. Pass that page's URL as ``source_url`` so the

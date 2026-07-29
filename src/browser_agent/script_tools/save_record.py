@@ -16,6 +16,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from script_tools._file_utils import _canonical_url
+
 
 def _resolve_db_path() -> str:
     """Return the SQLite path, preferring the env var, then ``__main__.__file__``."""
@@ -58,16 +60,6 @@ def _ensure_schema(conn) -> None:
     )
 
 
-def _normalize_scheme(url):
-    """Normalize a leading ``http://`` to ``https://`` so the http/https
-    variants of the same document collapse onto one DB key (source_url is
-    the PRIMARY KEY) and one ``pdf_url``. Generic for every crawler.
-    """
-    if isinstance(url, str) and url.lower().startswith("http://"):
-        return "https://" + url[7:]
-    return url
-
-
 def save_record(source_url: str, data: dict) -> None:
     """Persist one entity's metadata into the shared SQLite store.
 
@@ -79,18 +71,23 @@ def save_record(source_url: str, data: dict) -> None:
     When downloading multiple files per page (PDFs, images), call this
     once per FILE with a content-stable source_url derived from the
     file's own URL — for PDFs use ``f"{page_url}/pdf/{pdf_id}"`` where
-    ``pdf_id = "pdf_" + sha1(pdf_url)[:12]`` (the same hash the download
-    helper uses for the filename). NEVER use a position index
+    ``pdf_id = pdf_id_for(pdf_url)`` (the same canonicalized hash the
+    download helper uses for the filename; import it from
+    ``script_tools._file_utils``). NEVER inline
+    ``hashlib.sha1(pdf_url.encode())`` — the helper percent-canonicalizes
+    the URL first so the percent-encoded and raw-unicode forms of the
+    same PDF collapse to one id (and one DB row); the inline hash skips
+    that and creates a duplicate. NEVER use a position index
     (``{i}``, ``#row3``): the metadata table keys on source_url, so a
     position-based key makes a re-run with a different scheme create a
     duplicate row for the same file instead of upserting. The on-disk
     filename is derived by the download helper from the file's download
-    URL (``pdf_{sha1(url)[:12]}.pdf``); read it from the helper's result
+    URL (``<pdf_id_for(url)>.pdf``); read it from the helper's result
     dict (``result["saved_path"]``) and store it in ``data`` as
     ``pdf_id`` / ``pdf_filename``. Keep the human label and type in
-    ``pdf_name`` / ``pdf_type``. The path is a pure function of the URL
-    so the download helper's existence check means "already downloaded
-    this URL".
+    ``pdf_name`` / ``pdf_type``. The path is a pure function of the
+    canonical URL so the download helper's existence check means
+    "already downloaded this URL".
 
     Download status — call ``save_record`` for EVERY discovered PDF,
     success OR failure, so a failed download leaves a row that a
@@ -113,12 +110,19 @@ def save_record(source_url: str, data: dict) -> None:
     upload code reads ``html_filename`` to attach the HTML as a
     supporting attachment on the same Uwazi entity. Omit the key
     (or set it to ``None``) when no HTML was captured for a row.
+
+    Store the URL of the page whose HTML was saved as
+    ``source_page_url`` in the same ``data`` dict (the ``source_url``
+    passed to ``save_page_html``), so downstream Uwazi mapping can
+    place it on a ``link``-type property. This is the SOURCE PAGE URL,
+    never the PDF download URL (``pdf_url``). Omit when no HTML was
+    captured.
     """
-    source_url = _normalize_scheme(source_url)
+    source_url = _canonical_url(source_url)
     if isinstance(data, dict):
         _pu = data.get("pdf_url")
         if isinstance(_pu, str):
-            data = {**data, "pdf_url": _normalize_scheme(_pu)}
+            data = {**data, "pdf_url": _canonical_url(_pu)}
     db_path = _resolve_db_path()
     task_slug = _resolve_task_slug()
     conn = sqlite3.connect(db_path, timeout=5.0)

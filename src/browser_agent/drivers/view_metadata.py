@@ -19,12 +19,12 @@ _PATH_CACHE: Path | None = None
 def _db_path() -> Path:
     global _PATH_CACHE
     if _PATH_CACHE is None:
-        _PATH_CACHE = RunsConfigLoader.load_active_path() / "metadata.db"
+        _PATH_CACHE = RunsConfigLoader.resolve_active_path() / "metadata.db"
     return _PATH_CACHE
 
 
 SUBSTR_PROMPT = "pdf_filename (or ? to list, * to dump all, empty to quit) > "
-URL_KEYS = {"source_url", "pdf_url", "source_page"}
+URL_KEYS = {"source_url", "pdf_url", "source_page", "source_page_url"}
 SINGLE_LINE_KEYS = URL_KEYS | {k for k in ()}
 
 
@@ -68,6 +68,7 @@ def render_card(record: dict, width: int = 64) -> str:
         "pdf_filename",
         "html_filename",
         "source_page",
+        "source_page_url",
     ]
     for k in keys:
         if k in record and record[k] not in (None, ""):

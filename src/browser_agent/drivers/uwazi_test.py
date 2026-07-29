@@ -21,7 +21,7 @@ from browser_agent.configuration import UWAZI_URL, UWAZI_USER, UWAZI_PASSWORD
 
 # Flip to True to bulk-delete every entity on the configured template,
 # leave False to just dump the thesaurus list as a smoke test.
-DELETE_ENTITIES: bool = False
+DELETE_ENTITIES: bool = True
 
 # Template whose entities get wiped. Other templates stay untouched.
 WIPE_TEMPLATE: str = "Document"

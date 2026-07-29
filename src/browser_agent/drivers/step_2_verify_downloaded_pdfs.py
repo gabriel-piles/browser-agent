@@ -64,7 +64,7 @@ class VerifyDownloadsDriver:
     async def _run_async(self) -> int:
         """Load the active run, reconcile, run agent, write report, return exit code."""
         run = RunsConfigLoader.load_active()
-        run_path = RunsConfigLoader.load_active_path()
+        run_path = RunsConfigLoader.resolve_active_path()
         logger.info("verification driver starting run={run}", run=run.name)
         script_path = self._latest_script_path(run_path)
         if script_path is None:
