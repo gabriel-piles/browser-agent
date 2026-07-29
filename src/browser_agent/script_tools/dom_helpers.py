@@ -9,6 +9,7 @@ so no ``import zendriver`` is needed.
 from __future__ import annotations
 
 import asyncio
+import json
 
 
 async def get_text(el, tab=None) -> str:
@@ -65,23 +66,25 @@ async def trusted_click(tab, selector: str) -> bool:
 
     ``element.click()`` dispatches an untrusted JS event (``isTrusted:
     false``) that some sites ignore on load-more controls. This helper
-    scrolls the element into view, computes its on-screen center via
-    ``el.apply`` on the same handle (no DOM re-query), and fires
-    ``tab.mouse_click(cx, cy)`` (trusted CDP mouse events). Returns
-    ``True`` on success, ``False`` if the element is absent, hidden
-    (zero-size rect), or the click raised.
+    finds the element, scrolls it into view, and reads its on-screen
+    center — all in a SINGLE ``tab.evaluate`` call so the element
+    cannot go stale between the find and the coordinate read. It then
+    fires ``tab.mouse_click(cx, cy)`` (trusted CDP mouse events).
+    Returns ``True`` on success, ``False`` if the element is absent,
+    hidden (zero-size rect), or the click raised.
     """
     try:
-        el = await tab.query_selector(selector)
-        if el is None:
-            return False
-        await el.scroll_into_view()
-        await tab.sleep(0.5)
-        result = await el.apply(
-            "(el) => { const r = el.getBoundingClientRect();"
+        js = (
+            "(() => {"
+            "const el = document.querySelector(" + json.dumps(selector) + ");"
+            "if (!el) return null;"
+            "el.scrollIntoView({block: 'center'});"
+            "const r = el.getBoundingClientRect();"
             "if (r.width === 0 || r.height === 0) return null;"
-            "return [r.left + r.width/2, r.top + r.height/2]; }"
+            "return [r.left + r.width/2, r.top + r.height/2];"
+            "})()"
         )
+        result = await tab.evaluate(js)
         if result is None:
             return False
         cx, cy = result

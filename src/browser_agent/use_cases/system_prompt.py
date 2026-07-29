@@ -319,9 +319,10 @@ Script rules (HARD — every script you emit MUST follow these):
          #   (sync or async). "" on any miss.
 
      async def trusted_click(tab, selector: str) -> bool
-         # Trusted CDP mouse click at the element's on-screen center
-         #   (el.apply on the found handle — no DOM re-query; uses
-         #   tab.mouse_click, not el.click). True on success, False if
+         # Trusted CDP mouse click at the element's on-screen center.
+         #   Finds, scrolls, and reads the rect in a SINGLE evaluate
+         #   call (no stale handle, no DOM re-query race). Uses
+         #   tab.mouse_click, not el.click. True on success, False if
          #   absent, hidden (zero-size rect), or raised.
 
       async def start_browser(headless=None, user_data_dir=None) -> Browser
@@ -418,11 +419,13 @@ Script rules (HARD — every script you emit MUST follow these):
       if not await trusted_click(tab, selector):
           # element absent — handle (break / retry / treat as last page)
 
-   The helper scrolls the element into view, computes its center via
-   ``el.apply`` on the same handle (no DOM re-query), and fires
-   ``tab.mouse_click(cx, cy)``. It returns ``True`` on success,
-   ``False`` if the element is absent, hidden (zero-size rect), or the
-   click raised. Do NOT redefine it and do NOT inline a copy.
+   The helper finds the element, scrolls it into view, and reads its
+   on-screen center — all in a SINGLE ``tab.evaluate`` call so the
+   element cannot go stale between the find and the coordinate read.
+   It then fires ``tab.mouse_click(cx, cy)``. It returns ``True`` on
+   success, ``False`` if the element is absent, hidden (zero-size
+   rect), or the click raised. Do NOT redefine it and do NOT inline a
+   copy.
 
    Decide which loop to emit from exploration evidence: scrollHeight
    grows on scroll -> scroll loop; a load-more control exists -> click
