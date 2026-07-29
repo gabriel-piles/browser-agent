@@ -54,6 +54,7 @@ Object.defineProperty(window, 'outerHeight', {get: () => window.innerHeight});
 _EMITTED_HEADLESS = os.environ.get("ZENDRIVER_HEADLESS", "false").lower() in {"1", "true", "yes"}
 _CHROMIUM_BIN = "/usr/bin/chromium"
 _REAL_CHROMIUM_PROFILE = Path.home() / ".config" / "chromium"
+_CHROMIUM_NO_SANDBOX = os.environ.get("CHROMIUM_NO_SANDBOX", "").lower() in {"1", "true", "yes"} or os.geteuid() == 0
 
 # Bounded wait for Chromium's --remote-debugging-port to accept connections.
 _STARTUP_TIMEOUT_S = 10.0
@@ -178,6 +179,8 @@ def _build_chromium_args(port, profile, headless):
         f"--remote-debugging-port={port}",
         f"--user-data-dir={profile}",
     ]
+    if _CHROMIUM_NO_SANDBOX:
+        args.append("--no-sandbox")
     if headless:
         args.append("--headless=new")
     if NOPECHA_EXTENSION_DIR:

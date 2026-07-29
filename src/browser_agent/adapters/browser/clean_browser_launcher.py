@@ -29,6 +29,8 @@ from pathlib import Path
 import zendriver as zd
 from loguru import logger
 
+from browser_agent.configuration import CHROMIUM_NO_SANDBOX
+
 # ---------------------------------------------------------------------------
 # Stealth JS injected on every document (same as ZendriverBrowserSession).
 # ---------------------------------------------------------------------------
@@ -94,6 +96,8 @@ def launch_chromium(
         f"--remote-debugging-port={port}",
         f"--user-data-dir={user_data_dir}",
     ]
+    if CHROMIUM_NO_SANDBOX:
+        args.append("--no-sandbox")
     if headless:
         args.append("--headless=new")
     if user_agent:

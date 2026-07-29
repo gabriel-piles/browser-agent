@@ -165,7 +165,9 @@ async def _scroll_to_bottom(tab):
         height = int(height) if height is not None else 0
         if height != prev_height and prev_height > 0:
             grew = True
-        at_bottom = await tab.evaluate("document.body ? (window.innerHeight + window.scrollY) >= document.body.scrollHeight - 2 : true")
+        at_bottom = await tab.evaluate(
+            "document.body ? (window.innerHeight + window.scrollY) >= document.body.scrollHeight - 2 : true"
+        )
         if height == prev_height:
             stable += 1
         else:
@@ -287,7 +289,9 @@ async def _capture_virtualized_html(tab, card_selector):
         await tab.evaluate(_SNAPSHOT_JS)
         height = await tab.evaluate("document.body ? document.body.scrollHeight : 0")
         height = int(height) if height is not None else 0
-        at_bottom = await tab.evaluate("document.body ? (window.innerHeight + window.scrollY) >= document.body.scrollHeight - 2 : true")
+        at_bottom = await tab.evaluate(
+            "document.body ? (window.innerHeight + window.scrollY) >= document.body.scrollHeight - 2 : true"
+        )
         if height == prev_height:
             stable += 1
         else:

@@ -112,3 +112,7 @@ ANCHOR_STABILITY_REQUIRED_STABLE_POLLS = 2
 # Browser lifecycle timeouts to prevent zendriver from hanging
 BROWSER_TAB_OPEN_TIMEOUT_SECONDS = 45.0
 BROWSER_TAB_LOAD_TIMEOUT_SECONDS = 20.0
+
+# Chromium's setuid sandbox fails when running as root (e.g. in containers).
+# Auto-enable --no-sandbox when uid is 0; override with CHROMIUM_NO_SANDBOX env.
+CHROMIUM_NO_SANDBOX = os.environ.get("CHROMIUM_NO_SANDBOX", "").lower() in {"1", "true", "yes"} or os.geteuid() == 0
