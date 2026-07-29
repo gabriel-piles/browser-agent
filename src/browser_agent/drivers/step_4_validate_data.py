@@ -27,6 +27,8 @@ import asyncio
 import json
 import sqlite3
 
+from loguru import logger
+
 from browser_agent.adapters.llm.ollama_adapter import OllamaAdapter
 from browser_agent.drivers.matching.default_value_validator import DefaultValueValidator
 from browser_agent.drivers.classification.existing_entities_fetcher import ExistingEntitiesFetcher
