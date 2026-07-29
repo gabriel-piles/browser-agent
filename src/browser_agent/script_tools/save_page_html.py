@@ -161,11 +161,11 @@ async def _scroll_to_bottom(tab):
     grew = False
     max_iters = 200
     for _ in range(max_iters):
-        height = await tab.evaluate("document.body.scrollHeight")
+        height = await tab.evaluate("document.body ? document.body.scrollHeight : 0")
         height = int(height) if height is not None else 0
         if height != prev_height and prev_height > 0:
             grew = True
-        at_bottom = await tab.evaluate("(window.innerHeight + window.scrollY) >= document.body.scrollHeight - 2")
+        at_bottom = await tab.evaluate("document.body ? (window.innerHeight + window.scrollY) >= document.body.scrollHeight - 2 : true")
         if height == prev_height:
             stable += 1
         else:
@@ -285,9 +285,9 @@ async def _capture_virtualized_html(tab, card_selector):
     for _ in range(max_iters):
         await _strip_reveal_styles(tab)
         await tab.evaluate(_SNAPSHOT_JS)
-        height = await tab.evaluate("document.body.scrollHeight")
+        height = await tab.evaluate("document.body ? document.body.scrollHeight : 0")
         height = int(height) if height is not None else 0
-        at_bottom = await tab.evaluate("(window.innerHeight + window.scrollY) >= document.body.scrollHeight - 2")
+        at_bottom = await tab.evaluate("document.body ? (window.innerHeight + window.scrollY) >= document.body.scrollHeight - 2 : true")
         if height == prev_height:
             stable += 1
         else:
