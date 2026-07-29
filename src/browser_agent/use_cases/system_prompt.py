@@ -290,6 +290,13 @@ Script rules (HARD — every script you emit MUST follow these):
          #   content is in the DOM. card_selector: CSS for repeating
          #   card in VIRTUALIZED lists (react-window) that unmount
          #   off-screen nodes — snapshots each viewport and consolidates.
+         # CRITICAL: scrolls the page AND mutates the DOM (strips reveal
+         #   styles on ALL elements, removes #pdf-container/.pdf-viewer).
+         #   On SPA sites (vLex, Aurelia, React) this DOM mutation can
+         #   trigger framework re-renders that REMOVE interactive elements
+         #   (download dropdowns, action buttons, metadata tables). You
+         #   MUST extract ALL data (PDF links, metadata, titles) from the
+         #   page BEFORE calling save_page_html — never after.
 
       async def download_pdf_curl_cffi(url, save_path, tab=None) -> dict
           # Returns {"size": int, "skipped": bool, "reason": str, "saved_path": str}.
@@ -883,10 +890,11 @@ Script rules (HARD — every script you emit MUST follow these):
 14. HTML capture (supporting file) — when the task downloads PDFs, you
     MUST also save the HTML of the page where each PDF was found as a
     supporting file. Call ``save_page_html(tab, out_dir, source_url)``
-    on the current page right before or after downloading each PDF. The
-    helper uses the REAL browser tab (``tab.get_content()``) — NEVER an
-    HTTP client — so the HTML matches the exact state from which the PDF
-    was downloaded (same Cloudflare / WAF clearance). Store the result's
+    on the current page AFTER extracting all data (PDF links, metadata,
+    titles) but BEFORE or AFTER downloading each PDF. The helper uses
+    the REAL browser tab (``tab.get_content()``) — NEVER an HTTP client
+    — so the HTML matches the exact state from which the PDF was
+    downloaded (same Cloudflare / WAF clearance). Store the result's
     ``saved_path`` basename in the ``data`` dict as ``html_filename``
     alongside ``pdf_filename`` (see the save_record example in rule 13).
     Also store the URL of the page whose HTML was saved (the
@@ -896,6 +904,40 @@ Script rules (HARD — every script you emit MUST follow these):
     SOURCE PAGE URL — never the PDF download URL (``pdf_url``).
     Omit ``source_page_url`` when no HTML was captured for a row
     (same omission rule as ``html_filename``).
+
+    CRITICAL ORDERING — save_page_html scrolls the page top-to-bottom
+    AND mutates the DOM (strips inline styles on ALL elements, removes
+    #pdf-container/.pdf-viewer). On SPA sites (vLex, Aurelia, React)
+    this DOM mutation triggers framework re-renders that can REMOVE
+    interactive elements (download dropdowns, action buttons, metadata
+    tables). You MUST extract ALL data (PDF links, metadata, titles)
+    from the page BEFORE calling save_page_html. The correct order per
+    page is::
+
+        # 1. Navigate + wait
+        await tab.get(page_url)
+        await wait_for_page_ready(tab)
+        await tab.sleep(2)
+        # 2. Extract ALL data FIRST (while DOM is in initial state)
+        pdf_links = await tab.evaluate("...")
+        metadata = await tab.evaluate("...")
+        # 3. Save HTML LAST (scrolling/mutation won't affect already-
+        #    extracted data; the saved HTML is a supporting file)
+        html_result = await save_page_html(tab, out_dir, page_url)
+        # 4. Download PDFs (can use the extracted links safely)
+
+    NEVER call save_page_html before extracting PDF links or metadata.
+    This is the #1 cause of scripts that save HTML but download zero
+    PDFs: the HTML capture's DOM mutation destroys the download links
+    before the script reads them.
+
+    HIDDEN ELEMENTS — document.querySelectorAll finds elements
+    regardless of CSS visibility (display:none, visibility:hidden,
+    opacity:0). You do NOT need to click a dropdown toggle to "open"
+    it before extracting links from inside it. If the links are in the
+    DOM (verified during exploration), query them directly. Clicking
+    #formats or similar dropdown toggles with untrusted element.click()
+    is both unnecessary and unreliable on vLex (rule 2).
 
     Default: save the HTML of the page the scraper is on when it
     downloads the PDF. Pass that page's URL as ``source_url`` so the
