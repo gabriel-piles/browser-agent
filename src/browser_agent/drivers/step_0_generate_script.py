@@ -36,6 +36,9 @@ from browser_agent.drivers.generation.script_smoke_tester import (
     log_smoke_test_result,
     smoke_test_script,
 )
+from browser_agent.drivers.generation.link_discovery_verification_runner import (
+    LinkDiscoveryVerificationRunner,
+)
 from browser_agent.drivers.generation.task_reader import TaskReader
 from browser_agent.logging_config import configure_logging
 from browser_agent.use_cases.emitted_script_linter import EmittedScriptLinter
@@ -159,6 +162,7 @@ class GenerateScriptDriver:
         if smoke_result.success:
             await self._generator.close(use_case)
             self._cleanup_emit_artifacts(emit_results)
+            await _run_link_discovery_verification(task, script, run_path)
             return 0
         script = await self._smoke_repair_loop(use_case, script, smoke_result)
         logger.info("re-emitting script after smoke-test repair")
@@ -169,6 +173,7 @@ class GenerateScriptDriver:
         self._cleanup_emit_artifacts(emit_results)
         if smoke_result.success:
             logger.warning("smoke-test recovery: attempt 1 FAILED → repair → attempt 2 PASSED — script is good")
+            await _run_link_discovery_verification(task, script, run_path)
             return 0
         return EXIT_SMOKE_FAILED
 
@@ -317,6 +322,12 @@ _ZD_RUNTIME_ERROR_PATTERNS: list[tuple[str, str, str]] = [
 def _smoke_payload(result: SmokeTestResult) -> dict[str, object]:
     """Convert a :class:`SmokeTestResult` to a JSON-serializable dict."""
     return {"success": result.success, "timed_out": result.timed_out, "output": result.output}
+
+
+async def _run_link_discovery_verification(task: str, script: GeneratedScript, run_path: Path) -> None:
+    """Best-effort: generate + emit a script that verifies link DISCOVERY is complete."""
+    logger.info("running link-discovery-verification step")
+    await LinkDiscoveryVerificationRunner().run(task, script.python_code, run_path)
 
 
 def main() -> None:
