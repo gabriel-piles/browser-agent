@@ -102,10 +102,18 @@ step. Do NOT jump to writing a script before you have explored the page.
   different selector or ``wait`` then extract again. You MUST verify
   that clicking a filter changes the page state.
 
-  Step 5 — SCROLL (if the task involves scrolling). ``explore_page(
-  action="scroll")`` (no scroll_pixels = scroll to bottom). Check
-  ``scroll_height``, scroll AGAIN and compare. If it grew, content
-  loads dynamically on scroll; if "scroll height unchanged", stop.
+  Step 5 — SCROLL (if the task involves scrolling). Call ``explore_page(
+  action="scroll")`` (no scroll_pixels = scroll to bottom) in a loop
+  until "scroll height unchanged". Each call scrolls to bottom, waits
+  3s for lazy content, and reports the new height. If height grew, call
+  scroll again — repeat until stable. If it grew on the first scroll
+  but "scroll height unchanged" on the second, content loads dynamically
+  on scroll but all content has been loaded; extract and verify the link
+  count. IMPORTANT: the explore scroll is a single-shot (one scroll +
+  settle), so the LLM must loop it via repeated tool calls, NOT rely on
+  the tool doing the loop. If after 3+ consecutive "scroll height
+  unchanged" calls the extracted link count is zero, the page may use
+  click-to-load-more — see Step 6.
 
   Step 6 — EXTRACT AFTER INTERACTION. Re-extract with your link
   selector; compare ``extracted_count`` with Step 3. When you need the
@@ -130,7 +138,9 @@ step. Do NOT jump to writing a script before you have explored the page.
       print COUNTS and a few sample hrefs.
     - If filters apply, click ONE option and print the new counts/URL/
       height so the change is visible in output.
-    - If scrolling applies, scroll once and print height before/after.
+    - If scrolling applies, run the full scroll loop (rule 2) and print
+      the target-link count at each iteration (e.g. 10 -> 20 -> 30).
+      Print final count and confirm it exceeds the first-scroll count.
     - LOAD-MORE / INFINITE-SCROLL PROOF — when the task requires
       scrolling or clicking to load more, the validation run MUST
       trigger it at least TWICE and print the target-link count after
@@ -270,35 +280,73 @@ positional args or a bare arrow function, and ``el.text_content(``
           asyncio.run(main())
 
 2. Dynamic loading — when the task implies pagination, infinite scroll,
-   or "load more", hand-code the loop. Track the document height with
-   ``prev = await tab.evaluate('document.body.scrollHeight')`` and
-   scroll until it stops growing::
+   or "load more", hand-code the loop. Use a robust stable-count scroll
+   loop with ``document.body.scrollHeight``. The loop must require 3
+   CONSECUTIVE no-growth readings before stopping — a single flat read
+   can catch lazy content mid-flight, which causes the script to stop
+   prematurely::
 
        prev = 0
+       stable = 0
        while True:
            height = await tab.evaluate('document.body.scrollHeight')
            if height == prev:
+               stable += 1
+           else:
+               stable = 0
+           if stable >= 3:
                break
            await tab.evaluate('window.scrollTo(0, document.body.scrollHeight)')
-           await tab.sleep(1.0)
+           await tab.sleep(1.5)
            prev = height
 
+   After the loop ends, call ``wait_for_anchors(tab, "<your-link-selector>")``
+   with a short timeout to verify the lazy-loaded elements are actually in
+   the DOM before you extract them. A scroll loop that finishes but leaves
+   zero matching links is a strong signal the page needs more settle time
+   or a click-to-load-more trigger instead.
+
    Never guess a fixed number of scrolls.
+
+   LINK-COUNT TRACKING (scroll) — for pages where content loads without
+   changing scrollHeight (fixed-height containers, in-place swap), track
+   the count of TARGET links through the loop instead of height::
+
+       prev = 0
+       stable = 0
+       while True:
+           links = await tab.query_selector_all("<your-link-selector>")
+           count = len(links)
+           if count == prev:
+               stable += 1
+           else:
+               stable = 0
+           if stable >= 3 and count > 0:
+               break
+           prev = count
+           await tab.evaluate('window.scrollTo(0, document.body.scrollHeight)')
+           await tab.sleep(1.5)
+
+   Decide which variant to emit from exploration: scrollHeight grows on
+   scroll -> height-based loop; height stays flat but new links appear ->
+   link-count loop; a load-more control exists -> click loop (below).
+
    CLICK-TO-LOAD-MORE — when results paginate via a control instead of
    by scroll, the loop MUST track the count of TARGET links (not
    scrollHeight) and trigger the control with ``trusted_click`` (rule
    0), keeping a 3-consecutive-no-growth termination. Never use bare
    ``window.scrollBy`` as the trigger when a load-more control exists.
-   Decide which loop to emit from exploration: scrollHeight grows on
-   scroll -> scroll loop; a load-more control exists -> click loop.
 
 3. Anti-race — after every ``tab.fill``/``tab.click``/``tab.select`` or
    scroll, insert ``await tab.sleep(0.5)`` (or longer for AJAX-heavy
    pages) so the DOM settles. A failed selector right after a click is
    almost always a missing sleep. Before reading elements populated by
-   a filter/XHR, call ``await wait_for_anchors(tab, "<selector>")`` and
-   use the returned ``(count, sample)`` instead of guessing a sleep was
-   long enough. This is the biggest cause of scripts that "do nothing".
+   a filter/XHR/scroll, call ``await wait_for_anchors(tab, "<selector>")``
+   and use the returned ``(count, sample)`` instead of guessing a sleep
+   was long enough. This is the biggest cause of scripts that "do nothing".
+   The scroll loop in rule 2 already uses 1.5s per iteration; add a
+   final ``wait_for_anchors`` call after the loop exits to confirm lazy
+   elements are present before extracting.
 
 4. Safe parsing — extract defensively. ``await tab.query_selector_all``
    and check non-empty. Wrap attribute reads in try/except, default "".
@@ -368,6 +416,10 @@ positional args or a bare arrow function, and ``el.text_content(``
    out_dir, tab)`` when the probe succeeded, ``download_pdf_browser(tab,
    url, out_dir)`` when it failed (WAF). Pass ``tab`` so cookies are
    shared. A ``curl_cffi`` -> ``browser_fetch`` fallback is supported.
+   Both helpers already throttle requests and detect Cloudflare
+   rate-limiting (consecutive HTTP 403s), aborting the run with a resume
+   message — do NOT add your own backoff, block-detection, or abort logic
+   around them; just call the helper per PDF inside try/except.
    ``save_path`` is the downloads DIRECTORY; the helper derives the
    filename. NEVER use ``tab.get`` to download a PDF (it renders a
    viewer page, not a download). See the helper docstrings for the

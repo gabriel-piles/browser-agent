@@ -176,7 +176,7 @@ async def _scroll_to_bottom(tab):
             break
         prev_height = height
         await tab.evaluate("window.scrollBy(0, window.innerHeight)")
-        await tab.sleep(0.6)
+        await tab.sleep(1.0)
     return grew
 
 
@@ -300,7 +300,7 @@ async def _capture_virtualized_html(tab, card_selector):
             break
         prev_height = height
         await tab.evaluate("window.scrollBy(0, window.innerHeight)")
-        await tab.sleep(0.6)
+        await tab.sleep(1.0)
     await _strip_reveal_styles(tab)
     await tab.evaluate(_SNAPSHOT_JS)
     count = await tab.evaluate("(window.__htmlCaptures || []).length")

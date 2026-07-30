@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import random
 from pathlib import Path
 
 from script_tools._file_utils import (
@@ -24,6 +25,48 @@ from script_tools._file_utils import (
 _PDF_DOWNLOAD_TIMEOUT_S = 90.0
 _PDF_DOWNLOAD_RETRIES = 3
 _PDF_DOWNLOAD_RETRY_DELAY_S = 1.5
+
+_BLOCK_STREAK_LIMIT = 5
+_DOWNLOAD_DELAY_MIN_S = 1.0
+_DOWNLOAD_DELAY_MAX_S = 3.0
+_BLOCK_MESSAGE = (
+    "Cloudflare is blocking PDF downloads: {n} consecutive downloads failed "
+    "with HTTP 403. The site is rate-limiting this IP/session, not rejecting "
+    "these URLs. Wait ~15 minutes and re-run the same script — downloads are "
+    "idempotent and already-saved PDFs are skipped, so the run resumes where "
+    "it stopped."
+)
+
+_consecutive_403 = 0
+
+
+def _is_http_403(exc):
+    """True when ``exc``'s message carries an HTTP 403 status."""
+    return "HTTP 403" in str(exc)
+
+
+def _track_download_outcome(exc):
+    """Track consecutive 403 failures across download calls.
+
+    ``exc=None`` (success) resets the streak; an HTTP 403 RuntimeError
+    increments it; any other error leaves it unchanged. Raises
+    ``SystemExit`` with a resume hint once the streak hits
+    ``_BLOCK_STREAK_LIMIT`` — SystemExit, not RuntimeError, because
+    generated scripts wrap each download in ``except Exception`` and
+    would otherwise keep grinding through the catalog while blocked.
+    SystemExit still runs ``finally: browser.stop()`` and, since step 1
+    executes scripts as a subprocess with stderr merged into streamed
+    stdout, the message reaches the operator live with exit code 1.
+    """
+    global _consecutive_403
+    if exc is None:
+        _consecutive_403 = 0
+        return
+    if not _is_http_403(exc):
+        return
+    _consecutive_403 += 1
+    if _consecutive_403 >= _BLOCK_STREAK_LIMIT:
+        raise SystemExit(_BLOCK_MESSAGE.format(n=_consecutive_403))
 
 
 async def download_pdf_curl_cffi(url, save_path, tab=None):
@@ -55,6 +98,9 @@ async def download_pdf_curl_cffi(url, save_path, tab=None):
     Retries transient failures (network error, HTTP >= 400, empty
     body) up to ``_PDF_DOWNLOAD_RETRIES`` times with linear backoff
     before raising ``RuntimeError`` on final failure.
+
+    Raises ``SystemExit`` when 5 consecutive downloads are blocked with
+    HTTP 403 (Cloudflare rate-limit); re-running resumes via skip-existing.
     """
     from curl_cffi import AsyncSession
 
@@ -67,6 +113,8 @@ async def download_pdf_curl_cffi(url, save_path, tab=None):
     existing = _existing_size(save_path)
     if existing > 0:
         return {"size": existing, "skipped": True, "reason": "already_downloaded", "saved_path": str(save_path)}
+
+    await asyncio.sleep(random.uniform(_DOWNLOAD_DELAY_MIN_S, _DOWNLOAD_DELAY_MAX_S))
 
     cookies = {}
     if tab is not None:
@@ -101,7 +149,9 @@ async def download_pdf_curl_cffi(url, save_path, tab=None):
             continue
         _write_atomic(save_path, body)
         _assert_pdf_magic(save_path, body, url)
+        _track_download_outcome(None)
         return {"size": len(body), "skipped": False, "reason": "downloaded", "saved_path": str(save_path)}
+    _track_download_outcome(last_exc)
     raise last_exc
 
 
@@ -279,6 +329,9 @@ async def download_pdf_browser(tab, url, save_path):
         save_record(..., {"pdf_filename": Path(result["saved_path"]).name, ...})
 
     Raises ``RuntimeError`` if all three strategies fail.
+
+    Raises ``SystemExit`` when 5 consecutive downloads are blocked with
+    HTTP 403 (Cloudflare rate-limit); re-running resumes via skip-existing.
     """
     if url.startswith("http://"):
         url = "https://" + url[7:]
@@ -290,8 +343,16 @@ async def download_pdf_browser(tab, url, save_path):
     existing = _existing_size(save_path)
     if existing > 0:
         return {"size": existing, "skipped": True, "reason": "already_downloaded", "saved_path": str(save_path)}
+
+    await asyncio.sleep(random.uniform(_DOWNLOAD_DELAY_MIN_S, _DOWNLOAD_DELAY_MAX_S))
+
     try:
-        return await _try_browser_fetch(tab, url, save_path)
-    except RuntimeError:
-        pass
-    return await _try_curl_cffi(url, save_path)
+        try:
+            result = await _try_browser_fetch(tab, url, save_path)
+        except RuntimeError:
+            result = await _try_curl_cffi(url, save_path)
+    except RuntimeError as exc:
+        _track_download_outcome(exc)
+        raise
+    _track_download_outcome(None)
+    return result
