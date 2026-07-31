@@ -1,9 +1,9 @@
 """Push a built :class:`SyncPlan` to Uwazi (entity creation + file uploads).
 
 The pure data transform lives in :mod:`sync_plan_builder`; this module
-owns the side-effecting half: creating entities, attaching the primary
-PDF and the supporting HTML, and recording the per-row outcome in an
-:class:`ApplyResult`.
+owns the side-effecting half: creating each entity with its primary PDF
+and supporting HTML in one upload call, and recording the per-row
+outcome in an :class:`ApplyResult`.
 """
 
 from __future__ import annotations
@@ -88,37 +88,31 @@ class UwaziPusher:
     def _create_entity(self, client: UwaziClient, row, mapping: UwaziMapping) -> str:
         """Create a fresh Uwazi entity for one CREATE row, return the new shared id."""
         entity = Entity(template=mapping.template, title=row.title, published=mapping.publish, metadata=row.metadata)
-        shared_id = client.entities.upload(entity=entity, language=row.language)
+        files = self._build_entity_files(row, mapping)
+        return client.entities.upload(entity=entity, language=row.language, files=files or None)
+
+    def _build_entity_files(self, row, mapping: UwaziMapping) -> list[EntityFileUpload]:
+        """Build the primary + supporting file uploads for one entity."""
+        from uwazi_api.domain.entity_file_upload import EntityFileUpload
+        from uwazi_api.domain.file_fieldname import FileFieldname
+        from uwazi_api.domain.FileType import FileType
+
+        files: list[EntityFileUpload] = []
         if mapping.upload_pdf and row.pdf_path:
-            self._upload_primary_file(client, shared_id, row.pdf_path, row.language, row.title)
+            files.append(self._file_upload(FileFieldname.FILE, f"{row.title}.pdf", FileType.PDF, row.pdf_path))
         if mapping.upload_pdf and row.html_path:
-            self._upload_supporting_html(client, shared_id, row.html_path, row.language, row.title)
-        return shared_id
+            files.append(self._file_upload(FileFieldname.ATTACHMENT, f"{row.title}.html", FileType.HTML, row.html_path))
+        return files
 
-    def _upload_primary_file(self, client, shared_id: str, pdf_path: str, language: str, title: str) -> None:
-        """Attach ``pdf_path`` as the primary document of the entity."""
-        from uwazi_api.domain.FileType import FileType
+    def _file_upload(self, fieldname, filename: str, file_type, path: str) -> EntityFileUpload:
+        """Read ``path`` and wrap it as one :class:`EntityFileUpload` for the entity call."""
+        from uwazi_api.domain.entity_file_upload import EntityFileUpload
 
-        payload = Path(pdf_path).read_bytes()
-        client.files.upload_document_from_bytes(
-            file_bytes=payload,
-            share_id=shared_id,
-            language=language,
-            title=f"{title}.pdf"[:_UPLOAD_TITLE_MAX_LENGTH],
-            file_type=FileType.PDF,
-        )
-
-    def _upload_supporting_html(self, client, shared_id: str, html_path: str, language: str, title: str) -> None:
-        """Attach ``html_path`` as a supporting file (attachment) of the entity."""
-        from uwazi_api.domain.FileType import FileType
-
-        payload = Path(html_path).read_bytes()
-        client.files.upload_file_from_bytes(
-            file_bytes=payload,
-            share_id=shared_id,
-            language=language,
-            title=f"{title}.html"[:_UPLOAD_TITLE_MAX_LENGTH],
-            file_type=str(FileType.HTML),
+        return EntityFileUpload(
+            fieldname=fieldname,
+            filename=filename[:_UPLOAD_TITLE_MAX_LENGTH],
+            content=Path(path).read_bytes(),
+            content_type=file_type,
         )
 
     @staticmethod

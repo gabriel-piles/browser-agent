@@ -170,7 +170,7 @@ requires-dist = [
     { name = "pydantic-ai", specifier = ">=2.8.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "uwazi-api", git = "https://github.com/huridocs/python_uwazi_API?rev=2026.7.24.1" },
+    { name = "uwazi-api", git = "https://github.com/huridocs/python_uwazi_API?rev=2026.7.31.2" },
     { name = "zendriver", specifier = ">=0.15.5" },
 ]
 
@@ -2167,8 +2167,8 @@ wheels = [
 
 [[package]]
 name = "uwazi-api"
-version = "2026.7.24.1.post0"
-source = { git = "https://github.com/huridocs/python_uwazi_API?rev=2026.7.24.1#a7d8971b6277c89ea1f2b9db2429a081cde0712d" }
+version = "2026.7.31.2.post0"
+source = { git = "https://github.com/huridocs/python_uwazi_API?rev=2026.7.31.2#ddb770b634d02b2a75d9036b434bafc344f830a2" }
 dependencies = [
     { name = "pandas" },
     { name = "pydantic" },

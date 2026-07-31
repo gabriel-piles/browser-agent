@@ -13,8 +13,8 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 # LLM connection — consumed by ``adapters/llm/ollama_adapter.py``.
 OLLAMA_BASE_URL = "https://ollama.com/v1"
-ORCHESTRATOR_MODEL = "deepseek-v4-pro:cloud"
-VERIFICATION_MODEL = "minimax-m3:cloud"
+ORCHESTRATOR_MODEL = "deepseek-v4-flash:cloud"
+VERIFICATION_MODEL = "deepseek-v4-flash:cloud"
 VERIFICATION_PDF_COUNT = 10
 VERIFICATION_SCRIPT_RUN_LIMIT = 15
 VERIFICATION_QUERY_LIMIT = 10

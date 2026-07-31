@@ -24,7 +24,7 @@ from browser_agent.configuration import UWAZI_URL, UWAZI_USER, UWAZI_PASSWORD
 DELETE_ENTITIES: bool = True
 
 # Template whose entities get wiped. Other templates stay untouched.
-WIPE_TEMPLATE: str = "Document"
+WIPE_TEMPLATE: str = "DOCUMENT"
 
 # Page size for both the search and the bulk-delete batches.
 WIPE_PAGE_SIZE: int = 200
@@ -64,7 +64,7 @@ def _delete_in_batches(client: UwaziClient, shared_ids: list[str], page_size: in
     for i in range(0, len(shared_ids), page_size):
         batch = shared_ids[i : i + page_size]
         client.entities.delete_entities(batch)
-        print(f"  deleted {len(batch)} ({i + len(batch)}/{len(shared_ids)})")
+        print(f"  deleted {len(batch)} ({i + len(batch)}/{len(shared_ids)})", flush=True)
 
 
 def _delete_all_entities(client: UwaziClient) -> None:
@@ -73,7 +73,9 @@ def _delete_all_entities(client: UwaziClient) -> None:
     if not shared_ids:
         print(f"No entities on template {WIPE_TEMPLATE!r}.")
         return
-    print(f"About to delete {len(shared_ids)} entities (template={WIPE_TEMPLATE!r}).")
+    print(f"About to delete {len(shared_ids)} entities")
+    print(f"instance={UWAZI_URL!r}")
+    print(f"template={WIPE_TEMPLATE!r}")
     confirm = input("Type 'y' to confirm, anything else aborts: ").strip().lower()
     if confirm != "y":
         print("Aborted; no entities were deleted.")
