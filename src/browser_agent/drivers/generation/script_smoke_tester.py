@@ -45,59 +45,13 @@ from pathlib import Path
 
 from loguru import logger
 
+from browser_agent.use_cases.zendriver_error_patterns import ZD_RUNTIME_ERROR_PATTERNS
+
 # Short window: we only want to catch *immediate* failures (syntax
 # errors, import errors, crashes in the first navigation phase). A
 # real scrape takes minutes; we don't wait for that. If the script is
 # still running at the timeout, it passed the smoke test.
 SMOKE_TEST_TIMEOUT_S = 60.0
-
-_ZD_RUNTIME_ERROR_PATTERNS: list[tuple[str, str, str]] = [
-    (
-        "tab.evaluate",
-        "evaluate() missing 1 required positional argument",
-        "tab.evaluate — called without expression argument",
-    ),
-    (
-        "TypeError: object NoneType can't be used in 'await' expression",
-        "save_record sync",
-        "save_record — awaited synchronous helper",
-    ),
-    (
-        "AttributeError: module 'zendriver' has no attribute 'start'",
-        "zd.start not found",
-        "zendriver.start — no such function",
-    ),
-    ("TypeError: 'NoneType' object is not callable", "NoneType called", "zendriver object was None — wrong browser startup"),
-    (
-        "TimeoutError: wait_for_anchors timed out after",
-        "wait_for_anchors timeout",
-        "wait_for_anchors — zero matches or wrong selector",
-    ),
-    (
-        "ModuleNotFoundError: No module named 'playwright'",
-        "playwright import",
-        "agent imports playwright instead of zendriver CDP",
-    ),
-    ("KeyError: 'file_size'", "file_size key", "result dict has no file_size key; use 'size'"),
-    (
-        "zendriver.core.connection.ProtocolException",
-        "ProtocolException",
-        "zendriver CDP protocol error — bad evaluate() call",
-    ),
-    ("zendriver.core.elements.ElementNotFound", "ElementNotFound", "zendriver element not found — wrong selector"),
-    # Generic Python errors indicating the agent's script is structurally broken
-    ("NameError: name '", "NameError", "undefined variable — agent used wrong API name"),
-    ("SyntaxError: invalid syntax", "SyntaxError", "syntax error — agent emitted malformed Python"),
-    ("ImportError: cannot import name '", "ImportError", "import error — agent imports wrong module/name"),
-    ("ModuleNotFoundError: No module named '", "ModuleNotFoundError", "missing module — agent imports non-existent package"),
-    ("AttributeError: '", "AttributeError", "attribute error — agent called wrong method/property"),
-    ("TypeError: ", "TypeError", "type error — agent passed wrong argument type"),
-    (
-        "asyncio.run() cannot be called from a running event loop",
-        "asyncio.run error",
-        "agent used asyncio.run() inside running loop",
-    ),
-]
 
 
 @dataclass
@@ -230,7 +184,7 @@ def _log_smoke_failure(output: str, attempt: int = 1) -> None:
 def _log_zendriver_errors_in_output(output: str, attempt: int = 1) -> None:
     """Scan ``output`` for patterns indicating zendriver API misuse and log them."""
     found: list[str] = []
-    for pattern, label, description in _ZD_RUNTIME_ERROR_PATTERNS:
+    for pattern, label, description in ZD_RUNTIME_ERROR_PATTERNS:
         if pattern in output:
             found.append(description)
             logger.warning(

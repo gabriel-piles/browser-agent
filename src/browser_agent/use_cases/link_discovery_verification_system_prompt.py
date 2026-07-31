@@ -150,8 +150,13 @@ MANDATORY WORKFLOW:
       - ``start_browser(headless=False)``, ``prepare_page_wait(tab)``,
         navigate with ``tab.get``, ``wait_for_page_ready(tab)``.
       - Iterate EVERY option of the filter ``<select>`` with
-        ``select_filter_value`` (NOT just the first). After each
-        selection, ``await wait_for_anchors(tab, <pdf selector>)`` so
+        ``select_filter_value`` (NOT just the first). Enumerate the
+        options from the LIVE DOM at runtime (read the ``<select>``'s
+        ``<option>`` values with ``tab.evaluate``) — NEVER hardcode
+        filter values or advertised totals discovered during
+        exploration: opaque site-generated IDs go stale and hardcoded
+        targets are site-specific. After each selection,
+        ``await wait_for_anchors(tab, <pdf selector>)`` so
         the new listing is present before extracting.
       - For each option: read the advertised total FIRST, then run the
         ROBUST DISCOVERY LOOP (template above) — scroll + load-more +

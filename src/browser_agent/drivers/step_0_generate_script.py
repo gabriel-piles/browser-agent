@@ -1,7 +1,7 @@
 """Top-level driver class for the Zendriver script generation service.
 
 Reads a task from argv (or the bundled default), wires the
-:class:`OllamaAdapter` and :class:`ZendriverBrowserSession` into
+:class:`OpenCodeZenAdapter` and :class:`ZendriverBrowserSession` into
 an :class:`AgentDeps`, runs the use case, and writes the
 executable source to ``data/runs/<active_run>/scripts/<date>__<slug>.py``
 for the operator to launch. The structured
@@ -46,6 +46,7 @@ from browser_agent.use_cases.generate_zendriver_script_use_case import (
     GenerateZendriverScriptUseCase,
 )
 from browser_agent.use_cases.script_repair_prompt import (
+    format_discovery_repair,
     format_lint_repair,
     format_smoke_repair,
 )
@@ -57,6 +58,10 @@ DEFAULT_PROMPT = "Visit https://quotes.toscrape.com and print every quote on the
 
 _MAX_LINT_REPAIRS = 1
 _MAX_SMOKE_REPAIRS = 1
+# One repair cycle is the chosen bound: verification + repair +
+# re-verification already adds two site re-walks; more cycles multiply
+# runtime on LLM judgement that diminishingly improves.
+_MAX_DISCOVERY_REPAIRS = 1
 
 # Exit codes: 0 success, 1 smoke test could not be fixed, 2 could not run.
 EXIT_SMOKE_FAILED = 1
@@ -89,7 +94,7 @@ def _concurrency_context(run: RunConfig) -> str:
 
 
 class GenerateScriptDriver:
-    """End-to-end driver: task -> LLM agent -> lint -> emit -> smoke test."""
+    """End-to-end driver: task -> LLM agent -> lint -> emit -> smoke test -> discovery verification -> bounded repair."""
 
     def __init__(self) -> None:
         self._task_reader: TaskReader = TaskReader(DEFAULT_PROMPT)
@@ -150,7 +155,7 @@ class GenerateScriptDriver:
         emitter: ScriptEmitter,
         context: str = "",
     ) -> int:
-        """Generate, lint-repair, emit, smoke-repair, return exit code."""
+        """Generate, lint-repair, emit, smoke-repair, verify discovery, bounded repair."""
         script, use_case = await self._generator.generate(task, run_path, context)
         script = await self._lint_repair_loop(use_case, script)
         emit_results: list[EmitResult] = []
@@ -159,23 +164,41 @@ class GenerateScriptDriver:
         logger.info("emitted script at {path}", path=emit_result.script_path)
         await self._log_emit_zendriver_summary(emit_result)
         smoke_result = await self._smoke_test_with_sidecar(emit_result, emitter, attempt=1)
-        if smoke_result.success:
-            await self._generator.close(use_case)
-            self._cleanup_emit_artifacts(emit_results)
-            await _run_link_discovery_verification(task, script, run_path)
-            return 0
-        script = await self._smoke_repair_loop(use_case, script, smoke_result)
-        logger.info("re-emitting script after smoke-test repair")
-        emit_result = emitter.emit(task, script, run_path)
-        emit_results.append(emit_result)
-        smoke_result = await self._smoke_test_with_sidecar(emit_result, emitter, attempt=2)
+        if not smoke_result.success:
+            script = await self._smoke_repair_loop(use_case, script, smoke_result)
+            logger.info("re-emitting script after smoke-test repair")
+            emit_result = emitter.emit(task, script, run_path)
+            emit_results.append(emit_result)
+            smoke_result = await self._smoke_test_with_sidecar(emit_result, emitter, attempt=2)
+            if not smoke_result.success:
+                await self._generator.close(use_case)
+                self._cleanup_emit_artifacts(emit_results)
+                return EXIT_SMOKE_FAILED
         await self._generator.close(use_case)
+        verdict = await _run_link_discovery_verification(task, script, run_path)
+        if verdict.status == "under_collected":
+            logger.warning(
+                "discovery verification: main script UNDER-COLLECTS on {paths} — running repair turn",
+                paths=verdict.under_collected_paths,
+            )
+            script = await self._generator.repair(use_case, format_discovery_repair(verdict.report))
+            script = await self._lint_repair_loop(use_case, script)
+            emit_result = emitter.emit(task, script, run_path)
+            emit_results.append(emit_result)
+            smoke_result = await self._smoke_test_with_sidecar(emit_result, emitter, attempt=3)
+            await self._generator.close(use_case)
+            if smoke_result.success:
+                verdict = await _run_link_discovery_verification(task, script, run_path)
+                if verdict.status == "under_collected":
+                    logger.error(
+                        "discovery verification STILL under-collects after repair on {paths} — "
+                        "script emitted anyway; review the verification report above",
+                        paths=verdict.under_collected_paths,
+                    )
+            else:
+                logger.warning("discovery-repaired script failed the smoke test — keeping it (verification gap was real)")
         self._cleanup_emit_artifacts(emit_results)
-        if smoke_result.success:
-            logger.warning("smoke-test recovery: attempt 1 FAILED → repair → attempt 2 PASSED — script is good")
-            await _run_link_discovery_verification(task, script, run_path)
-            return 0
-        return EXIT_SMOKE_FAILED
+        return 0
 
     @staticmethod
     def _cleanup_emit_artifacts(emit_results: list[EmitResult]) -> None:
@@ -254,80 +277,15 @@ class GenerateScriptDriver:
         return self._task_reader.read(argv, run)
 
 
-# Common zendriver error patterns found in validation/smoke output that
-# indicate the agent does not understand zendriver's API surface.
-_ZD_RUNTIME_ERROR_PATTERNS: list[tuple[str, str, str]] = [
-    # tab.evaluate calling convention
-    (
-        "tab.evaluate",
-        "evaluate() missing 1 required positional argument",
-        "tab.evaluate — called without expression argument",
-    ),
-    (
-        "TypeError: object NoneType can't be used in 'await' expression",
-        "save_record is synchronous",
-        "save_record — awaited synchronous helper (TypeError)",
-    ),
-    (
-        "AttributeError: module 'zendriver' has no attribute 'start'",
-        "zd.start not found",
-        "zendriver.start — no such function in the module",
-    ),
-    (
-        "TypeError: object NoneType can't be used in 'await' expression",
-        "NoneType awaited",
-        "save_record — awaited None (sync helper returns None)",
-    ),
-    (
-        "TypeError: 'NoneType' object is not callable",
-        "NoneType called",
-        "zendriver object was None — likely wrong browser startup",
-    ),
-    (
-        "TimeoutError: wait_for_anchors timed out after",
-        "wait_for_anchors timeout",
-        "wait_for_anchors — zero matches or selector wrong",
-    ),
-    (
-        "ModuleNotFoundError: No module named 'playwright'",
-        "playwright import",
-        "agent imports playwright instead of using zendriver CDP API",
-    ),
-    ("KeyError: 'file_size'", "file_size key", "result dict has no file_size key; use 'size'"),
-    (
-        "zendriver.core.connection.ProtocolException",
-        "ProtocolException",
-        "zendriver CDP protocol error — likely bad evaluate() call",
-    ),
-    (
-        "zendriver.core.elements.ElementNotFound",
-        "ElementNotFound",
-        "zendriver element not found — selector wrong or page not ready",
-    ),
-    # Generic Python errors indicating the agent's script is structurally broken
-    ("NameError: name '", "NameError", "undefined variable — agent used wrong API name"),
-    ("SyntaxError: invalid syntax", "SyntaxError", "syntax error — agent emitted malformed Python"),
-    ("ImportError: cannot import name '", "ImportError", "import error — agent imports wrong module/name"),
-    ("ModuleNotFoundError: No module named '", "ModuleNotFoundError", "missing module — agent imports non-existent package"),
-    ("AttributeError: '", "AttributeError", "attribute error — agent called wrong method/property"),
-    ("TypeError: ", "TypeError", "type error — agent passed wrong argument type"),
-    (
-        "asyncio.run() cannot be called from a running event loop",
-        "asyncio.run error",
-        "agent used asyncio.run() inside running loop",
-    ),
-]
-
-
 def _smoke_payload(result: SmokeTestResult) -> dict[str, object]:
     """Convert a :class:`SmokeTestResult` to a JSON-serializable dict."""
     return {"success": result.success, "timed_out": result.timed_out, "output": result.output}
 
 
-async def _run_link_discovery_verification(task: str, script: GeneratedScript, run_path: Path) -> None:
-    """Best-effort: generate + emit a script that verifies link DISCOVERY is complete."""
+async def _run_link_discovery_verification(task: str, script: GeneratedScript, run_path: Path) -> LinkDiscoveryVerdict:
+    """Best-effort: generate + emit + EXECUTE a script that verifies link DISCOVERY."""
     logger.info("running link-discovery-verification step")
-    await LinkDiscoveryVerificationRunner().run(task, script.python_code, run_path)
+    return await LinkDiscoveryVerificationRunner().run(task, script.python_code, run_path)
 
 
 def main() -> None:

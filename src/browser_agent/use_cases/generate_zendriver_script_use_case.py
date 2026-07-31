@@ -72,6 +72,7 @@ class GenerateZendriverScriptUseCase:
         consume a validation attempt — the attempt budget pays for
         browser work, not for syntax fixes.
         """
+        await self._deps.browser_session.start()
         agent = self._build_agent(self._deps.llm.get_model())
         run = await self._run_agent(agent, feedback, message_history=self._last_messages)
         self._last_messages = list(run.all_messages())

@@ -14,8 +14,13 @@ load_dotenv(PROJECT_ROOT / ".env")
 # LLM connection — consumed by ``adapters/llm/ollama_adapter.py``.
 OLLAMA_BASE_URL = "https://ollama.com/v1"
 ORCHESTRATOR_MODEL = "deepseek-v4-flash:cloud"
+MAX_LLM_CALLS = 70
 VERIFICATION_MODEL = "deepseek-v4-flash:cloud"
 VERIFICATION_PDF_COUNT = 10
+
+# LLM connection — consumed by ``adapters/llm/opencode_zen_adapter.py``.
+OPENCODE_ZEN_BASE_URL = "https://opencode.ai/zen/v1"
+OPENCODE_ZEN_MODEL = "mimo-v2.5-free"
 VERIFICATION_SCRIPT_RUN_LIMIT = 15
 VERIFICATION_QUERY_LIMIT = 10
 
@@ -49,7 +54,7 @@ UWAZI_DEFAULT_LANGUAGE = os.environ.get("UWAZI_DEFAULT_LANGUAGE", "en")
 # Max worker threads for concurrent Uwazi entity push.
 UWAZI_PUSH_MAX_WORKERS = 1
 
-MAX_LLM_CALLS = 50
+
 SNAPSHOT_MAX_CHARS = 50_000
 COMPACT_KEEP_RECENT_VALIDATIONS = 1
 COMPACT_TRUNCATED_PLACEHOLDER = "[trimmed — see latest snapshot]"

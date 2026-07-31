@@ -148,6 +148,10 @@ step. Do NOT jump to writing a script before you have explored the page.
       the first page is a FAILED validation: switch the trigger to a
       trusted click (rule 2) and re-run. NEVER emit a final script
       whose collection loop was never shown to grow beyond page one.
+      When the page advertises a total (filter badge counts such as
+      "Opiniones Consultivas (70)", or a "N results" header), the FINAL
+      printed target-link count MUST equal it; any shortfall is a FAILED
+      validation even if the loop terminated cleanly.
     - PDF NAMES VALIDATION — for EACH row you extract a label from,
       print BOTH the row's authoritative attribute (``title``/
       ``aria-label``) AND the inner element text (rule 4c). Confirm
@@ -327,6 +331,14 @@ positional args or a bare arrow function, and ``el.text_content(``
            await tab.evaluate('window.scrollTo(0, document.body.scrollHeight)')
            await tab.sleep(1.5)
 
+   TASK-MANDATED MECHANISM — when the task text explicitly prescribes
+   HOW more results load (e.g. an "Infinite Scroll Loop" section,
+   "scroll to load all links", or "click the load-more button"), that
+   prescription OVERRIDES the exploration-based decision tree below:
+   emit the mandated mechanism even when another one (e.g. a visible
+   "load more" control) would also work. The decision tree applies only
+   when the task is silent about the mechanism.
+
    Decide which variant to emit from exploration: scrollHeight grows on
    scroll -> height-based loop; height stays flat but new links appear ->
    link-count loop; a load-more control exists -> click loop (below).
@@ -336,6 +348,13 @@ positional args or a bare arrow function, and ``el.text_content(``
    scrollHeight) and trigger the control with ``trusted_click`` (rule
    0), keeping a 3-consecutive-no-growth termination. Never use bare
    ``window.scrollBy`` as the trigger when a load-more control exists.
+   An untrusted trigger — ``tab.evaluate('...btn.click()')`` or bare
+   ``element.click()`` — silently no-ops on SPA frameworks
+   (Aurelia/vLex, React, Angular): the count never grows and the loop
+   stops at page one while looking successful. Exploration clicks via
+   ``explore_page(action='click')`` are TRUSTED CDP clicks, so growth
+   observed in exploration proves nothing about an untrusted click in
+   the emitted script — reproduce it with ``trusted_click`` (rule 0).
 
 3. Anti-race — after every ``tab.fill``/``tab.click``/``tab.select`` or
    scroll, insert ``await tab.sleep(0.5)`` (or longer for AJAX-heavy
@@ -378,6 +397,12 @@ positional args or a bare arrow function, and ``el.text_content(``
     check ``url_changed``), prefer
     ``await tab.get(f"{base}?{param}={value}")`` over driving the
     dropdown at all — it eliminates the re-render race entirely.
+    NEVER hardcode site-specific values discovered during exploration —
+    filter option values, advertised counts, pagination parameters, or
+    URLs. Read them from the live DOM at runtime (e.g. enumerate the
+    ``<select>``'s ``<option>`` values inside the loop); hardcoded
+    values are site-specific and go stale the moment the site
+    regenerates them.
 
 4c. Label-vs-badge — ``get_text`` prefers ``title``/``aria-label`` then
     full subtree ``textContent`` then the first text node. In the

@@ -22,6 +22,15 @@ _SMOKE_HEADER = (
     "is NOT a validation attempt — it does NOT consume one. Fix the "
     "crash below and emit the corrected GeneratedScript.\n\n"
 )
+_DISCOVERY_HEADER = (
+    "An independent verification script re-walked the site and proved your "
+    "emitted script's LINK DISCOVERY is INCOMPLETE: it under-collects target "
+    "links on the paths listed below (e.g. it stops at page one). This is NOT "
+    "a validation attempt — it does NOT consume one. Fix the discovery loop "
+    "(scroll / load-more trigger / dropdown iteration) so it reaches the "
+    "site-advertised totals on every path, keeping the rest of the pipeline "
+    "intact, and emit the corrected GeneratedScript.\n\n"
+)
 
 
 def format_lint_repair(findings: list[LintFinding]) -> str:
@@ -37,3 +46,8 @@ def format_lint_repair(findings: list[LintFinding]) -> str:
 def format_smoke_repair(output: str) -> str:
     """Format a smoke-test failure output as a repair prompt."""
     return f"{_SMOKE_HEADER}```\n{output}\n```\n\nEmit the full corrected GeneratedScript now."
+
+
+def format_discovery_repair(report: str) -> str:
+    """Format a discovery-verification report as a repair prompt."""
+    return f"{_DISCOVERY_HEADER}```\n{report}\n```\n\nEmit the full corrected GeneratedScript now."
