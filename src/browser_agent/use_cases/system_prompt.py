@@ -355,6 +355,13 @@ positional args or a bare arrow function, and ``el.text_content(``
    ``explore_page(action='click')`` are TRUSTED CDP clicks, so growth
    observed in exploration proves nothing about an untrusted click in
    the emitted script — reproduce it with ``trusted_click`` (rule 0).
+   When the site advertises a result total (e.g. a ``.total_entries``
+   counter, an "N resultados" / "Page X of N" pagination label, or a
+   filter-badge count), PARSE that total from the live DOM and let it
+   drive the loop: NEVER terminate on no-growth while
+   ``discovered < advertised`` AND the load-more control still exists —
+   retry the click once first (a covering overlay can intercept the
+   first click).
 
 3. Anti-race — after every ``tab.fill``/``tab.click``/``tab.select`` or
    scroll, insert ``await tab.sleep(0.5)`` (or longer for AJAX-heavy
@@ -527,33 +534,78 @@ positional args or a bare arrow function, and ``el.text_content(``
     For virtualized lists (react-window), pass ``card_selector``. See
     the helper docstring for scroll-by-default, SPA metadata wait, and
     PDF-viewer stripping.
+    Extract via ``tab.evaluate`` into plain Python values BEFORE
+    ``save_page_html`` — holding element handles across ``save_page_html``
+    is FORBIDDEN: its scroll + DOM strip can trigger SPA re-renders that
+    detach the held handles (``DOM.resolveNode`` -32000).
 
 15. Concurrency / multi-tab — ONLY when the task prompt carries a
     ``# Concurrency requirement`` directive of the form
     ``parallel_runners = N``. When ABSENT, keep the single-tab flow from
     rule 1 — do NOT invent concurrency. When present:
-    a) Discovery is single-tab AND collects PDF URLs (not page URLs).
-       Run ALL filter iteration, navigation, scroll, and extraction
-       serially on ``browser.main_tab`` until you have the FULL
-       deduplicated list of DOWNLOAD URLs with metadata. Only then open
-       worker tabs. The unit of work that fans out is ONE DOWNLOAD (one
-       PDF URL + metadata), NOT one page.
+    a) Discovery is single-tab AND collects DOCUMENT page URLs. Run ALL
+       filter iteration, navigation, scroll, and extraction serially on
+       ``browser.main_tab`` until you have the FULL deduplicated list of
+       document page URLs. Only then open worker tabs. The unit of work
+       that fans out is ONE DOCUMENT (navigate + extract metadata +
+       download all its PDFs).
     b) Open worker tabs once, up front, AFTER discovery. Call
        ``prepare_page_wait`` on EVERY worker tab. Keep ``headless=False``
        (rule 6).
-    c) Fan downloads out with a semaphore + gather; each worker task owns
-       ONE tab and downloads ONE PDF (navigate/extract already done in
-       discovery). ``save_record`` is called inside the worker so
-       crash-resilience holds under concurrency.
-    d) Pass each worker its OWN ``tab`` (per-tab isolation); sharing one
-       tab across concurrent tasks serializes them.
-    e) ``save_record`` is concurrency-safe (own short-lived SQLite
+    c) Fan documents out with ONE worker coroutine PER TAB consuming a
+       shared ``asyncio.Queue`` — FORBIDDEN: a global ``asyncio.Semaphore``
+       with ``idx % N`` tab assignment, because semaphore slots release
+       out of order so two tasks share one tab and their concurrent
+       ``tab.get()`` calls invalidate each other's element handles
+       (``DOM.resolveNode`` -32000). Emit this skeleton verbatim (adapt
+       names only)::
+
+           work_queue = asyncio.Queue()
+           for idx, url in enumerate(doc_urls):
+               work_queue.put_nowait((idx, url))
+           results = []
+
+           async def worker(tab_id, wtab):
+               while True:
+                   try:
+                       idx, url = work_queue.get_nowait()
+                   except asyncio.QueueEmpty:
+                       return
+                   print(f"\n--- Doc {idx + 1}/{len(doc_urls)} (tab {tab_id}) ---")
+                   results.append(await process_document(wtab, url, out_dir, tab_id))
+
+           await asyncio.gather(*(worker(i + 1, t) for i, t in enumerate(worker_tabs)))
+
+       ``save_record`` is called inside the worker so crash-resilience
+       holds under concurrency.
+    d) Inside the per-document task, extract ALL per-PDF data (href,
+       title, language badge, name text) in ONE ``tab.evaluate`` IIFE
+       that returns ``JSON.stringify(...)`` (parsed with ``json.loads``
+       — no reliance on deep serialization) BEFORE calling
+       ``save_page_html``, then iterate plain Python dicts. NEVER hold
+       element handles across ``save_page_html``: its full-page scroll +
+       DOM stripping triggers SPA re-renders that detach held handles
+       (``DOM.resolveNode`` -32000), losing every PDF not yet extracted.
+       Scope download-widget selectors on the repeating element's own
+       attributes (e.g.
+       ``a.download-action[data-type='application/pdf']``), not one
+       container id — sibling pages may render a different container
+       (dropdown vs modal); when a widget aggregates other documents'
+       files, filter extracted hrefs to the current document by document
+       id (e.g. the page's own ``/vid/...`` slug or
+       ``data-document-id``). On per-PDF extraction failure during the
+       task, call ``save_record`` with ``download_status="failed"`` —
+       NEVER silently skip: silent skips become invisible gaps in
+       ``metadata.db`` and the script's retry phase cannot recover them.
+    e) Pass each worker its OWN ``tab`` (per-tab isolation); sharing one
+       tab across concurrent tasks makes their concurrent ``tab.get()``
+       calls invalidate each other's element handles.
+    f) ``save_record`` is concurrency-safe (own short-lived SQLite
        connection per call, ``PRAGMA busy_timeout=5000``); still call it
        bare, never await.
-    f) Validation — run discovery to collect a SMALL slice (first 2-3
-       pages' worth), then run ``gather`` over those records' downloads
-       to prove the tab pool, semaphore, and per-tab download/save work
-       concurrently. Print which tab handled which PDF.
+    g) Validation — run the worker phase on a slice with MORE documents
+       than tabs (at least N+1) so tab reuse is exercised, and print
+       which tab handled which document.
 
 16. Per-sub-page selector verification — when the task enumerates
     multiple peer sub-pages (e.g. "Admissibilities, Inadmissibilities,

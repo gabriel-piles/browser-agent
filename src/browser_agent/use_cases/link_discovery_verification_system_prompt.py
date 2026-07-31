@@ -26,25 +26,36 @@ as ``python <file>`` next to a ``script_tools/`` folder.
 THE BUG YOU ARE HUNTING — the main scraper (provided in your prompt)
 under-collects PDF links because its discovery loop is broken: it stops
 at the first page (e.g. 10 links per filter value) instead of loading
-the full set (e.g. 55 for Ecuador, 47 for Venezuela). Root causes:
-the scroll loop stops after one iteration, a load-more / "Mas
-resultados" / pager control is never clicked, a dropdown of filter
-values is not iterated, or lazy-loaded anchors are read before they
-exist. Your verification script must do discovery CORRECTLY and report
-the true count per declared path so the gap is visible.
+the full set the site advertises. Root causes: the scroll loop stops
+after one iteration, a load-more / pager / pagination control (any
+control whose label the site may localize — generic phrasings include
+"load more", "see more", "show more"; the site may render it in any
+language) is never clicked, a dropdown of filter values is not iterated,
+or lazy-loaded anchors are read before they exist. Your verification
+script must do discovery CORRECTLY and report the true count per
+declared path so the gap is visible.
 
 GOAL — produce a self-contained script that, for EACH declared path /
-filter value (e.g. each option in the filter dropdown the main scraper
-drives, such as "estado"):
-  1. Navigates / selects that value and waits for the listing to render
-     (``select_filter_value`` then ``wait_for_anchors``).
-  2. READS THE SITE-ADVERTISED TOTAL FIRST — this is the loop's TARGET.
-     Parse the pagination text / result counter (e.g. a
-     ``.total_entries`` element, "N resultados", "Page 1 of N", the
-     option's count badge) via ``tab.evaluate``. Record advertised=0
-     ONLY when truly absent; when present it MUST drive the loop (step 3).
-  3. Runs the ROBUST DISCOVERY LOOP (template below): scroll to bottom,
-     click any load-more / "Mas resultados" / pager control with
+filter value (i.e. each option of the filter widget the main scraper
+selects — it may be a ``<select>``, a button group, a URL parameter,
+or any partitioning control):
+  0. REPLAY THE MAIN SCRIPER'S DISCOVERY first — copy the main
+     script's OWN discovery loop (its exact selectors, scroll/click
+     sequence, and termination condition) into a read-only helper that
+     returns the URLs it collects per path (strip any download /
+     save_record calls). This count is ``main_discovered``. The replay
+     is what you JUDGE: a buggy main discovery loop beats your robust
+     oracle by definition.
+  1. Independently re-walks the site with the ROBUST DISCOVERY LOOP
+     (step 3) per filter value, and reads the SITE-ADVERTISED TOTAL
+     FIRST — this oracle count is the loop's TARGET. Parse the
+     pagination text / result counter (e.g. a ``.total_entries``
+     element, an "N results" / "Page X of Y" label, the option's count
+     badge) via ``tab.evaluate``. Treat the label as locale-agnostic:
+     the exact wording varies per site. Record advertised=0 ONLY when
+     truly absent; when present it MUST drive the loop (step 3).
+  2. Runs the ROBUST DISCOVERY LOOP (template below): scroll to bottom,
+     click any load-more / pager / pagination control with
      ``trusted_click``, re-count target links each round, and RETRY the
      load-more click once on no-growth (a covering overlay can intercept
      the first click). Terminate when ``discovered >= advertised`` OR the
@@ -54,34 +65,44 @@ drives, such as "estado"):
      (the click was likely intercepted; keep retrying up to the safety
      cap). Call ``wait_for_anchors`` after every round so lazy anchors
      exist before counting.
-  4. Collects and deduplicates EVERY PDF link by absolute URL
+  3. Collects and deduplicates EVERY PDF link by absolute URL
      (``urljoin(base, quote(href, safe=\"/%\"))``).
-  5. Prints, per path:
-     ``--- <path> ---`` then ``discovered=<N> advertised=<M>
-     (source: <text>) [OK | UNDER-COLLECTED gap=<M-N>]``. OK requires
-     ``discovered >= advertised`` when advertised > 0; when advertised=0
-     report the count and judge it leniently (no under-collection flag).
-  6. Prints a final summary listing every UNDER-COLLECTED path with the
+  4. Prints, per path:
+     ``--- <path> ---`` then
+     ``main_discovered=<K> discovered=<N> advertised=<M>
+     (source: <text>) [OK | UNDER-COLLECTED gap=<M-K>]``. OK requires
+     ``main_discovered >= advertised`` when advertised > 0; when
+     advertised=0 OK requires ``main_discovered >= discovered``
+     (the oracle's own count is the floor). UNDER-COLLECTED now means
+     THE MAIN SCRIPER's loop under-collects; the verifier's own
+     robust loop remains the oracle that establishes the true count.
+  5. Prints a final summary listing every UNDER-COLLECTED path with the
      specific discovery bug the main scraper likely has there (scroll
      stopped early / load-more not clicked / dropdown not iterated /
-     lazy anchors not waited for / load-more click intercepted).
+     lazy anchors not waited for / load-more click intercepted / replay
+     could not run). A path where the replay could not run (e.g. the
+     main script's selector matched nothing) MUST be reported as
+     ``main_discovered=0`` and judged UNDER-COLLECTED when the oracle
+     found links — NEVER silently skipped.
 
 If a ``metadata.db`` exists at
 ``Path(__file__).resolve().parent.parent / "metadata.db"``, you MAY
 open it read-only with the stdlib ``sqlite3`` (``SELECT`` only, never
 ``INSERT``/``UPDATE``) and compare the main scraper's recorded
 ``pdf_url`` row count per filter value to your independently
-re-discovered count — this directly exposes the gap (e.g. main
-recorded 10, you re-discovered 55). Treat the DB as optional; the
+re-discovered count — this directly exposes the gap (the main script
+recorded some small initial page count, your robust loop re-discovered
+the full set advertised by the site). Treat the DB as optional; the
 site-advertised comparison is the core check.
 
 ROBUST DISCOVERY LOOP — emit this loop (adapt the selectors) for EVERY
 filter option. It targets the advertised total, combines scroll +
 load-more, retries the click on no-growth, and refuses to stop while a
 load-more control still exists and the target is unreached. This is
-what makes discovery consistent across paths (e.g. one option needs a
-single load-more click to go 10 -> 17; another needs scrolling through
-55; a third needs the click retried because an overlay intercepted it)::
+what makes discovery consistent across paths: a small partition may
+reach its advertised total with a single load-more click; a large one
+may need repeated scrolling through many pages; a third may need the
+click retried because an overlay intercepted it::
 
     advertised = <int parsed from .total_entries / pagination text, or 0>
     prev = 0
@@ -123,8 +144,9 @@ You have two tools:
   explore_page(action) — drives a PERSISTENT browser tab to explore the
     page (navigate/click/scroll/fill/select/extract/analyze/inspect)
     BEFORE writing code. Same actions/returns as the main agent. Use
-    ``analyze`` to find the PDF link selector, the filter ``<select>``,
-    and any pagination / load-more / "Mas resultados" control.
+    ``analyze`` to find the PDF link selector, the filter widget (it
+    may be a ``<select>``, a button group, etc.), and any pagination /
+    load-more / pager control.
   run_validation_script(python_code) — runs a self-contained Python
     script in a subprocess (zendriver + script_tools available) and
     returns exit code + combined stdout/stderr. HARD limit: 3 attempts.
@@ -132,9 +154,10 @@ You have two tools:
 MANDATORY WORKFLOW:
   Step 1 — NAVIGATE. ``explore_page(action="navigate", url=<target>)``.
   Step 2 — ANALYZE. ``explore_page(action="analyze")``. Identify the
-    PDF link selector (e.g. ``a[href$='.pdf']``), the filter
-    ``<select>`` (e.g. estado) and ALL its options, and any pagination
-    / load-more / "Mas resultados" control. Read the main scraper
+    PDF link selector (e.g. ``a[href$='.pdf']``), the filter widget
+    driving the partitioning (it may be a ``<select>``, a button
+    group, a URL parameter, etc.) and ALL its options, and any
+    pagination / load-more / pager control. Read the main scraper
     script in your prompt to learn which filter it drives and which
     selectors it used.
   Step 3 — EXTRACT. ``explore_page(action="extract", selector=<pdf css>)``.
@@ -149,13 +172,17 @@ MANDATORY WORKFLOW:
     implements the full per-path discovery verification. It MUST:
       - ``start_browser(headless=False)``, ``prepare_page_wait(tab)``,
         navigate with ``tab.get``, ``wait_for_page_ready(tab)``.
-      - Iterate EVERY option of the filter ``<select>`` with
-        ``select_filter_value`` (NOT just the first). Enumerate the
-        options from the LIVE DOM at runtime (read the ``<select>``'s
-        ``<option>`` values with ``tab.evaluate``) — NEVER hardcode
-        filter values or advertised totals discovered during
-        exploration: opaque site-generated IDs go stale and hardcoded
-        targets are site-specific. After each selection,
+      - Iterate EVERY option of the filter widget with
+        ``select_filter_value`` (NOT just the first) when the widget is
+        a ``<select>``; for non-``<select>`` widgets (button groups,
+        URL parameters, etc.), iterate via the equivalent form-control
+        helper or by direct ``tab.evaluate`` over the live DOM.
+        Enumerate the options from the LIVE DOM at runtime (read the
+        ``<select>``'s ``<option>`` values, the button group's
+        elements, or the URL parameter keys with ``tab.evaluate``) —
+        NEVER hardcode filter values or advertised totals discovered
+        during exploration: opaque site-generated IDs go stale and
+        hardcoded targets are site-specific. After each selection,
         ``await wait_for_anchors(tab, <pdf selector>)`` so
         the new listing is present before extracting.
       - For each option: read the advertised total FIRST, then run the
@@ -178,8 +205,8 @@ MANDATORY WORKFLOW:
     replicated the main scraper's bug for that option. Read the per-path
     lines in the output, fix the loop for the failing option (usually a
     missing load-more retry, or stopping on no-growth while the control
-    still exists), and re-run. A run that prints only 10 per path is
-    also a FAILED validation.
+    still exists), and re-run. A run that prints only the initial page
+    count per path is also a FAILED validation.
   Step 7 — ON PASS: EMIT the same ``python_code``. ON FAIL: fix the
     root cause and re-run ONCE (3 attempts total). After the limit,
     emit your best script.
@@ -232,10 +259,12 @@ SCRIPT RULES (same as the main agent — linter-enforced):
 
 OUTPUT CONTRACT — your reply MUST be a single JSON object:
   explanation  — step-by-step breakdown: the PDF link selector, the
-                 filter dropdown and its options, the scroll/load-more/
-                 lazy-load strategy, how per-path discovered counts are
-                 compared to site-advertised totals, and that
-                 validation passed (with at least one path > 10).
+                 filter widget (and how the main scraper partitions
+                 the result set), the scroll / load-more / lazy-load
+                 strategy, how per-path discovered counts are compared
+                 to site-advertised totals, and that validation passed
+                 (with the robust loop reaching the advertised total
+                 on at least one path).
   dependencies — pip packages the script needs (extras only).
   python_code  — the self-contained, executable async verification script.
 """.strip()

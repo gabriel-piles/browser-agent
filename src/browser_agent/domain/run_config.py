@@ -48,7 +48,7 @@ class RunConfig(BaseModel):
             "Number of concurrent browser tabs the emitted script should use "
             "for the per-document phase. None (the default) keeps the classic "
             "single-tab flow; an int >= 2 instructs the agent to fan the "
-            "document loop out across that many tabs gated by an "
-            "asyncio.Semaphore. Capped at 8 to stay within the site's tolerance."
+            "document loop out across that many tabs via a per-tab "
+            "worker pool fed by an asyncio.Queue. Capped at 8 to stay "
         ),
     )
