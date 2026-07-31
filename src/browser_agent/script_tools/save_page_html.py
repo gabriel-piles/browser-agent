@@ -8,6 +8,7 @@ page.
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -61,6 +62,55 @@ _SNAPSHOT_JS = """\
         return window.__htmlCaptures.length;
     })()"""
 
+# Idempotent readiness instrumentation: a MutationObserver counts DOM
+# mutations and a PerformanceObserver counts resource-load completions.
+# Both count as "activity" — a page whose metadata XHR is still in
+# flight is NOT ready even when the DOM is momentarily quiet (the XHR
+# completion entry fires when it lands, resetting the quiet streak).
+# buffered:true makes the observer deliver the backlog once on install;
+# the first poll absorbs it.
+_SPA_INSTALL_JS = """\
+    (() => {
+        if (window.__spaMutObs) return true;
+        window.__spaMutCount = 0;
+        window.__spaResCount = 0;
+        window.__spaMutObs = new MutationObserver(() => { window.__spaMutCount++; });
+        window.__spaMutObs.observe(document.documentElement,
+            {subtree: true, childList: true, attributes: true, characterData: true});
+        try {
+            window.__spaResObs = new PerformanceObserver(() => { window.__spaResCount++; });
+            window.__spaResObs.observe({type: 'resource', buffered: true});
+        } catch (e) { window.__spaResObs = null; }
+        return true;
+    })()"""
+
+# One-shot SPA readiness poll: reads-and-resets the MutationObserver and
+# PerformanceObserver counters, snapshots visible-text length and visible
+# loader presence. Serialized as JSON so the whole snapshot crosses the
+# wire as a single string (zendriver returns it verbatim).
+_SPA_POLL_JS = """\
+    (() => {
+        const muts = window.__spaMutCount || 0;
+        const res = window.__spaResCount || 0;
+        window.__spaMutCount = 0;
+        window.__spaResCount = 0;
+        const body = document.body;
+        const textLen = body ? (body.innerText || '').trim().length : 0;
+        let loader = false;
+        if (body) {
+            const els = body.querySelectorAll('[class*="loading"], [class*="spinner"], [class*="loader"]');
+            for (const el of els) {
+                const r = el.getBoundingClientRect();
+                const s = getComputedStyle(el);
+                if (r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none') {
+                    loader = true;
+                    break;
+                }
+            }
+        }
+        return JSON.stringify({muts: muts, res: res, textLen: textLen, loader: loader});
+    })()"""
+
 
 async def save_page_html(tab, save_path, source_url, filename=None, card_selector=None):
     """Save the current page's HTML to ``save_path`` directory.
@@ -95,11 +145,12 @@ async def save_page_html(tab, save_path, source_url, filename=None, card_selecto
     triggered all lazy loads into the DOM).
 
     SPA METADATA: before capture, waits for SPA-rendered metadata to
-    finish binding by polling ``window.ui_ready_triggered`` (bounded
-    8 s timeout, no-op on non-SPA pages). This prevents capturing an
-    empty anchor div instead of the populated metadata on SPA sites
-    like vLex / Corte IDH where ``networkIdle`` fires before the
-    framework stamps the DOM.
+    finish binding by polling DOM-mutation and resource-load counters
+    until the page is quiescent with visible text and no visible loader
+    (bounded 15 s timeout; static pages pass after ~1 s of quiet
+    polls). This prevents capturing an unrendered SPA shell instead of
+    the populated metadata on SPA sites like vLex / Corte IDH where
+    ``networkIdle`` fires before the framework stamps the DOM.
 
     PDF VIEWER STRIP: before capture, removes ``#pdf-container`` and
     ``.pdf-viewer`` from the DOM so the saved HTML carries metadata and
@@ -202,33 +253,54 @@ async def _strip_reveal_styles(tab):
     )
 
 
-_SPA_READY_TIMEOUT_S = 8.0
+_SPA_READY_TIMEOUT_S = 15.0
+_SPA_POLL_INTERVAL_S = 0.3
+_SPA_QUIET_POLLS = 3
+_SPA_LOADER_GRACE_S = 4.0
+
+
+async def _spa_install_observer(tab):
+    """Idempotently install the mutation/resource activity counters."""
+    await tab.evaluate(_SPA_INSTALL_JS)
+
+
+async def _spa_poll(tab):
+    """Read-and-reset the mutation counter; snapshot text and loader state."""
+    raw = await tab.evaluate(_SPA_POLL_JS)
+    if isinstance(raw, dict):
+        return raw
+    return json.loads(raw)
 
 
 async def _wait_for_spa_ready(tab):
     """Wait for SPA-rendered metadata to finish binding.
 
-    Many SPA shells (vLex / Corte IDH) fire a custom ``ui_ready`` event
-    once the client-side app finishes rendering. ``wait_for_page_ready``
-    only waits for ``networkIdle``, which fires when the metadata XHR
-    completes — the DOM is stamped a few hundred ms later by the
-    framework's binding pass. Without this wait, ``get_content()`` can
-    capture an empty anchor div (``<!--anchor-->``) instead of the
-    populated metadata (Categoría, Estado, etc.).
-
-    No-op on pages that don't define ``window.ui_ready_triggered`` —
-    the flag is absent from the raw HTML, so the first poll returns
-    immediately with zero cost. Timeout is bounded by
-    ``_SPA_READY_TIMEOUT_S`` so this can never hang.
+    Polls activity counters until the page is quiescent (three
+    consecutive polls with zero DOM mutations AND zero resource-load
+    completions) AND the page has visible text, while vetoing visible
+    loader/spinner elements. The resource counter is load-bearing: a
+    metadata XHR in flight leaves the DOM momentarily quiet, so DOM
+    quiescence alone can pass before the framework binds the response.
+    The text floor guards the opposite case (a static shell is also
+    quiet). Bounded by ``_SPA_READY_TIMEOUT_S``; never raises, so
+    capture on timeout is never worse than today.
     """
+    await _spa_install_observer(tab)
     deadline = time.monotonic() + _SPA_READY_TIMEOUT_S
+    grace_deadline = None
+    quiet = 0
     while True:
-        ready = await tab.evaluate("typeof window.ui_ready_triggered === 'boolean' ? window.ui_ready_triggered : true")
-        if ready:
+        snap = await _spa_poll(tab)
+        quiet = quiet + 1 if snap["muts"] == 0 and snap["res"] == 0 else 0
+        content_ready = quiet >= _SPA_QUIET_POLLS and snap["textLen"] > 0
+        if content_ready and not snap["loader"]:
             return
-        if time.monotonic() >= deadline:
+        if content_ready and grace_deadline is None:
+            grace_deadline = time.monotonic() + _SPA_LOADER_GRACE_S
+        now = time.monotonic()
+        if now >= deadline or (grace_deadline is not None and now >= grace_deadline):
             return
-        await tab.sleep(0.2)
+        await tab.sleep(_SPA_POLL_INTERVAL_S)
 
 
 async def _strip_pdf_viewer(tab):
@@ -255,6 +327,7 @@ async def _capture_scrolled_html(tab):
     complete page. This handles the common lazy-load case without the
     overhead of per-viewport snapshots.
     """
+    await _wait_for_spa_ready(tab)
     await _scroll_to_bottom(tab)
     await tab.evaluate("window.scrollTo(0, 0)")
     await tab.sleep(0.3)
@@ -274,8 +347,6 @@ async def _capture_virtualized_html(tab, card_selector):
     (most complete) snapshot as base. Every card that was ever rendered
     appears in the output.
     """
-    import json as _json
-
     await _wait_for_spa_ready(tab)
     await _strip_pdf_viewer(tab)
     await tab.evaluate("window.__htmlCaptures = []")
@@ -307,7 +378,7 @@ async def _capture_virtualized_html(tab, card_selector):
     count = int(count) if count is not None else 0
     if count == 0:
         return await _capture_simple_html(tab)
-    consolidated = await tab.evaluate(_CONSOLIDATE_JS.format(selector_literal=_json.dumps(card_selector)))
+    consolidated = await tab.evaluate(_CONSOLIDATE_JS.format(selector_literal=json.dumps(card_selector)))
     try:
         await tab.evaluate("delete window.__htmlCaptures")
     except Exception:
