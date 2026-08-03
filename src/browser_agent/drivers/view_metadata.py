@@ -24,7 +24,7 @@ def _db_path() -> Path:
 
 
 SUBSTR_PROMPT = "pdf_filename (or ? to list, * to dump all, empty to quit) > "
-URL_KEYS = {"source_url", "pdf_url", "source_page", "source_page_url"}
+URL_KEYS = {"source_url", "file_url", "source_page", "source_page_url"}
 SINGLE_LINE_KEYS = URL_KEYS | {k for k in ()}
 
 
@@ -64,7 +64,7 @@ def render_card(record: dict, width: int = 64) -> str:
         "pdf_id",
         "pdf_name",
         "pdf_type",
-        "pdf_url",
+        "file_url",
         "pdf_filename",
         "html_filename",
         "source_page",

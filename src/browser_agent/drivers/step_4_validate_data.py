@@ -114,7 +114,6 @@ class MatchDriver:
         classifier = RowIssueClassifier(entities_fetcher, issue_detector, self._paths.downloads_dir())
         entities_by_key = entities_fetcher.fetch(
             template_name=context.mapping.template,
-            language=context.mapping.default_language,
             key_property=context.mapping.identity.key_property or "",
             select_filter_name=context.mapping.identity.select_filtering_name,
             select_filter_values=context.mapping.identity.select_filtering_options,

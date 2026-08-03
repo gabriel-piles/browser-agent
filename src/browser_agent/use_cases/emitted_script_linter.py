@@ -70,6 +70,65 @@ def _check_download_status(python_code: str) -> list[LintFinding]:
     return out
 
 
+def _check_supporting_status(python_code: str) -> list[LintFinding]:
+    out: list[LintFinding] = []
+    for match in re.finditer(r"\bsave_record\s*\(", python_code):
+        call_text = _call_args(python_code, match.end() - 1)
+        has_supporting = '"supporting_filename"' in call_text or "'supporting_filename'" in call_text
+        if not has_supporting:
+            continue
+        has_dl = '"download_status"' in call_text or "'download_status'" in call_text
+        has_role = '"download_role"' in call_text or "'download_role'" in call_text
+        has_pdf = '"pdf_filename"' in call_text or "'pdf_filename'" in call_text
+        if not has_dl or not has_role or has_pdf:
+            out.append(
+                LintFinding(
+                    rule="14",
+                    severity="error",
+                    message=(
+                        "save_record with supporting_filename must set download_status + "
+                        'download_role="supporting" and must NOT set pdf_filename '
+                        "(roles are mutually exclusive)"
+                    ),
+                    line=_line_of(python_code, match.start()),
+                )
+            )
+    return out
+
+
+def _check_ready_selector(python_code: str) -> list[LintFinding]:
+    """Reject heading/title ready_selectors — they bind with the initial shell and pass the gate early."""
+    out: list[LintFinding] = []
+    for match in re.finditer(r"\bsave_page_html\s*\(", python_code):
+        call_text = _call_args(python_code, match.end() - 1)
+        kw = re.search(r"ready_selector\s*=\s*([\"'])(.*?)\1", call_text)
+        if not kw:
+            continue
+        selector = kw.group(2)
+        is_heading = re.search(r"(?i)(^|[\s>+~])h[1-6](?=[.#\s>+~\]:]|$)", selector)
+        is_titleish = re.search(r"(?i)[.#][\w-]*(title|header)[\w-]*", selector)
+        if is_heading or is_titleish:
+            out.append(
+                LintFinding(
+                    rule="14",
+                    severity="error",
+                    message=(
+                        f"ready_selector {selector!r} names a page heading/title — headings render with the "
+                        "initial shell and pass the gate BEFORE the late metadata XHR binds, so the captured "
+                        "HTML still holds <!--anchor--> placeholders. Pass the late-bound metadata ITEM "
+                        "metadata element instead — the same element your metadata-extraction tab.evaluate "
+                        'queries (e.g. ready_selector=".document__credits metadata-item"). '
+                        "Also forbidden: a class that matches server-rendered duplicates of the same "
+                        'metadata elsewhere on the page (e.g. ".document__credits-item" matches the '
+                        "static #original-text block on vLex) — it passes the gate instantly and the "
+                        "capture keeps the <!--anchor--> placeholders."
+                    ),
+                    line=_line_of(python_code, match.start()),
+                )
+            )
+    return out
+
+
 def _check_file_size_key(python_code: str) -> list[LintFinding]:
     out: list[LintFinding] = []
     pat = re.compile(r"""(?:\[\s*["']file_size["']\s*\]|\.get\(\s*["']file_size["']\s*\))""")
@@ -350,9 +409,11 @@ class EmittedScriptLinter:
         self._checks = (
             _check_syntax,
             _check_skeleton,
+            _check_ready_selector,
             _check_save_record,
             _check_zd_start,
             _check_download_status,
+            _check_supporting_status,
             _check_http_imports,
             _check_playwright_selectors,
             _check_el_text_content,

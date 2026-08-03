@@ -1,9 +1,9 @@
 """Deterministic DB-vs-disk reconciler — no LLM, always runs.
 
 For every row in ``metadata.db``: recompute the expected on-disk
-filename from ``pdf_url``, stat the file, validate it, and diff both
+filename from ``file_url``, stat the file, validate it, and diff both
 directions. Also reports orphan files, ``.part`` leftovers, duplicate
-``pdf_url`` rows, empty ``pdf_url`` rows, and identical-size clusters.
+``file_url`` rows, empty ``file_url`` rows, and identical-size clusters.
 
 The output is written to disk *before* the agent runs so a model
 failure mid-run still leaves usable evidence. The LLM stage keeps only
@@ -68,32 +68,49 @@ class ReconcileDownloadsUseCase:
         source_url, _slug, data_json = row
         data = parse_row_data(data_json)
         download_status = data.get("download_status", "") or ""
-        pdf_url = data.get("pdf_url", "") or ""
-        if not pdf_url:
+        file_url = data.get("file_url", "") or ""
+        if data.get("download_role") == "supporting":
+            filename = data.get("supporting_filename", "") or ""
+            on_disk = bool(filename) and (self._downloads_path / filename).is_file()
+            size = int((self._downloads_path / filename).stat().st_size) if on_disk else 0
+            return ReconciledPdf(
+                source_url=source_url,
+                file_url=file_url,
+                matched_filename=filename if on_disk else "",
+                match_mode="supporting" if on_disk else "missing",
+                file_exists=on_disk,
+                file_size_bytes=size,
+                verdict="present" if on_disk else "file_not_downloaded",
+                notes=(
+                    f"supporting file (non-PDF) on disk ({filename})" if on_disk else "supporting-file row: no file on disk"
+                ),
+                download_status=download_status,
+            )
+        if not file_url:
             return ReconciledPdf(
                 source_url=source_url,
                 verdict="empty_pdf_url",
-                notes="row has no pdf_url",
+                notes="row has no file_url",
                 download_status=download_status,
             )
-        return self._check_file_for_url(source_url, pdf_url, data, disk_files, download_status)
+        return self._check_file_for_url(source_url, file_url, data, disk_files, download_status)
 
     def _check_file_for_url(
         self,
         source_url: str,
-        pdf_url: str,
+        file_url: str,
         data: dict[str, Any],
         disk_files: set[str],
         download_status: str,
     ) -> ReconciledPdf:
         db_filename = data.get("pdf_filename", "") or ""
-        expected_norm, expected_orig = PdfUrlMatcher.expected_filenames_for(pdf_url)
+        expected_norm, expected_orig = PdfUrlMatcher.expected_filenames_for(file_url)
         matched, mode = self._match_on_disk(expected_norm, expected_orig, disk_files)
         filename_mismatch = bool(db_filename) and db_filename != expected_norm
         if matched is None:
             return ReconciledPdf(
                 source_url=source_url,
-                pdf_url=pdf_url,
+                file_url=file_url,
                 db_pdf_filename=db_filename,
                 expected_filename=expected_norm,
                 matched_filename="",
@@ -106,7 +123,7 @@ class ReconcileDownloadsUseCase:
             )
         return self._validate_matched(
             source_url,
-            pdf_url,
+            file_url,
             db_filename,
             expected_norm,
             matched,
@@ -131,7 +148,7 @@ class ReconcileDownloadsUseCase:
     def _validate_matched(
         self,
         source_url: str,
-        pdf_url: str,
+        file_url: str,
         db_filename: str,
         expected: str,
         matched: Path,
@@ -143,7 +160,7 @@ class ReconcileDownloadsUseCase:
         verdict = self._row_verdict(integrity)
         return ReconciledPdf(
             source_url=source_url,
-            pdf_url=pdf_url,
+            file_url=file_url,
             db_pdf_filename=db_filename,
             expected_filename=expected,
             matched_filename=matched.name,
@@ -181,7 +198,7 @@ class ReconcileDownloadsUseCase:
     def _url_findings(self, rows: list[tuple[str, str, str]]) -> list[CorpusFinding]:
         urls: list[str] = []
         for _src, _slug, data_json in rows:
-            url = parse_row_data(data_json).get("pdf_url", "") or ""
+            url = parse_row_data(data_json).get("file_url", "") or ""
             if url:
                 urls.append(url)
         counts = Counter(urls)
@@ -191,7 +208,7 @@ class ReconcileDownloadsUseCase:
             out.append(
                 CorpusFinding(
                     kind="duplicate_pdf_url",
-                    detail=f"{len(dups)} pdf_url value(s) appear in more than one row.",
+                    detail=f"{len(dups)} file_url value(s) appear in more than one row.",
                     items=dups[:_MAX_FINDING_ITEMS],
                 )
             )

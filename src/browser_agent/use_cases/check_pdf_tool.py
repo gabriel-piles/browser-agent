@@ -1,7 +1,7 @@
 """The ``check_pdf`` tool bound to the verification agent.
 
 Queries ``metadata.db`` for a row whose ``data`` JSON contains a
-``pdf_url`` matching the candidate URL (normalized, with a suffix
+``file_url`` matching the candidate URL (normalized, with a suffix
 fallback), then checks the filesystem for the downloaded file and
 validates it is a real PDF (magic + %%EOF). A hard counter caps how
 many checks one agent turn may perform.
@@ -62,7 +62,7 @@ def _run_check(deps: VerificationAgentDeps, request: PdfCheckRequest) -> PdfChec
     return _check_file(deps, request, row)
 
 
-def _query_db(db_path: Path, pdf_url: str) -> tuple[str, dict[str, Any], str] | None:
+def _query_db(db_path: Path, candidate_url: str) -> tuple[str, dict[str, Any], str] | None:
     """Return ``(source_url, data_dict, match_mode)`` for the matching row.
 
     Tries normalized equality first, then a path/basename suffix match,
@@ -79,8 +79,8 @@ def _query_db(db_path: Path, pdf_url: str) -> tuple[str, dict[str, Any], str] | 
         conn.close()
     for source_url, data_json in rows:
         data = parse_row_data(data_json)
-        stored = data.get("pdf_url", "") or ""
-        match = PdfUrlMatcher.match(pdf_url, stored)
+        stored = data.get("file_url", "") or ""
+        match = PdfUrlMatcher.match(candidate_url, stored)
         if match.matched:
             return source_url, data, match.mode
     return None

@@ -36,24 +36,24 @@ class ScrapingGapMapBuilder:
     def build(self) -> str:
         """Return a text summary of DB coverage for the agent."""
         rows = query_rows(self._db_path)
-        pdf_urls, field_counts, sources, year_state = self._summarise(rows)
-        if not pdf_urls:
+        file_urls, field_counts, sources, year_state = self._summarise(rows)
+        if not file_urls:
             return self._empty_message()
-        return self._render(pdf_urls, field_counts, sources, year_state)
+        return self._render(file_urls, field_counts, sources, year_state)
 
     def _summarise(
         self, rows: list[tuple[str, str, str]]
     ) -> tuple[set[str], dict[str, Counter[str]], list[str], dict[tuple[str, str], int]]:
-        """Walk rows, collecting pdf_urls, per-field counts, source anchors, year×state."""
-        pdf_urls: set[str] = set()
+        """Walk rows, collecting file_urls, per-field counts, source anchors, year×state."""
+        file_urls: set[str] = set()
         field_counts: dict[str, Counter[str]] = {f: Counter() for f in _GAP_FIELDS}
         sources: list[str] = []
         year_state: dict[tuple[str, str], int] = {}
         for source_url, _slug, data_json in rows:
             data = parse_row_data(data_json)
-            url = data.get("pdf_url")
+            url = data.get("file_url")
             if url:
-                pdf_urls.add(url)
+                file_urls.add(url)
             for field in _GAP_FIELDS:
                 value = data.get(field)
                 if value:
@@ -64,17 +64,17 @@ class ScrapingGapMapBuilder:
                 year_state[(year, state)] = year_state.get((year, state), 0) + 1
             if len(sources) < _MAX_SOURCE_ANCHORS:
                 sources.append(source_url)
-        return pdf_urls, field_counts, sources, year_state
+        return file_urls, field_counts, sources, year_state
 
     def _render(
         self,
-        pdf_urls: set[str],
+        file_urls: set[str],
         field_counts: dict[str, Counter[str]],
         sources: list[str],
         year_state: dict[tuple[str, str], int],
     ) -> str:
         """Render the gap map text from collected stats."""
-        lines = [f"Total PDFs in DB: {len(pdf_urls)}"]
+        lines = [f"Total files in DB: {len(file_urls)}"]
         for field in _GAP_FIELDS:
             counts = field_counts[field]
             if counts:
@@ -142,4 +142,4 @@ class ScrapingGapMapBuilder:
         return f"Source URLs (first {len(sources)}):\n{body}"
 
     def _empty_message(self) -> str:
-        return "No PDFs found in database. The scraper may have failed entirely."
+        return "No files found in database. The scraper may have failed entirely."

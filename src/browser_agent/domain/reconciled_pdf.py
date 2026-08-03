@@ -1,7 +1,7 @@
 """One row of the deterministic DB-vs-disk reconciliation.
 
 Produced by :class:`ReconcileDownloadsUseCase` for every ``metadata.db``
-row: the expected on-disk filename is recomputed from ``pdf_url``, the
+row: the expected on-disk filename is recomputed from ``file_url``, the
 file is stat-checked and validated, and both directions of the diff are
 reported. This is the exhaustive inventory the LLM loop cannot produce.
 """
@@ -15,9 +15,9 @@ class ReconciledPdf(BaseModel):
     """Deterministic verdict for one DB row + its on-disk file."""
 
     source_url: str = Field(default="", description="The DB row's source_url.")
-    pdf_url: str = Field(default="", description="The pdf_url stored in the row data.")
+    file_url: str = Field(default="", description="The file_url stored in the row data.")
     db_pdf_filename: str = Field(default="", description="The pdf_filename the step-0 LLM wrote.")
-    expected_filename: str = Field(default="", description="Filename recomputed from pdf_url.")
+    expected_filename: str = Field(default="", description="Filename recomputed from file_url.")
     matched_filename: str = Field(default="", description="The filename that actually matched on disk.")
     match_mode: str = Field(
         default="none",

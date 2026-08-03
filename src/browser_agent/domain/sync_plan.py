@@ -29,6 +29,10 @@ class SyncPlanRow(BaseModel):
     metadata: dict = Field(default_factory=dict, description="Property name -> value dict, post-thesaurus-substitution.")
     pdf_path: str | None = Field(default=None, description="Local PDF path, if any, to upload as the primary file.")
     html_path: str | None = Field(default=None, description="Local HTML path, if any, to upload as a supporting attachment.")
+    supporting_path: str | None = Field(
+        default=None,
+        description="Local supporting-file path (non-PDF document), if any, to upload as a supporting attachment.",
+    )
     key_value: str | None = Field(
         default=None, description="The key used to find/create the entity (e.g. URL path placeholder value)."
     )

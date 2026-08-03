@@ -18,9 +18,34 @@ from browser_agent.domain.uwazi_mapping import UwaziMapping
 from browser_agent import configuration
 from browser_agent.use_cases.push_progress import PushProgress
 
+from uwazi_api.domain.FileType import FileType
+
 # Uwazi's originalname field is limited to 255 characters.
 # Entity titles can be longer, so we truncate for file uploads.
 _UPLOAD_TITLE_MAX_LENGTH = 255
+
+_SUPPORTED_FILE_TYPES = {
+    ".doc": FileType.DOC,
+    ".docx": FileType.DOCX,
+    ".rtf": FileType.RTF,
+    ".odt": FileType.ODT,
+    ".odp": FileType.ODP,
+    ".ods": FileType.ODS,
+    ".xls": FileType.XLS,
+    ".xlsx": FileType.XLSX,
+    ".ppt": FileType.PPT,
+    ".pptx": FileType.PPTX,
+    ".pdf": FileType.PDF,
+    ".html": FileType.HTML,
+    ".txt": FileType.TXT,
+    ".csv": FileType.CSV,
+    ".zip": FileType.ZIP,
+}
+
+
+def _file_type_for(suffix: str):
+    return _SUPPORTED_FILE_TYPES.get((suffix or "").lower(), FileType.BIN)
+
 
 from uwazi_api.client import UwaziClient
 from uwazi_api.domain.entity import Entity
@@ -95,13 +120,21 @@ class UwaziPusher:
         """Build the primary + supporting file uploads for one entity."""
         from uwazi_api.domain.entity_file_upload import EntityFileUpload
         from uwazi_api.domain.file_fieldname import FileFieldname
-        from uwazi_api.domain.FileType import FileType
 
         files: list[EntityFileUpload] = []
         if mapping.upload_pdf and row.pdf_path:
             files.append(self._file_upload(FileFieldname.FILE, f"{row.title}.pdf", FileType.PDF, row.pdf_path))
         if mapping.upload_pdf and row.html_path:
             files.append(self._file_upload(FileFieldname.ATTACHMENT, f"{row.title}.html", FileType.HTML, row.html_path))
+        if mapping.upload_pdf and row.supporting_path:
+            files.append(
+                self._file_upload(
+                    FileFieldname.ATTACHMENT,
+                    Path(row.supporting_path).name,
+                    _file_type_for(Path(row.supporting_path).suffix),
+                    row.supporting_path,
+                )
+            )
         return files
 
     def _file_upload(self, fieldname, filename: str, file_type, path: str) -> EntityFileUpload:

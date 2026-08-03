@@ -89,7 +89,7 @@ If a ``metadata.db`` exists at
 ``Path(__file__).resolve().parent.parent / "metadata.db"``, you MAY
 open it read-only with the stdlib ``sqlite3`` (``SELECT`` only, never
 ``INSERT``/``UPDATE``) and compare the main scraper's recorded
-``pdf_url`` row count per filter value to your independently
+``file_url`` row count per filter value to your independently
 re-discovered count — this directly exposes the gap (the main script
 recorded some small initial page count, your robust loop re-discovered
 the full set advertised by the site). Treat the DB as optional; the

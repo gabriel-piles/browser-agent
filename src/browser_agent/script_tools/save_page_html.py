@@ -9,6 +9,7 @@ page.
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -112,7 +113,49 @@ _SPA_POLL_JS = """\
     })()"""
 
 
-async def save_page_html(tab, save_path, source_url, filename=None, card_selector=None):
+def _selector_probe(selector):
+    """Reduce a CSS selector to a substring probe: the rightmost simple selector.
+
+    ``.document__credits metadata-item`` -> ``<metadata-item``;
+    ``.doc-details .field`` -> ``field``; ``#details`` -> ``details``.
+    """
+    token = re.split(r"[\s>+~]+", selector.strip())[-1]
+    m = re.search(r"[.#]([A-Za-z0-9_-]+)", token)
+    if m:
+        return m.group(1)
+    tag = re.match(r"[A-Za-z][A-Za-z0-9-]*", token)
+    return f"<{tag.group(0)}" if tag else ""
+
+
+def _file_has_selector(path, selector):
+    """True when the saved HTML file plausibly contains a match for ``selector``."""
+    probe = _selector_probe(selector)
+    if not probe:
+        return True
+    try:
+        return probe in path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+
+
+async def _ensure_tab_visible(tab):
+    """Activate the tab so rendering-dependent framework binding can run.
+
+    Hidden background tabs never fire IntersectionObserver or
+    requestAnimationFrame, so Aurelia/React late-bound content (e.g. the
+    vLex/Corte IDH ``metadata-item`` block) NEVER renders while the tab is
+    hidden — the DOM keeps ``<!--anchor-->`` placeholders no matter how long
+    a gate waits. Once rendered, the content persists in the DOM even if the
+    tab is hidden again, so one activation before the gate suffices.
+    Capture-anyway: a failed activation must not abort a document row.
+    """
+    try:
+        await tab.bring_to_front()
+    except Exception:
+        pass
+
+
+async def save_page_html(tab, save_path, source_url, filename=None, card_selector=None, ready_selector=None):
     """Save the current page's HTML to ``save_path`` directory.
 
     Uses the REAL browser tab — never an HTTP client (curl_cffi,
@@ -150,7 +193,52 @@ async def save_page_html(tab, save_path, source_url, filename=None, card_selecto
     (bounded 15 s timeout; static pages pass after ~1 s of quiet
     polls). This prevents capturing an unrendered SPA shell instead of
     the populated metadata on SPA sites like vLex / Corte IDH where
-    ``networkIdle`` fires before the framework stamps the DOM.
+    ``networkIdle`` fires before the framework stamps the DOM. This
+    generic quiescence wait is a HEURISTIC — it can pass during a
+    quiet gap BEFORE the framework binds a late metadata XHR response,
+    producing an HTML capture that contains only placeholder comments
+    (e.g. ``<!--anchor-->``) instead of the late-bound metadata. When
+    the page exposes a concrete element that only appears after the
+    binding pass, pass ``ready_selector`` (see below) instead of
+    relying on the heuristic alone.
+
+    READY SELECTOR: when ``ready_selector`` (CSS) is passed, the helper
+    waits up to 15 s for the selector to match an element WITH RENDERED
+    CONTENT — non-empty text or at least one element child — before
+    capture (never raises — captures whatever is there on timeout, so
+    one slow page never aborts a document row). An element that exists
+    in the initial shell carrying only placeholder comments (e.g.
+    ``<!--anchor-->``) or empty text does NOT pass the gate, so an
+    empty static container still gates until the binding pass fills
+    it. The wait runs twice: once up front and again immediately
+    before the final capture. The selector MUST name the late-bound
+    metadata element itself (e.g.
+    ``ready_selector=".document__credits metadata-item"``), not a
+    static container that is already present in the empty shell — a
+    static container would match immediately and defeat the gate. The
+    selector MUST name an element that ONLY EXISTS after the binding
+    pass — the framework's custom-element tag (e.g.
+    ``ready_selector="metadata-item"`` or
+    ``ready_selector=".document__credits metadata-item"``). NEVER name a
+    class that also matches SERVER-RENDERED/static duplicates of the same
+    metadata elsewhere on the page: on vLex, ``.document__credits-item``
+    matches the static ``#original-text`` metadata block from the initial
+    shell, so the gate passes instantly while the late-bound block stays
+    an ``<!--anchor-->`` placeholder (and the self-heal skip check keeps
+    the broken file forever). The
+    skip path also self-heals: when ``ready_selector`` is passed and
+    the existing on-disk file does NOT contain the selector (the
+    capture predates the binding pass), the file is treated as absent
+    and re-captured.
+
+    TAB VISIBILITY: when ``ready_selector`` is passed, the helper
+    first activates the tab (``tab.bring_to_front()``) because hidden
+    background tabs never run IntersectionObserver/requestAnimationFrame —
+    framework binding that depends on them (Aurelia repeaters on
+    vLex/Corte IDH, React lazy mounts) only happens in the visible tab.
+    Binding persists once rendered, so a single activation up front is
+    enough; parallel workers momentarily stealing each other's
+    foreground is harmless.
 
     PDF VIEWER STRIP: before capture, removes ``#pdf-container`` and
     ``.pdf-viewer`` from the DOM so the saved HTML carries metadata and
@@ -168,6 +256,12 @@ async def save_page_html(tab, save_path, source_url, filename=None, card_selecto
 
         result = await save_page_html(
             tab, out_dir, page_url, card_selector=".card")
+
+    On SPA pages with late-bound metadata:
+
+        result = await save_page_html(
+            tab, out_dir, page_url,
+            ready_selector=".document__credits metadata-item")
     """
     save_dir = Path(save_path)
     if not save_dir.is_dir():
@@ -177,13 +271,16 @@ async def save_page_html(tab, save_path, source_url, filename=None, card_selecto
     save_path = save_dir / name
 
     existing = _existing_size(save_path)
-    if existing > 0:
+    if existing > 0 and (ready_selector is None or _file_has_selector(save_path, ready_selector)):
         return {"size": existing, "skipped": True, "reason": "already_saved", "saved_path": str(save_path)}
+    if ready_selector:
+        await _ensure_tab_visible(tab)
+        await _wait_for_ready_selector(tab, ready_selector)
 
     if card_selector:
-        html = await _capture_virtualized_html(tab, card_selector)
+        html = await _capture_virtualized_html(tab, card_selector, ready_selector)
     else:
-        html = await _capture_scrolled_html(tab)
+        html = await _capture_scrolled_html(tab, ready_selector)
     if not html:
         raise RuntimeError(f"empty HTML content for {source_url}")
     body = html.encode("utf-8")
@@ -257,6 +354,9 @@ _SPA_READY_TIMEOUT_S = 15.0
 _SPA_POLL_INTERVAL_S = 0.3
 _SPA_QUIET_POLLS = 3
 _SPA_LOADER_GRACE_S = 4.0
+_READY_SELECTOR_TIMEOUT_S = 15.0
+_READY_SELECTOR_POLL_S = 0.3
+_READY_SELECTOR_STABLE_POLLS = 2
 
 
 async def _spa_install_observer(tab):
@@ -303,6 +403,39 @@ async def _wait_for_spa_ready(tab):
         await tab.sleep(_SPA_POLL_INTERVAL_S)
 
 
+async def _wait_for_ready_selector(tab, selector):
+    """Block until ``selector`` matches an element with rendered content; return silently on timeout.
+
+    Content gate: at least one matched element must have non-empty
+    textContent OR at least one element child. An Aurelia shell holding
+    only ``<!--anchor-->`` comments fails the gate, so naming the
+    metadata CONTAINER (not just the item element) also waits for the
+    binding pass. Capture-anyway semantics: the timeout is swallowed so
+    one slow page never aborts a document row.
+    """
+    if not selector:
+        return
+    js = (
+        "(() => { const els = document.querySelectorAll(" + json.dumps(selector) + ");"
+        " for (const el of els) {"
+        " if ((el.textContent || '').trim().length > 0 || el.querySelector('*')) return true;"
+        " } return false; })()"
+    )
+    deadline = time.monotonic() + _READY_SELECTOR_TIMEOUT_S
+    stable = 0
+    while time.monotonic() < deadline:
+        try:
+            if await tab.evaluate(js):
+                stable += 1
+                if stable >= _READY_SELECTOR_STABLE_POLLS:
+                    return
+            else:
+                stable = 0
+        except Exception:
+            stable = 0
+        await tab.sleep(_READY_SELECTOR_POLL_S)
+
+
 async def _strip_pdf_viewer(tab):
     """Remove the embedded PDF viewer from the DOM before capture.
 
@@ -319,7 +452,7 @@ async def _strip_pdf_viewer(tab):
     await tab.evaluate("document.querySelectorAll('#pdf-container, .pdf-viewer').forEach(el => el.remove())")
 
 
-async def _capture_scrolled_html(tab):
+async def _capture_scrolled_html(tab, ready_selector=None):
     """Scroll to bottom (triggering lazy loads), then capture the full DOM.
 
     After scrolling, all IntersectionObserver / infinite-scroll content
@@ -334,10 +467,11 @@ async def _capture_scrolled_html(tab):
     await _strip_reveal_styles(tab)
     await _wait_for_spa_ready(tab)
     await _strip_pdf_viewer(tab)
+    await _wait_for_ready_selector(tab, ready_selector)
     return await _capture_simple_html(tab)
 
 
-async def _capture_virtualized_html(tab, card_selector):
+async def _capture_virtualized_html(tab, card_selector, ready_selector=None):
     """Scroll top-to-bottom, snapshot per viewport, consolidate in-browser.
 
     For virtualized lists (react-window / react-virtualized) that only
@@ -348,6 +482,7 @@ async def _capture_virtualized_html(tab, card_selector):
     appears in the output.
     """
     await _wait_for_spa_ready(tab)
+    await _wait_for_ready_selector(tab, ready_selector)
     await _strip_pdf_viewer(tab)
     await tab.evaluate("window.__htmlCaptures = []")
     await tab.evaluate("window.scrollTo(0, 0)")
@@ -378,6 +513,7 @@ async def _capture_virtualized_html(tab, card_selector):
     count = int(count) if count is not None else 0
     if count == 0:
         return await _capture_simple_html(tab)
+    await _wait_for_ready_selector(tab, ready_selector)
     consolidated = await tab.evaluate(_CONSOLIDATE_JS.format(selector_literal=json.dumps(card_selector)))
     try:
         await tab.evaluate("delete window.__htmlCaptures")

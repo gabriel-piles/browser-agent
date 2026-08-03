@@ -21,7 +21,7 @@ from browser_agent.use_cases.verification_agent_deps import VerificationAgentDep
 _MAX_ROWS = 200
 _SCHEMA_REMINDER = (
     "Schema: metadata(source_url TEXT, task_slug TEXT, data TEXT). "
-    "`data` is a JSON blob whose keys include pdf_url, pdf_filename, "
+    "`data` is a JSON blob whose keys include file_url, pdf_filename, "
     "pdf_id, pdf_name, pdf_type, subcategory, year, state."
 )
 _SELECT_RE = re.compile(r"^\s*SELECT\b", re.IGNORECASE)

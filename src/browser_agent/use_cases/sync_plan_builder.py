@@ -37,6 +37,8 @@ _ENTITY_BATCH = 200
 
 def resolve_pdf_filename(record: dict, source_url: str, downloads_dir: Path | None) -> str | None:
     """Return the absolute local PDF path for one record, or ``None``."""
+    if record.get("download_role") == "supporting":
+        return None
     raw = record.get("pdf_filename") or ""
     if raw and raw.strip() and not raw.startswith("no-pdf"):
         candidate = Path(raw)
@@ -44,9 +46,9 @@ def resolve_pdf_filename(record: dict, source_url: str, downloads_dir: Path | No
             candidate = downloads_dir / raw
         if candidate.exists():
             return str(candidate.resolve())
-    pdf_url = record.get("pdf_url") or ""
-    if pdf_url and downloads_dir is not None:
-        candidate = downloads_dir / pdf_filename_for(pdf_url)
+    file_url = record.get("file_url") or ""
+    if file_url and downloads_dir is not None:
+        candidate = downloads_dir / pdf_filename_for(file_url)
         if candidate.exists():
             return str(candidate.resolve())
     return None
@@ -55,6 +57,18 @@ def resolve_pdf_filename(record: dict, source_url: str, downloads_dir: Path | No
 def resolve_html_filename(record: dict, downloads_dir: Path | None) -> str | None:
     """Return the absolute local HTML path for one record, or ``None``."""
     raw = record.get("html_filename") or ""
+    if raw and raw.strip():
+        candidate = Path(raw)
+        if not candidate.is_absolute() and downloads_dir is not None:
+            candidate = downloads_dir / raw
+        if candidate.exists():
+            return str(candidate.resolve())
+    return None
+
+
+def resolve_supporting_filename(record: dict, downloads_dir: Path | None) -> str | None:
+    """Return the absolute local supporting-file path for one record, or ``None``."""
+    raw = record.get("supporting_filename") or ""
     if raw and raw.strip():
         candidate = Path(raw)
         if not candidate.is_absolute() and downloads_dir is not None:
@@ -105,7 +119,7 @@ def _row_action(record, source_url, mapping, entities_by_key) -> tuple[SyncActio
 
     A row whose PDF file is missing (download failed or never
     attempted) is still ``CREATE``: the entity is created on Uwazi
-    with its metadata (including ``pdf_url`` when the operator mapped
+    with its metadata (including ``file_url`` when the operator mapped
     it to a property), and no primary document is uploaded — the
     pusher guards the upload with ``if row.pdf_path``. A later run
     that downloads the file can re-push.
@@ -132,13 +146,16 @@ def _thesaurus_ids_from_mapping(template: UwaziTemplate, mapping: UwaziMapping) 
 
 
 def _fetch_existing_entities(client: UwaziClient, mapping: UwaziMapping) -> dict[str, str]:
-    """Fetch and index existing Uwazi entities for ``mapping`` once per plan."""
+    """Fetch and index existing Uwazi entities for ``mapping`` once per plan.
+
+    The index spans every instance language so a row is treated as
+    already uploaded when its link key value exists in any language.
+    """
     if mapping.identity.key_source is not KeySource.KEY_FIELD_AND_PROPERTY:
         return {}
     fetcher = ExistingEntitiesFetcher(client)
     return fetcher.fetch(
         template_name=mapping.template,
-        language=mapping.default_language,
         key_property=mapping.identity.key_property or "",
         select_filter_name=mapping.identity.select_filtering_name,
         select_filter_values=mapping.identity.select_filtering_options,
@@ -203,6 +220,7 @@ def _build_plan_row(
     pdf_path = resolve_pdf_filename(record, source_url, downloads_dir)
     record["pdf_filename"] = pdf_path
     html_path = resolve_html_filename(record, downloads_dir)
+    supporting_path = resolve_supporting_filename(record, downloads_dir)
     action, skip_reason = _row_action(record, source_url, mapping, entities_by_key)
     return SyncPlanRow(
         action=action,
@@ -220,6 +238,7 @@ def _build_plan_row(
         ),
         pdf_path=pdf_path,
         html_path=html_path,
+        supporting_path=supporting_path,
         key_value=resolve_key_value(record, source_url, mapping.identity, mapping),
         mapping_sha256=mapping.sha256,
         skip_reason=skip_reason,

@@ -96,7 +96,7 @@ def pdf_id_for(url):
     Use this at discovery time (before any download) so the DB
     ``source_url`` key, the stored ``pdf_id``, and the on-disk filename
     stem all derive from the SAME canonical URL. NEVER inline
-    ``hashlib.sha1(pdf_url.encode())`` — it skips percent-encoding
+    ``hashlib.sha1(file_url.encode())`` — it skips percent-encoding
     normalization and can create a duplicate row for the same PDF.
     """
     return f"pdf_{hashlib.sha1(_canonical_url(url).encode()).hexdigest()[:12]}"
@@ -111,6 +111,27 @@ def _pdf_filename_for(url):
     page order, label reuse, or percent-encoded vs raw-unicode form.
     """
     return f"{pdf_id_for(url)}.pdf"
+
+
+_DOC_EXTENSIONS = frozenset({".doc", ".docx", ".rtf", ".odt", ".odp", ".ods", ".xls", ".xlsx", ".ppt", ".pptx"})
+
+
+def doc_id_for(url):
+    """``doc_<sha1(canonical_url)[:12]>`` — the supporting-file id stem (mirrors pdf_id_for)."""
+    return f"doc_{hashlib.sha1(_canonical_url(url).encode()).hexdigest()[:12]}"
+
+
+def file_ext_for(url):
+    """Lowercased URL-path suffix if it is a supported document extension, else ``""``."""
+    if not isinstance(url, str) or not url:
+        return ""
+    suffix = Path(unquote(urlsplit(url.strip()).path)).suffix.lower()
+    return suffix if suffix in _DOC_EXTENSIONS else ""
+
+
+def file_filename_for(url):
+    """``doc_<sha1(canonical_url)[:12]><ext>`` (``.bin`` when the URL has no extension)."""
+    return f"{doc_id_for(url)}{file_ext_for(url) or '.bin'}"
 
 
 def _html_filename_for(url):

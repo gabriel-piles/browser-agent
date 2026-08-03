@@ -37,7 +37,7 @@ class VerificationReport(BaseModel):
     )
     observed_pdf_total: int = Field(
         default=0,
-        description="How many distinct pdf_url rows the DB has across all paths.",
+        description="How many distinct file_url rows the DB has across all paths.",
     )
     coverage_complete: bool = Field(
         default=False,

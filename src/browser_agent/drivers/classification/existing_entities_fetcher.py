@@ -7,6 +7,13 @@ calls :meth:`fetch` once and gets back a dict the row
 classifier can probe with ``O(1)`` lookups. When ``select_filter_name``
 and ``select_filter_values`` are supplied, the download is narrowed
 to entities whose value on the named select property is in the list.
+
+Entities are fetched for every language the instance exposes: in a
+multilingual Uwazi the same logical document exists once per
+language (all variants sharing one ``sharedId``), and a link-type
+key property can carry a different value in each language. An
+entity "already exists" as soon as its key value shows up in any
+language, so the dedup index must span all of them.
 """
 
 from __future__ import annotations
@@ -29,21 +36,30 @@ class ExistingEntitiesFetcher:
     def fetch(
         self,
         template_name: str,
-        language: str,
         key_property: str,
         *,
         select_filter_name: str | None = None,
         select_filter_values: tuple[str, ...] | list[str] = (),
-    ) -> list:
+    ) -> dict[str, str]:
         """Return every Uwazi entity for ``template_name`` indexed by ``key_property``.
 
-        When ``select_filter_name`` and ``select_filter_values`` are
-        both set, the download is restricted to entities whose value
-        on the named select property is in ``select_filter_values``;
-        otherwise the unfiltered template download runs.
+        The download runs once per instance language (see
+        :meth:`_instance_languages`) so the index covers the key
+        values any language variant carries. When
+        ``select_filter_name`` and ``select_filter_values`` are
+        both set, each language download is restricted to entities
+        whose value on the named select property is in
+        ``select_filter_values``; otherwise the unfiltered template
+        download runs.
         """
-        entities = self._fetch_all(template_name, language, select_filter_name, select_filter_values)
+        entities: list = []
+        for language in self._instance_languages():
+            entities.extend(self._fetch_all(template_name, language, select_filter_name, select_filter_values))
         return self._index_by_key(entities, key_property)
+
+    def _instance_languages(self) -> list[str]:
+        """Return the ISO keys of every language the instance exposes."""
+        return [language.key for language in self._client.settings.get_languages()]
 
     @staticmethod
     def _build_filters(

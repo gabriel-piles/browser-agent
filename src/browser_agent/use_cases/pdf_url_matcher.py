@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit, unquote, quote
 
 
-def expected_pdf_filename(pdf_url: str) -> str:
+def expected_pdf_filename(url: str) -> str:
     """Return ``pdf_<sha1(url)[:12]>.pdf``, the downloader's naming scheme.
 
     Mirrors ``_pdf_filename_for`` in ``script_tools/_file_utils.py``: the
@@ -24,7 +24,7 @@ def expected_pdf_filename(pdf_url: str) -> str:
     *before* hashing, so callers MUST pass the normalized (``https``)
     form.
     """
-    return f"pdf_{hashlib.sha1(PdfUrlMatcher.normalize(pdf_url).encode()).hexdigest()[:12]}.pdf"
+    return f"pdf_{hashlib.sha1(PdfUrlMatcher.normalize(url).encode()).hexdigest()[:12]}.pdf"
 
 
 @dataclass(frozen=True)
@@ -69,7 +69,7 @@ class PdfUrlMatcher:
         return UrlMatch(False, "none")
 
     @staticmethod
-    def expected_filenames_for(pdf_url: str) -> tuple[str, str]:
+    def expected_filenames_for(url: str) -> tuple[str, str]:
         """Return ``(normalized_name, original_name)`` to try both on-disk forms.
 
         A row stored with the original ``http://`` URL hashes to a name
@@ -78,8 +78,8 @@ class PdfUrlMatcher:
         is the one the downloader would have produced; ``original_name``
         is what a naive hash of the stored URL gives.
         """
-        normalized = PdfUrlMatcher.normalize(pdf_url)
-        return expected_pdf_filename(normalized), expected_pdf_filename(pdf_url)
+        normalized = PdfUrlMatcher.normalize(url)
+        return expected_pdf_filename(normalized), expected_pdf_filename(url)
 
 
 def _sorted_query(query: str) -> str:

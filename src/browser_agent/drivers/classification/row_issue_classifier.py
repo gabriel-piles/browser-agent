@@ -79,7 +79,6 @@ class RowIssueClassifier:
         """Fetch and index the existing Uwazi entities once for the whole run."""
         return self._entities_fetcher.fetch(
             template_name=mapping.template,
-            language=mapping.default_language,
             key_property=mapping.identity.key_property or "",
             select_filter_name=mapping.identity.select_filtering_name,
             select_filter_values=mapping.identity.select_filtering_options,

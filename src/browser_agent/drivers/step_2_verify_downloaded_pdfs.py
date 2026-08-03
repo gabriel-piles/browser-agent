@@ -170,16 +170,16 @@ class VerifyDownloadsDriver:
         """Render the first-N metadata rows as a markdown table for the report."""
         header = (
             "## Metadata Sample (first 25 rows)\n\n"
-            "| # | task_slug | pdf_url | pdf_filename | source_url |\n"
+            "| # | task_slug | file_url | pdf_filename | source_url |\n"
             "| --- | --- | --- | --- | --- |"
         )
         lines = []
         for idx, row in enumerate(rows, start=1):
             source_url, slug, data_json = row
             data = parse_row_data(data_json)
-            pdf_url = _short(data.get("pdf_url", ""))
+            file_url = _short(data.get("file_url", ""))
             pdf_filename = _short(data.get("pdf_filename", ""))
-            lines.append(f"| {idx} | {slug} | {pdf_url} | {pdf_filename} | {_short(source_url)} |")
+            lines.append(f"| {idx} | {slug} | {file_url} | {pdf_filename} | {_short(source_url)} |")
         return header + ("\n" + "\n".join(lines) if lines else "")
 
 

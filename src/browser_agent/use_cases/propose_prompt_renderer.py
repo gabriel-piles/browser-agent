@@ -44,7 +44,7 @@ Rules:
   ``key_source="key_field_and_property"`` with that property as
   ``key_property`` and the source URL (or a URL-derived field) as
   ``key_field`` so already-uploaded entities are detected by their link.
-- If you set ``source_url_property`` (the Uwazi property that receives the original scrape-page URL for provenance), it MUST NOT be the same property name you mapped ``pdf_url`` into. When ``pdf_url`` is mapped to a ``link``-type property (commonly named ``source_url``), leave ``source_url_property`` as ``null`` — the PDF link already populates that property, and overwriting it with the page URL destroys the identity key. Only set ``source_url_property`` to a distinct, dedicated provenance property that has no ``source`` mapping.
+- If you set ``source_url_property`` (the Uwazi property that receives the original scrape-page URL for provenance), it MUST NOT be the same property name you mapped ``file_url`` into. When ``file_url`` is mapped to a ``link``-type property (commonly named ``source_url``), leave ``source_url_property`` as ``null`` — the file link already populates that property, and overwriting it with the page URL destroys the identity key. Only set ``source_url_property`` to a distinct, dedicated provenance property that has no ``source`` mapping.
 - For the ``select_filtering`` block: when the template has one or
   more ``select`` properties whose value space partitions the
   entities in a way the operator can predict (e.g. a ``status``,

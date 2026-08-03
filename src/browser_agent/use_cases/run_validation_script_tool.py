@@ -55,7 +55,15 @@ _STATIC_CHECK_PATTERNS: list[tuple[re.Pattern[str], str]] = [
         ),
         "save_record(...) is missing the 'html_filename' key (rule 13/14). "
         "When the task downloads PDFs you MUST also save the page HTML and link it: "
-        "call result = await save_page_html(tab, out_dir, page_url), then pass "
+        "call result = await save_page_html(tab, out_dir, page_url) (add "
+        'ready_selector="<metadata element CSS>" on SPA pages where metadata '
+        "binds after load — name the late-bound metadata ITEM element (the "
+        "one your extraction queries), never a heading/title like h2 or "
+        ".main__container-header-title) and never a class that also matches "
+        "static/server-rendered duplicates of the metadata elsewhere on the "
+        "page (e.g. .document__credits-item matches the STATIC #original-text "
+        "block on vLex — name an element that only exists after the binding "
+        'pass, like metadata-item or ".document__credits metadata-item"), then pass '
         "\"html_filename\": Path(result['saved_path']).name in EVERY save_record "
         "data dict that has a pdf_filename. Omit the key only when no HTML was "
         "captured for that row.",

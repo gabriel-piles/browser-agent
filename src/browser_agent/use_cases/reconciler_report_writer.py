@@ -65,21 +65,21 @@ class ReconcilerReportWriter:
             f"- File not downloaded: {missing}\n"
             f"- Corrupt: {corrupt}\n"
             f"- Suspiciously small: {small}\n"
-            f"- Empty pdf_url: {empty}\n"
+            f"- Empty file_url: {empty}\n"
             f"- Filename mismatch (step-0 bug): {mismatch}"
         )
 
     def _table(self, per_row: list[ReconciledPdf]) -> str:
         header = (
             "## Per-row inventory\n\n"
-            "| pdf_url | verdict | match_mode | file | size | dl_status | notes |\n"
+            "| file_url | verdict | match_mode | file | size | dl_status | notes |\n"
             "| --- | --- | --- | --- | --- | --- | --- |"
         )
         rows = [self._table_row(r) for r in per_row]
         return header + ("\n" + "\n".join(rows) if rows else "")
 
     def _table_row(self, r: ReconciledPdf) -> str:
-        url = _short(r.pdf_url or r.source_url)
+        url = _short(r.file_url or r.source_url)
         dl_status = r.download_status or "-"
         return (
             f"| {url} | {r.verdict} | {r.match_mode} | "

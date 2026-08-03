@@ -71,10 +71,10 @@ def save_record(source_url: str, data: dict) -> None:
     When downloading multiple files per page (PDFs, images), call this
     once per FILE with a content-stable source_url derived from the
     file's own URL — for PDFs use ``f"{page_url}/pdf/{pdf_id}"`` where
-    ``pdf_id = pdf_id_for(pdf_url)`` (the same canonicalized hash the
+    ``pdf_id = pdf_id_for(file_url)`` (the same canonicalized hash the
     download helper uses for the filename; import it from
     ``script_tools._file_utils``). NEVER inline
-    ``hashlib.sha1(pdf_url.encode())`` — the helper percent-canonicalizes
+    ``hashlib.sha1(file_url.encode())`` — the helper percent-canonicalizes
     the URL first so the percent-encoded and raw-unicode forms of the
     same PDF collapse to one id (and one DB row); the inline hash skips
     that and creates a duplicate. NEVER use a position index
@@ -101,7 +101,19 @@ def save_record(source_url: str, data: dict) -> None:
     is ``"failed"`` OR ``pdf_filename`` is empty; existing rows from
     prior runs that predate this key are treated as already-downloaded
     and skipped (they have a non-empty ``pdf_filename`` and no
-    ``download_status``).
+    ``download_status``). For a page whose metadata rendered but that
+    has no downloadable files of its own (rule 14b), save ONE
+    metadata-only row keyed by the page URL with
+    ``download_status="no_files"`` and ``pdf_filename=""`` — the retry
+    queue skips ``no_files`` rows.
+
+    A row whose file is a non-PDF document (``.doc``/``.docx``/``.rtf``/…)
+    is a SUPPORTING row: set ``download_role="supporting"``, store the
+    on-disk basename as ``supporting_filename`` (never ``pdf_filename``),
+    keep ``file_url`` set to the file's URL, and follow the same
+    success/failure discipline (``download_status`` + ``download_error``).
+    Primary PDF rows omit ``download_role`` (default primary) and never
+    set ``supporting_filename``.
 
     When the task also captures the source HTML of the page where each
     PDF was found (supporting file), store the HTML helper's basename
@@ -115,14 +127,14 @@ def save_record(source_url: str, data: dict) -> None:
     ``source_page_url`` in the same ``data`` dict (the ``source_url``
     passed to ``save_page_html``), so downstream Uwazi mapping can
     place it on a ``link``-type property. This is the SOURCE PAGE URL,
-    never the PDF download URL (``pdf_url``). Omit when no HTML was
+    never the file download URL (``file_url``). Omit when no HTML was
     captured.
     """
     source_url = _canonical_url(source_url)
     if isinstance(data, dict):
-        _pu = data.get("pdf_url")
+        _pu = data.get("file_url")
         if isinstance(_pu, str):
-            data = {**data, "pdf_url": _canonical_url(_pu)}
+            data = {**data, "file_url": _canonical_url(_pu)}
     db_path = _resolve_db_path()
     task_slug = _resolve_task_slug()
     conn = sqlite3.connect(db_path, timeout=5.0)
@@ -145,7 +157,9 @@ def load_failed_downloads() -> list[tuple[str, dict]]:
     of raising ``OperationalError: no such table: metadata``. The filter
     matches the rule-8a retry semantics: ``download_status == "failed"``
     OR ``not pdf_filename``. Rows predating the keys with a non-empty
-    ``pdf_filename`` are skipped (treated as already downloaded).
+    ``pdf_filename`` are skipped (treated as already downloaded). Rows
+    with ``download_status == "no_files"`` (metadata-only pages, rule
+    14b) are excluded — there is nothing to retry.
     """
     db_path = _resolve_db_path()
     conn = sqlite3.connect(db_path, timeout=5.0)
@@ -158,6 +172,8 @@ def load_failed_downloads() -> list[tuple[str, dict]]:
     pending = []
     for source_url, raw in rows:
         data = json.loads(raw)
+        if data.get("download_status") == "no_files":
+            continue
         if data.get("download_status") == "failed" or not data.get("pdf_filename"):
             pending.append((source_url, data))
     return pending

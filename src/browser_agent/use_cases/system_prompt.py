@@ -159,6 +159,10 @@ step. Do NOT jump to writing a script before you have explored the page.
     - PDF DOWNLOAD DRILL — when the task downloads multiple PDFs per
       page, download at least 2 from one page and print their final
       on-disk paths. Confirm paths are unique and non-colliding.
+    - SUPPORTING-FILE DRILL — when the task's pages expose non-PDF
+      document links (rule 8), download at least one with
+      ``download_file_*`` and print its final on-disk path; when a page
+      exposes none, print that no supporting files exist.
     - SUB-PAGE COVERAGE — when the task enumerates multiple peer
       sub-pages (rule 16), exercise at least one filter value from
       EVERY sub-page and print the row count from each.
@@ -229,20 +233,22 @@ positional args or a bare arrow function, and ``el.text_content(``
 
       from script_tools.save_record import save_record, load_failed_downloads
       from script_tools.save_page_html import save_page_html
-      from script_tools.pdf_download import download_pdf_curl_cffi, download_pdf_browser
+      from script_tools.pdf_download import download_pdf_curl_cffi, download_pdf_browser, download_file_curl_cffi, download_file_browser
       from script_tools.page_wait import wait_for_page_ready, wait_for_anchors, prepare_page_wait
       from script_tools.start_browser import start_browser
       from script_tools.dom_helpers import get_text, get_attr, trusted_click
       from script_tools.form_helpers import select_filter_value
-      from script_tools._file_utils import pdf_id_for
+      from script_tools._file_utils import pdf_id_for, doc_id_for
 
    Signatures (full contracts in the docstrings)::
 
       def save_record(source_url: str, data: dict) -> None          # SYNC — do NOT await
       def load_failed_downloads() -> list[tuple[str, dict]]
-      async def save_page_html(tab, save_path, source_url, filename=None, card_selector=None) -> dict
+      async def save_page_html(tab, save_path, source_url, filename=None, card_selector=None, ready_selector=None) -> dict
       async def download_pdf_curl_cffi(url, save_path, tab=None) -> dict
       async def download_pdf_browser(tab, url, save_path) -> dict
+      async def download_file_curl_cffi(url, save_path, tab=None) -> dict
+      async def download_file_browser(tab, url, save_path) -> dict
       async def wait_for_page_ready(tab, url=None, timeout=30.0, quiet_window_ms=500) -> None
       async def wait_for_anchors(tab, selector, timeout=8.0, poll_interval=0.2, required_polls=2) -> tuple[int, str]
       async def prepare_page_wait(tab) -> None
@@ -252,6 +258,7 @@ positional args or a bare arrow function, and ``el.text_content(``
       async def select_filter_value(tab, selector: str, value) -> bool
       async def start_browser(headless=None, user_data_dir=None) -> Browser
       def pdf_id_for(url: str) -> str
+      def doc_id_for(url) -> str
 
    ``start_browser`` is the ONLY way to launch the browser (the driver
    rewrites any ``zd.start`` to it; emit ``start_browser`` directly).
@@ -443,11 +450,14 @@ positional args or a bare arrow function, and ``el.text_content(``
    navigation, clicking, scrolling, and API calls (lint-enforced: no
    requests/httpx/aiohttp/urllib). All fetching/navigation goes through
    ``tab.get``; JS/XHR through ``tab.evaluate``.
-   PDF downloads — first PROBE with the ``download_pdf`` tool, then use
+   File downloads — PDFs (primary) and non-PDF documents (supporting) —
+   first PROBE with the ``download_pdf`` tool, then use
    the matching ``script_tools`` helper: ``download_pdf_curl_cffi(url,
    out_dir, tab)`` when the probe succeeded, ``download_pdf_browser(tab,
    url, out_dir)`` when it failed (WAF). Pass ``tab`` so cookies are
    shared. A ``curl_cffi`` -> ``browser_fetch`` fallback is supported.
+
+   Non-PDF document links (URL ends in ``.doc``/``.docx``/``.rtf``/``.odt``/``.odp``/``.ods``/``.xls``/``.xlsx``/``.ppt``/``.pptx``) are downloaded with the matching ``download_file_curl_cffi(url, out_dir, tab)`` / ``download_file_browser(tab, url, out_dir)`` helper — the SAME strategy the ``download_pdf`` probe chose for PDFs; no separate probe. Same result dict, same try/except + ``save_record`` discipline, same throttle/403 handling — never use the ``download_pdf_*`` helpers for them (their magic check raises on a non-PDF body) and never use ``download_file_*`` for PDFs.
    Both helpers already throttle requests and detect Cloudflare
    rate-limiting (consecutive HTTP 403s), aborting the run with a resume
    message — do NOT add your own backoff, block-detection, or abort logic
@@ -463,10 +473,45 @@ positional args or a bare arrow function, and ``el.text_content(``
    (empty string, not None/omitted) and ``download_status="failed"`` plus
    ``download_error`` (lint-enforced).
 
-8a. Retry failed downloads — before downloading NEW PDFs, call
-    ``load_failed_downloads()`` (rule 0) and re-attempt those URLs with
-    the chosen helper. It returns ``[]`` on a fresh run. Update each
-    retried row's ``download_status`` to ``"downloaded"`` on success.
+8a. Retry failed downloads — before downloading NEW files, call
+    ``load_failed_downloads()`` (rule 0). It returns ``[]`` on a fresh
+    run. Re-attempt PRIMARY rows (``download_role`` absent) with the
+    PDF helper and SUPPORTING rows (``download_role="supporting"``) with
+    the matching ``download_file_*`` helper; on success update
+    ``pdf_filename`` (primary) or ``supporting_filename`` (supporting)
+    and ``download_status="downloaded"``.
+    Skip rows whose data has no ``file_url`` — metadata-only ``no_files``
+    rows (rule 14b) carry none, and re-attempting them is meaningless.
+    Failed-document retry (MANDATORY, lint-enforced) — ``main()`` MUST
+    contain a retry phase AFTER the worker ``gather`` and BEFORE
+    ``browser.stop()``. Importing ``load_failed_downloads`` without
+    calling it is a lint FAILURE. ``load_failed_downloads()`` also
+    returns rows with ``download_status == "load_failed"`` (metadata-
+    gate timeout, navigation failure). These rows carry
+    ``source_page_url`` but no ``file_url``. Handle them FIRST, BEFORE
+    the PDF-download retry: re-process each SERIALLY on
+    ``browser.main_tab`` (the main tab is always visible so the metadata
+    gate passes — no concurrency race). Then run the existing PDF-
+    download retry for rows WITH ``file_url``. Required structure in
+    ``main()``, after ``await asyncio.gather(...)``::
+
+        # --- retry phase (rule 8a) ---
+        failed = load_failed_downloads()
+        for source_url, data in failed:
+            if data.get("download_status") == "load_failed":
+                page_url = data.get("source_page_url", "")
+                if page_url:
+                    print(f"  RETRY load_failed: {page_url}")
+                    await process_document(browser.main_tab, page_url, out_dir, 0)
+                continue
+            if not data.get("file_url"):
+                continue
+            # ... existing PDF-download retry for failed downloads ...
+
+    This catches any documents that still failed after the inline
+    metadata-gate retry (rule 14b). The retry phase is NOT optional even
+    if the smoke test passes — it is the recovery path that makes the
+    script resilient to concurrency races on re-runs.
 
 9. ``tab.evaluate`` return types — the return value is a Python
    dict/list, not a string. NEVER slice it with ``[:N]`` (raises); use
@@ -483,7 +528,7 @@ positional args or a bare arrow function, and ``el.text_content(``
     run at page 3000 keeps the first 2999 rows in SQLite). ``source_url``
     is the PRIMARY KEY (upsert, not duplicate): for a page-scrape use the
     page URL; for a per-PDF download use
-    ``f"{page_url}/pdf/{pdf_id}"`` with ``pdf_id = pdf_id_for(pdf_url)``
+    ``f"{page_url}/pdf/{pdf_id}"`` with ``pdf_id = pdf_id_for(file_url)``
     (rule 13), never a position index. Multi-value fields MUST be a
     Python list of strings, never a comma-joined string (downstream
     thesaurus matching expands lists element-by-element; a joined
@@ -499,21 +544,37 @@ positional args or a bare arrow function, and ``el.text_content(``
 
 13. PDF file naming — the download helpers derive the on-disk filename
     from the PDF's URL (``pdf_<sha1(canonical_url)[:12]>.pdf`` via
-    ``pdf_id_for``); you do NOT name the file. Use ``pdf_id_for(pdf_url)``
+    ``pdf_id_for``); you do NOT name the file. Use ``pdf_id_for(file_url)``
     ONCE at discovery time and reuse it as the DB key, the stored
     ``pdf_id``, and (post-download) the filename stem — never inline
     ``hashlib.sha1`` (the helper percent-canonicalizes; the inline hash
-    does not). ``source_url`` MUST be content-stable (``pdf_id``), never
-    a position index. Skip non-PDF links at extraction time (the helper
-    validates ``%PDF``/``%%EOF`` and RAISES on a non-PDF body, wasting a
-    retry slot): gate with ``/[.]pdf([?]|$)/`` on the URL, or require
-    ``Content-Type: application/pdf`` when the href has no extension.
+    does not). The supporting helpers derive
+    ``doc_<sha1(canonical_url)[:12]><ext>`` via ``doc_id_for``; reuse
+    the same ``doc_id`` as the DB key, the stored ``doc_id``, and the
+    filename stem. ``source_url`` MUST be content-stable (``pdf_id``), never
+    a position index. Row roles — every downloaded file is a row of
+    exactly one role. PRIMARY (PDF, default): gate with
+    ``/[.]pdf([?]|$)/`` on the URL, record
+    ``pdf_filename``/``pdf_id``/``file_url`` per rule 13 above, and key
+    the row ``f"{page_url}/pdf/{pdf_id}"``. SUPPORTING (non-PDF
+    document): URL ends in a supported document extension (rule 8 list)
+    — download via ``download_file_*`` and record
+    ``download_role="supporting"``, ``supporting_filename`` =
+    ``Path(result["saved_path"]).name``, ``file_url`` = the file's
+    absolute percent-encoded URL, the human label/format in
+    ``pdf_name``/``pdf_type``, ``source_page_url``, and key the row
+    ``f"{page_url}/doc/{doc_id}"`` with ``doc_id = doc_id_for(file_url)``.
+    A supporting row NEVER sets ``pdf_filename`` (that key routes a row
+    to the primary slot); on failure set ``supporting_filename=""``,
+    ``download_status="failed"``, ``download_error``. Skip links that
+    are neither PDF nor in the supported document-extension set
+    (images, archives, scripts) as before.
     HARD RULES: never pass a filename as ``save_path`` (pass the dir);
     never use a label/language/type/position in the filename; always
     read ``pdf_filename`` from ``result["saved_path"]`` so the DB row
     matches the file on disk. The validation script MUST download at
     least 2 PDFs and print their final paths to prove uniqueness.
-    ``pdf_url`` MUST be a percent-encoded absolute URL with no raw
+    ``file_url`` MUST be a percent-encoded absolute URL with no raw
     spaces — build it with ``urljoin(base, quote(href, safe="/%"))``,
     never bare-concatenate a host onto an href.
 
@@ -522,6 +583,33 @@ positional args or a bare arrow function, and ``el.text_content(``
     ``save_page_html(tab, out_dir, page_url)``. Store
     ``Path(result["saved_path"]).name`` as ``html_filename`` and the
     page URL as ``source_page_url`` in the ``save_record`` data dict.
+
+    On SPA pages where metadata/details render AFTER initial load (Aurelia/
+    React shells whose captured HTML shows placeholder comments like
+    <!--anchor--> instead of content), you MUST pass ``ready_selector`` naming
+    the LATE-BOUND METADATA ITEM element — the same element your
+    metadata-extraction ``tab.evaluate`` queries, e.g. ``save_page_html(tab,
+    out_dir, page_url, ready_selector=".document__credits metadata-item")``.
+    The helper waits for the selector to match an element WITH RENDERED
+    CONTENT (non-empty text or child elements) before capturing — once up
+    front and again right before the final capture — and re-captures stale
+    files that lack it. FORBIDDEN as ``ready_selector``: page titles/headings
+    (``h1``/``h2``/``.main__container-header-title``) or any element that
+    already carries text in the initial shell — under parallel tabs the
+    heading binds with the first render, passing the gate seconds BEFORE the
+    metadata XHR lands, and the saved HTML keeps the <!--anchor-->
+    placeholders. When several candidates exist, pick an element that
+    ONLY EXISTS after the metadata binding pass — a framework
+    custom-element tag (e.g. ``metadata-item``) or a descendant
+    selector naming it (e.g. ``.document__credits metadata-item``).
+    NEVER use a bare class that also matches SERVER-RENDERED duplicates
+    of the same metadata elsewhere on the page — on vLex
+    ``.document__credits-item`` matches the STATIC ``#original-text``
+    block, so the gate passes instantly and the capture keeps the
+    ``<!--anchor-->`` shell (and the self-heal never re-captures it).
+    The helper activates the tab before waiting: hidden background tabs
+    never run IntersectionObserver/RAF, so late-bound rendering only
+    happens in the visible tab; binding persists once rendered.
     CRITICAL ORDERING — ``save_page_html`` scrolls the page AND mutates
     the DOM (strips reveal styles, removes ``#pdf-container``/
     ``.pdf-viewer``), which on SPA sites (vLex, Aurelia, React) can
@@ -538,6 +626,53 @@ positional args or a bare arrow function, and ``el.text_content(``
     ``save_page_html`` — holding element handles across ``save_page_html``
     is FORBIDDEN: its scroll + DOM strip can trigger SPA re-renders that
     detach the held handles (``DOM.resolveNode`` -32000).
+
+14b. Per-document gate + download-widget variants — when the task
+    processes many document pages, gate each page's readiness on the
+    element that carries the DATA you came for (the late-bound metadata
+    item from rule 14), NEVER on the download widget. A page whose
+    metadata rendered but that exposes no download links is VALID
+    (wrapper/"solicitud" pages whose files live under related
+    documents); gating on the widget marks it "FAILED to load" and
+    loses its metadata. Order inside the per-document task: (1) wait
+    for the metadata gate, (2) extract ALL metadata + title, (3) THEN
+    discover the download links.
+    Container variants — during exploration, visit at least two
+    document pages of DIFFERENT types and enumerate EVERY container
+    that holds the download links (e.g. a ``#downloadable-formats``
+    block, a ``#formatsModal`` dialog, a dropdown menu): sibling page
+    types render different containers. In the script, wait with
+    ``wait_for_anchors(tab, "<selA>, <selB>", timeout=20)`` on the
+    comma-joined variant selectors (modal/dropdown content can bind
+    15-20s after the metadata — the 8s default is too short), then
+    extract from whichever variant matched.
+    Scope by CONTAINER, never by href document-id — download hrefs may
+    carry an internal id that differs from the page URL slug (a page
+    ``/vid/947698936`` serves its own files under
+    ``/vid/947699074/download/``), so filtering extracted hrefs by the
+    page's own ``/vid/`` slug silently drops every file.
+    Zero files — when the variant wait times out with zero matches
+    while the metadata gate passed, record ONE metadata-only row and
+    move on (include ``html_filename`` too when the task captures page
+    HTML per rule 14)::
+
+        save_record(page_url, {**metadata,
+                    "pdf_filename": "", "download_status": "no_files",
+                    "source_page_url": page_url})
+
+    NEVER print "FAILED to load" for a page whose metadata rendered —
+    reserve load failure for a metadata-gate timeout (a real
+    navigation/render failure).
+    Metadata-gate retry — when the metadata gate times out, do NOT
+    immediately record ``load_failed``. Re-navigate
+    (``await tab.get(page_url)``), re-activate the tab
+    (``await tab.bring_to_front()`` — rule 15h), and re-poll the gate
+    up to 2 more times. Only after all retries fail, record
+    ``download_status="load_failed"``. A metadata-gate timeout under
+    concurrency is almost always a tab-visibility race (rule 15h), not
+    a dead page — one re-navigation with activation resolves it.
+    Structure the retry as a loop around the navigate + activate + poll
+    block, not as duplicated code.
 
 15. Concurrency / multi-tab — ONLY when the task prompt carries a
     ``# Concurrency requirement`` directive of the form
@@ -591,9 +726,10 @@ positional args or a bare arrow function, and ``el.text_content(``
        ``a.download-action[data-type='application/pdf']``), not one
        container id — sibling pages may render a different container
        (dropdown vs modal); when a widget aggregates other documents'
-       files, filter extracted hrefs to the current document by document
-       id (e.g. the page's own ``/vid/...`` slug or
-       ``data-document-id``). On per-PDF extraction failure during the
+       files, scope extraction to the current document's own container
+       per rule 14b; filter by href document-id ONLY when exploration
+       proved the download hrefs carry the current page's own id (rule
+       14b shows they can differ). On per-PDF extraction failure during the
        task, call ``save_record`` with ``download_status="failed"`` —
        NEVER silently skip: silent skips become invisible gaps in
        ``metadata.db`` and the script's retry phase cannot recover them.
@@ -606,6 +742,21 @@ positional args or a bare arrow function, and ``el.text_content(``
     g) Validation — run the worker phase on a slice with MORE documents
        than tabs (at least N+1) so tab reuse is exercised, and print
        which tab handled which document.
+   h) Tab activation before the metadata gate — hidden background tabs
+      never fire IntersectionObserver/RAF, so SPA late-bound metadata
+      (the ``metadata-item`` block on Aurelia/vLex/Corte IDH pages, React
+      lazy mounts) NEVER renders while the tab is hidden — the gate polls
+      for 150s and times out. Before the metadata gate in each per-
+      document task, activate the worker tab::
+
+          await tab.bring_to_front()
+
+      The metadata persists in the DOM once rendered, so one activation
+      before the gate suffices even if another worker activates its tab
+      a moment later. This mirrors the activation ``save_page_html``
+      already does internally (rule 14) — the gate needs it too because
+      it runs BEFORE ``save_page_html``. Omit for single-tab scripts
+      (rule 1) where the one tab is always visible.
 
 16. Per-sub-page selector verification — when the task enumerates
     multiple peer sub-pages (e.g. "Admissibilities, Inadmissibilities,
