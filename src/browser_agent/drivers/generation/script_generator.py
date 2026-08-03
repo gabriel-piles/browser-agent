@@ -2,7 +2,7 @@
 
 Wires the :class:`ZendriverBrowserSession` (shared with the
 :class:`InProcessScriptRunnerAdapter`), the
-:class:`OpenCodeZenAdapter` LLM, and the
+:class:`OllamaAdapter` LLM, and the
 :class:`CurlCffiPdfDownloaderAdapter` PDF downloader into an
 :class:`AgentDeps` and hands the resulting
 :class:`CodeGenerationRequest` to the
@@ -24,7 +24,7 @@ from browser_agent.adapters.execution.curl_cffi_pdf_downloader_adapter import (
 from browser_agent.adapters.execution.in_process_script_runner_adapter import (
     InProcessScriptRunnerAdapter,
 )
-from browser_agent.adapters.llm.opencode_zen_adapter import OpenCodeZenAdapter
+from browser_agent.adapters.llm.ollama_adapter import OllamaAdapter
 from browser_agent.configuration import ZENDRIVER_HEADLESS
 from browser_agent.domain.code_generation_request import CodeGenerationRequest
 from browser_agent.domain.generated_script import GeneratedScript
@@ -79,7 +79,7 @@ class ScriptGenerator:
     ) -> AgentDeps:
         """Wire LLM, browser, script runner and PDF downloader into :class:`AgentDeps`."""
         return AgentDeps(
-            llm=OpenCodeZenAdapter(),
+            llm=OllamaAdapter(),
             browser_session=session,
             script_runner=InProcessScriptRunnerAdapter(
                 browser_session=session,

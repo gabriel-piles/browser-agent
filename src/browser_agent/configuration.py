@@ -13,9 +13,9 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 # LLM connection — consumed by ``adapters/llm/ollama_adapter.py``.
 OLLAMA_BASE_URL = "https://ollama.com/v1"
-ORCHESTRATOR_MODEL = "deepseek-v4-flash:cloud"
+ORCHESTRATOR_MODEL = "deepseek-v4-flash:0731-cloud"
 MAX_LLM_CALLS = 70
-VERIFICATION_MODEL = "deepseek-v4-flash:cloud"
+VERIFICATION_MODEL = "deepseek-v4-flash:0731-cloud"
 VERIFICATION_PDF_COUNT = 10
 
 # LLM connection — consumed by ``adapters/llm/opencode_zen_adapter.py``.

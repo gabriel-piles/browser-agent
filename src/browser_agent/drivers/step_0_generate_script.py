@@ -1,7 +1,7 @@
 """Top-level driver class for the Zendriver script generation service.
 
 Reads a task from argv (or the bundled default), wires the
-:class:`OpenCodeZenAdapter` and :class:`ZendriverBrowserSession` into
+:class:`OllamaAdapter` and :class:`ZendriverBrowserSession` into
 an :class:`AgentDeps`, runs the use case, and writes the
 executable source to ``data/runs/<active_run>/scripts/<date>__<slug>.py``
 for the operator to launch. The structured
