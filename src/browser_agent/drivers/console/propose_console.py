@@ -43,7 +43,10 @@ class ProposeConsole:
     def _print_body(self, mapping: UwaziMapping) -> None:
         """Print counts, skipped entries, and the identity block."""
         print(f"  template:       {mapping.template}")
-        print(f"  properties:     {len(mapping.properties)}")
+        if mapping.registry_template:
+            print(f"  registry:       {mapping.registry_template}")
+            print(f"  date_property:  {mapping.scraper_date_property!r}")
+            print(f"  relationship:    {mapping.scraper_document_relationship!r}")
         print(f"  skipped:        {len(mapping.skipped)}")
         self._print_skipped(mapping)
         self._print_identity(mapping.identity)

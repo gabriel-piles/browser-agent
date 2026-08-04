@@ -70,6 +70,8 @@ class MetadataValueTransformer:
         for prop in mapping.properties:
             if prop.type in (FieldType.TITLE, FieldType.SKIPPED, FieldType.FILE):
                 continue
+            if mapping.registry_template and prop.template_name == mapping.registry_template:
+                continue
             out[prop.name] = self._property_value(
                 record,
                 prop,
@@ -85,6 +87,53 @@ class MetadataValueTransformer:
             and self._looks_like_url(source_url)
         ):
             out[mapping.identity.source_url_property] = self._link_value(source_url, source_url)
+        return {k: v for k, v in out.items() if v is not None}
+
+    def build_registry_metadata_for_row(
+        self,
+        record: dict,
+        source_url: str,
+        mapping: UwaziMapping,
+        thesaurus_lookup: dict[str, dict[str, str | None]],
+        thesaurus_parents: dict[str, dict[str, str | None]] | None = None,
+        relationship_title_to_id: dict[str, dict[str, str]] | None = None,
+        thesaurus_lookup_by_id: dict[str, dict[str, str | None]] | None = None,
+        registry_template: UwaziTemplate | None = None,
+    ) -> dict:
+        """Build the registry-template metadata dict for one record.
+
+        Includes shared properties (template_name null or equal to the
+        primary template name) plus registry-only properties
+        (template_name=registry_template). Excludes the
+        ``scraper_date_property`` and ``scraper_document_relationship``
+        which are filled at push time.
+        """
+        registry_name = mapping.registry_template
+        skip_names = {
+            mapping.scraper_date_property,
+            mapping.scraper_document_relationship,
+        }
+        out: dict = {}
+        for prop in mapping.properties:
+            if prop.type in (FieldType.TITLE, FieldType.SKIPPED, FieldType.FILE):
+                continue
+            if prop.name in skip_names:
+                continue
+            is_shared = prop.template_name in (None, mapping.template) and (
+                self._template is None or self._template.property_by_name(prop.name) is not None
+            )
+            is_registry = prop.template_name == registry_name
+            if not (is_shared or is_registry):
+                continue
+            out[prop.name] = self._property_value(
+                record,
+                prop,
+                source_url,
+                thesaurus_lookup,
+                thesaurus_parents,
+                relationship_title_to_id,
+                thesaurus_lookup_by_id,
+            )
         return {k: v for k, v in out.items() if v is not None}
 
     def _relationship_map_for(self, prop, relationship_title_to_id) -> dict[str, str] | None:

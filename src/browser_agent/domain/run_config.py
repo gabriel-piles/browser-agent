@@ -40,6 +40,18 @@ class RunConfig(BaseModel):
             "When None, every row in the metadata db is included."
         ),
     )
+    scraper_registry_template: str | None = Field(
+        default=None,
+        description="Name of a second Uwazi template (scraper-registry) mapped alongside `template`; None disables the registry flow.",
+    )
+    scraper_date_property: str | None = Field(
+        default=None,
+        description="Registry-template property set to the entity creation date at upload time.",
+    )
+    scraper_document_relationship: str | None = Field(
+        default=None,
+        description="Registry-template relationship property linking the registry entity to the primary `template` entity.",
+    )
     parallel_runners: int | None = Field(
         default=None,
         ge=1,

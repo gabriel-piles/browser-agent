@@ -40,12 +40,10 @@ async def traced_tool(name: str, *, summary: str = "") -> AsyncIterator[None]:
         yield
     except Exception:
         agent_logger.bind(tool=name).exception(
-            f"TOOL   FAILED elapsed={{elapsed:.1f}}s{suffix}",
-            elapsed=time.monotonic() - started,
+            f"TOOL   FAILED elapsed={time.monotonic() - started:.1f}s{suffix}",
         )
         raise
     else:
         agent_logger.bind(tool=name).info(
-            f"TOOL   done   elapsed={{elapsed:.1f}}s{suffix}",
-            elapsed=time.monotonic() - started,
+            f"TOOL   done   elapsed={time.monotonic() - started:.1f}s{suffix}",
         )

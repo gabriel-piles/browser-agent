@@ -13,6 +13,7 @@ class SyncAction(str, Enum):
     """The action :class:`SyncPlan` will take for one row."""
 
     CREATE = "create"
+    CREATE_REGISTRY_ONLY = "create_registry_only"
     UPDATE = "update"
     SKIP = "skip"
 
@@ -40,6 +41,12 @@ class SyncPlanRow(BaseModel):
     skip_reason: str | None = Field(
         default=None,
         description="Why the plan chose to skip this row (e.g. 'already_on_uwazi').",
+    )
+    registry_metadata: dict = Field(
+        default_factory=dict, description="Property name -> value dict for the registry template entity."
+    )
+    primary_shared_id: str | None = Field(
+        default=None, description="Existing primary-entity shared id when CREATE_REGISTRY_ONLY; None otherwise."
     )
 
 

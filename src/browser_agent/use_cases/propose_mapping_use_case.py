@@ -51,17 +51,49 @@ class ProposeMappingUseCase:
         template_name: str,
         catalog: MetadataFieldCatalog,
         output_path: Path,
+        registry_template_name: str | None = None,
+        scraper_date_property: str | None = None,
+        scraper_document_relationship: str | None = None,
     ) -> UwaziMapping:
         """Run the LLM and persist the resulting draft mapping to ``output_path``."""
+        self._validate_registry_keys(registry_template_name, scraper_date_property, scraper_document_relationship)
         template = self._resolve_template(template_name)
+        registry_template = self._resolve_template(registry_template_name) if registry_template_name else None
         thesauri_by_id = self._thesauri_by_id(template.default_language)
         agent = self._build_agent(self._llm.get_model())
-        prompt = self._renderer.user_prompt(template, catalog, thesauri_by_id)
+        prompt = self._renderer.user_prompt(
+            template,
+            catalog,
+            thesauri_by_id,
+            registry_template=registry_template,
+            scraper_date_property=scraper_date_property,
+            scraper_document_relationship=scraper_document_relationship,
+        )
         draft = await self._run_llm(agent, prompt)
-        mapping = self._assembler.assemble(draft, template)
-        self._filler.apply(mapping, template, thesauri_by_id)
+        mapping = self._assembler.assemble(
+            draft,
+            template,
+            registry_template=registry_template,
+            scraper_date_property=scraper_date_property,
+            scraper_document_relationship=scraper_document_relationship,
+        )
+        self._filler.apply(mapping, template, thesauri_by_id, registry_template=registry_template)
         self._write_yaml(mapping, output_path)
         return mapping
+
+    def _validate_registry_keys(
+        self,
+        registry_template_name: str | None,
+        scraper_date_property: str | None,
+        scraper_document_relationship: str | None,
+    ) -> None:
+        """Enforce that the three registry keys are all set or all None."""
+        keys = (registry_template_name, scraper_date_property, scraper_document_relationship)
+        if any(keys) and not all(keys):
+            raise ValueError(
+                "scraper_registry_template, scraper_date_property, and "
+                "scraper_document_relationship must all be set together or all be None."
+            )
 
     def _build_agent(self, model: Model) -> Agent:
         """Construct the pydantic-ai agent with the propose prompt + result type."""

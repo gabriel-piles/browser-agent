@@ -52,6 +52,10 @@ class MappedProperty(BaseModel):
         description="Constant value for entries with source=None; None leaves the property unset.",
     )
     notes: str | None = Field(default=None, description="Free-form human notes for the reviewer.")
+    template_name: str | None = Field(
+        default=None,
+        description="Primary-template properties carry the primary template name; registry-only properties carry the registry template name. Legacy YAML may still emit null (= primary).",
+    )
 
     @field_validator("default_value", mode="before")
     @classmethod
@@ -64,12 +68,20 @@ class MappedProperty(BaseModel):
         return value
 
     @classmethod
-    def from_template_and_draft(cls, template_prop, draft: LlmFieldDraft | None) -> MappedProperty:
+    def from_template_and_draft(
+        cls,
+        template_prop,
+        draft: LlmFieldDraft | None,
+        template_name: str | None = None,
+    ) -> MappedProperty:
         """Merge a live template property with an optional LLM draft.
 
         When ``draft`` is ``None`` the entry is a source-less default
         placeholder. The ``type`` and ``required`` come from the live
         template so the YAML always reflects the real Uwazi shape.
+        ``template_name`` tags the property with its owning template
+        (primary properties carry the primary template name; registry-only
+        properties carry the registry name).
         """
         return cls(
             name=template_prop.name,
@@ -81,12 +93,13 @@ class MappedProperty(BaseModel):
             parse_formats=tuple(draft.parse_formats or ()) if draft is not None else (),
             default_value=draft.default_value if draft is not None else None,
             notes=draft.notes if draft is not None else None,
+            template_name=template_name,
         )
 
     @classmethod
-    def title_from_draft(cls, title_prop, draft: LlmFieldDraft | None) -> MappedProperty:
+    def title_from_draft(cls, title_prop, draft: LlmFieldDraft | None, template_name: str | None = None) -> MappedProperty:
         """Build the title entry: forced to :attr:`FieldType.TITLE`, thesaurus dropped."""
-        entry = cls.from_template_and_draft(title_prop, draft)
+        entry = cls.from_template_and_draft(title_prop, draft, template_name=template_name)
         return entry.model_copy(update={"type": FieldType.TITLE, "thesaurus": None})
 
     def match_rank(self) -> int:

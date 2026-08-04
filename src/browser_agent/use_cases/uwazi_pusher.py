@@ -7,8 +7,8 @@ outcome in an :class:`ApplyResult`.
 """
 
 from __future__ import annotations
-
 import threading
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -92,11 +92,23 @@ class UwaziPusher:
                 with lock:
                     progress.begin_active()
                 shared_id = self._create_entity(client, row, mapping)
+                if mapping.registry_template:
+                    self._create_registry_and_link(client, row, mapping, shared_id)
                 with lock:
                     progress.end_active()
                     self._record_result(out, row.language, row.action)
                     print(
                         f"  [{i}/{total}] {progress.format_prefix()} | created {row.language} '{row.title}' -> {shared_id}"
+                    )
+            elif row.action is SyncAction.CREATE_REGISTRY_ONLY:
+                with lock:
+                    progress.begin_active()
+                registry_shared_id = self._create_registry_and_link(client, row, mapping, row.primary_shared_id)
+                with lock:
+                    progress.end_active()
+                    self._record_result(out, row.language, row.action)
+                    print(
+                        f"  [{i}/{total}] {progress.format_prefix()} | created registry {row.language} '{row.title}' -> {registry_shared_id}"
                     )
             elif row.action is SyncAction.SKIP:
                 with lock:
@@ -115,6 +127,72 @@ class UwaziPusher:
         entity = Entity(template=mapping.template, title=row.title, published=mapping.publish, metadata=row.metadata)
         files = self._build_entity_files(row, mapping)
         return client.entities.upload(entity=entity, language=row.language, files=files or None)
+
+    def _create_registry_and_link(
+        self,
+        client: UwaziClient,
+        row,
+        mapping: UwaziMapping,
+        primary_shared_id: str | None,
+    ) -> str:
+        """Create the registry entity, set its date + relationship, link to the primary."""
+        registry_metadata = dict(row.registry_metadata)
+        if mapping.scraper_date_property:
+            registry_metadata[mapping.scraper_date_property] = int(datetime.now(timezone.utc).timestamp() * 1000)
+        if mapping.scraper_document_relationship and primary_shared_id:
+            registry_metadata[mapping.scraper_document_relationship] = [{"value": primary_shared_id}]
+        registry_entity = Entity(
+            template=mapping.registry_template,
+            title=row.title,
+            published=mapping.publish,
+            metadata=registry_metadata,
+        )
+        registry_shared_id = client.entities.upload(entity=registry_entity, language=row.language, files=None)
+        if mapping.scraper_document_relationship and primary_shared_id and registry_shared_id:
+            self._create_relationship(client, row, mapping, registry_shared_id, primary_shared_id)
+        return registry_shared_id
+
+    def _create_relationship(
+        self,
+        client: UwaziClient,
+        row,
+        mapping: UwaziMapping,
+        registry_shared_id: str,
+        primary_shared_id: str,
+    ) -> None:
+        """Create the Uwazi relationship linking the registry entity to the primary one."""
+        from uwazi_api.domain.reference import Reference
+
+        relation_type = client.relationships.get_relation_type_by_name(mapping.scraper_document_relationship or "")
+        if relation_type is None:
+            print(
+                f"    WARNING: relation type {mapping.scraper_document_relationship!r} not found; skipping relationship creation"
+            )
+            return
+        file_id = self._resolve_file_id(client, registry_shared_id, row)
+        try:
+            client.relationships.create(
+                file_entity_shared_id=registry_shared_id,
+                file_id=file_id,
+                reference=Reference(text=""),
+                to_entity_shared_id=primary_shared_id,
+                relationship_type_id=relation_type.id,
+                language=row.language,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"    WARNING: relationship creation failed for {registry_shared_id} -> {primary_shared_id}: {exc}")
+
+    @staticmethod
+    def _resolve_file_id(client: UwaziClient, registry_shared_id: str, row) -> str:
+        """Return the registry entity's first file id, or empty string when it has none."""
+        try:
+            entity = client.entities.get_one(registry_shared_id, language=row.language)
+            documents = getattr(entity, "documents", None) or []
+            if documents:
+                return documents[0].id
+        except Exception:  # noqa: BLE001
+            pass
+        return ""
 
     def _build_entity_files(self, row, mapping: UwaziMapping) -> list[EntityFileUpload]:
         """Build the primary + supporting file uploads for one entity."""

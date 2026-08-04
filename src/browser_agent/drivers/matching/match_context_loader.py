@@ -49,14 +49,26 @@ class MatchContextLoader:
         thesauri_by_id = self._load_thesauri_by_id(mapping)
         relationships_by_id = self._load_relationships_by_id(mapping, template)
         field_counters = self._aggregate_field_counters()
+        registry_template = self._load_registry_template(mapping) if mapping.registry_template else None
+        if registry_template is not None:
+            registry_rels = self._load_relationships_by_id(mapping, registry_template)
+            relationships_by_id = {**relationships_by_id, **registry_rels}
         return MatchContext(
             mapping=mapping,
             template=template,
             thesauri_by_id=thesauri_by_id,
             relationships_by_id=relationships_by_id,
             field_counters=field_counters,
+            registry_template=registry_template,
             client=self._client,
         )
+
+    def _load_registry_template(self, mapping: UwaziMapping) -> UwaziTemplate:
+        """Resolve the live registry :class:`UwaziTemplate` matching the mapping's registry name."""
+        match = self._client.templates.get_by_name(mapping.registry_template or "")
+        if match is None:
+            raise ValueError(f"Uwazi registry template {mapping.registry_template!r} not found")
+        return to_template(match)
 
     def _load_template(self, mapping: UwaziMapping) -> UwaziTemplate:
         """Resolve the live :class:`UwaziTemplate` matching the mapping's template name."""

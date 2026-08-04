@@ -85,9 +85,12 @@ class MappingFallbackFiller:
         mapping: UwaziMapping,
         template: UwaziTemplate,
         thesauri_by_id: dict[str, ThesauriSnapshot] | None = None,
+        registry_template: UwaziTemplate | None = None,
     ) -> None:
         """Append missing default entries and correct parent-group defaults."""
         self._fill_missing_defaults(mapping, template, thesauri_by_id or {})
+        if registry_template is not None:
+            self._fill_missing_registry_defaults(mapping, registry_template, thesauri_by_id or {})
         mapping.properties = tuple(_correct_one(p, thesauri_by_id or {}, template) for p in mapping.properties)
 
     def _fill_missing_defaults(
@@ -108,7 +111,35 @@ class MappingFallbackFiller:
         missing = [p for p in template.properties if p.name not in covered]
         if not missing:
             return
-        mapping.properties = mapping.properties + tuple(self._default_entry(p, thesauri_by_id) for p in missing)
+        mapping.properties = mapping.properties + tuple(
+            self._default_entry(p, thesauri_by_id, template_name=template.name) for p in missing
+        )
+
+    def _fill_missing_registry_defaults(
+        self,
+        mapping: UwaziMapping,
+        registry_template: UwaziTemplate,
+        thesauri_by_id: dict[str, ThesauriSnapshot],
+    ) -> None:
+        """Append registry-only defaults for properties the LLM left uncovered."""
+        covered = self._mapped_targets(mapping)
+        if registry_template.title is not None:
+            covered.add(registry_template.title.name)
+        missing = [p for p in registry_template.properties if p.name not in covered]
+        if not missing:
+            return
+        entries = tuple(self._registry_default_entry(p, thesauri_by_id, registry_template.name) for p in missing)
+        mapping.properties = mapping.properties + entries
+
+    def _registry_default_entry(
+        self,
+        prop: UwaziProperty,
+        thesauri_by_id: dict[str, ThesauriSnapshot],
+        registry_name: str,
+    ) -> MappedProperty:
+        """Build a registry-only ``source=None`` placeholder for one property."""
+        entry = self._default_entry(prop, thesauri_by_id)
+        return entry.model_copy(update={"template_name": registry_name})
 
     def _mapped_targets(self, mapping: UwaziMapping) -> set[str]:
         """Return the Uwazi property names already covered by the mapping."""
@@ -118,6 +149,7 @@ class MappingFallbackFiller:
         self,
         prop: UwaziProperty,
         thesauri_by_id: dict[str, ThesauriSnapshot],
+        template_name: str | None = None,
     ) -> MappedProperty:
         """Build a ``source=None`` :class:`MappedProperty` placeholder for one property."""
         return MappedProperty(
@@ -129,6 +161,7 @@ class MappingFallbackFiller:
             thesaurus=_resolve_thesaurus_name(prop.thesaurus_id, thesauri_by_id),
             default_value=self._default_value_for(prop, thesauri_by_id),
             notes="unmapped template property; no matching scraped field",
+            template_name=template_name,
         )
 
     def _default_value_for(

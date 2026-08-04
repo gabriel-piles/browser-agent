@@ -114,22 +114,40 @@ def _title_of_record(record: dict, source_url: str, mapping: UwaziMapping) -> st
     return mapping.identity.path_placeholder or source_url
 
 
-def _row_action(record, source_url, mapping, entities_by_key) -> tuple[SyncAction, str | None]:
+def _row_action(
+    record,
+    source_url,
+    mapping,
+    entities_by_key,
+    registry_entities_by_key=None,
+    primary_entities_by_key=None,
+) -> tuple[SyncAction, str | None]:
     """Return the action + skip reason for one record.
 
-    A row whose PDF file is missing (download failed or never
-    attempted) is still ``CREATE``: the entity is created on Uwazi
-    with its metadata (including ``file_url`` when the operator mapped
-    it to a property), and no primary document is uploaded — the
-    pusher guards the upload with ``if row.pdf_path``. A later run
-    that downloads the file can re-push.
+    When ``registry_entities_by_key`` is supplied (registry flow), the
+    identity value prevails on the registry template: if it exists there
+    the row is SKIP (already_on_registry); if it exists only in the
+    primary template the action is CREATE_REGISTRY_ONLY (recover the
+    missing registry entity); otherwise CREATE (both).
+
+    A record whose data has no ``file_url`` is SKIP (``no_file_url``)
+    and is never uploaded.
     """
+    if not (record.get("file_url") or ""):
+        return SyncAction.SKIP, "no_file_url"
     if mapping.identity.key_source is not KeySource.KEY_FIELD_AND_PROPERTY:
         return SyncAction.CREATE, None
     key_value = resolve_key_value(record, source_url, mapping.identity, mapping)
     if not key_value:
         return SyncAction.CREATE, None
-    if entities_by_key.get(str(key_value).strip()):
+    key = str(key_value).strip()
+    if registry_entities_by_key is not None:
+        if registry_entities_by_key.get(key):
+            return SyncAction.SKIP, "already_on_registry"
+        if primary_entities_by_key and primary_entities_by_key.get(key):
+            return SyncAction.CREATE_REGISTRY_ONLY, None
+        return SyncAction.CREATE, None
+    if entities_by_key.get(key):
         return SyncAction.SKIP, "already_on_uwazi"
     return SyncAction.CREATE, None
 
@@ -156,6 +174,23 @@ def _fetch_existing_entities(client: UwaziClient, mapping: UwaziMapping) -> dict
     fetcher = ExistingEntitiesFetcher(client)
     return fetcher.fetch(
         template_name=mapping.template,
+        key_property=mapping.identity.key_property or "",
+        select_filter_name=mapping.identity.select_filtering_name,
+        select_filter_values=mapping.identity.select_filtering_options,
+    )
+
+
+def _fetch_existing_entities_for_template(
+    client: UwaziClient,
+    mapping: UwaziMapping,
+    template_name: str,
+) -> dict[str, str]:
+    """Fetch and index existing entities for one template by the mapping's key property."""
+    if mapping.identity.key_source is not KeySource.KEY_FIELD_AND_PROPERTY:
+        return {}
+    fetcher = ExistingEntitiesFetcher(client)
+    return fetcher.fetch(
+        template_name=template_name,
         key_property=mapping.identity.key_property or "",
         select_filter_name=mapping.identity.select_filtering_name,
         select_filter_values=mapping.identity.select_filtering_options,
@@ -215,13 +250,39 @@ def _build_plan_row(
     downloads_dir,
     relationship_title_to_id,
     thesaurus_lookup_by_id=None,
+    registry_entities_by_key=None,
+    primary_entities_by_key=None,
+    registry_transformer=None,
+    primary_shared_id_for_key=None,
 ) -> SyncPlanRow:
     """Transform one record into one :class:`SyncPlanRow`."""
     pdf_path = resolve_pdf_filename(record, source_url, downloads_dir)
     record["pdf_filename"] = pdf_path
     html_path = resolve_html_filename(record, downloads_dir)
     supporting_path = resolve_supporting_filename(record, downloads_dir)
-    action, skip_reason = _row_action(record, source_url, mapping, entities_by_key)
+    action, skip_reason = _row_action(
+        record,
+        source_url,
+        mapping,
+        entities_by_key,
+        registry_entities_by_key=registry_entities_by_key,
+        primary_entities_by_key=primary_entities_by_key,
+    )
+    key_value = resolve_key_value(record, source_url, mapping.identity, mapping)
+    registry_metadata: dict = {}
+    primary_shared_id: str | None = None
+    if mapping.registry_template and registry_transformer is not None and action is not SyncAction.SKIP:
+        registry_metadata = registry_transformer.build_registry_metadata_for_row(
+            record,
+            source_url,
+            mapping,
+            thesaurus_lookup,
+            thesaurus_parents,
+            relationship_title_to_id,
+            thesaurus_lookup_by_id,
+        )
+    if action is SyncAction.CREATE_REGISTRY_ONLY and primary_entities_by_key is not None:
+        primary_shared_id = primary_entities_by_key.get(str(key_value).strip()) if key_value else None
     return SyncPlanRow(
         action=action,
         language=mapping.default_language,
@@ -239,9 +300,11 @@ def _build_plan_row(
         pdf_path=pdf_path,
         html_path=html_path,
         supporting_path=supporting_path,
-        key_value=resolve_key_value(record, source_url, mapping.identity, mapping),
+        key_value=key_value,
         mapping_sha256=mapping.sha256,
         skip_reason=skip_reason,
+        registry_metadata=registry_metadata,
+        primary_shared_id=primary_shared_id,
     )
 
 
@@ -253,12 +316,27 @@ def _plan_rows(records, mapping, client, thesaurus_lookup, thesaurus_lookup_by_i
     template = to_template(template_raw)
     transformer = MetadataValueTransformer(template=template)
     entities_by_key = _fetch_existing_entities(client, mapping)
+    registry_template: UwaziTemplate | None = None
+    registry_entities_by_key: dict[str, str] | None = None
+    primary_entities_by_key: dict[str, str] | None = None
+    registry_transformer: MetadataValueTransformer | None = None
+    if mapping.registry_template:
+        registry_raw = client.templates.get_by_name(mapping.registry_template)
+        if registry_raw is None:
+            raise ValueError(f"Uwazi registry template {mapping.registry_template!r} not found")
+        registry_template = to_template(registry_raw)
+        registry_transformer = MetadataValueTransformer(template=registry_template)
+        registry_entities_by_key = _fetch_existing_entities_for_template(client, mapping, mapping.registry_template)
+        primary_entities_by_key = entities_by_key
     thesaurus_ids = _thesaurus_ids_from_mapping(template, mapping)
+    if registry_template is not None:
+        thesaurus_ids = thesaurus_ids + _thesaurus_ids_from_mapping(registry_template, mapping)
     parents_by_id = build_thesaurus_parents(client, mapping.default_language, thesaurus_ids)
     thesaurus_parents: dict[str, dict[str, str | None]] = {}
     for prop in mapping.properties:
         if prop.type in (FieldType.SELECT, FieldType.MULTI_SELECT):
-            tprop = template.property_by_name(prop.name)
+            ref_template = registry_template if prop.template_name == mapping.registry_template else template
+            tprop = ref_template.property_by_name(prop.name) if ref_template else template.property_by_name(prop.name)
             if tprop and tprop.thesaurus_id and tprop.thesaurus_id in parents_by_id:
                 thesaurus_parents[prop.name] = parents_by_id[tprop.thesaurus_id]
     relationship_title_to_id = _fetch_relationship_entity_mapping(client, mapping, template)
@@ -274,6 +352,9 @@ def _plan_rows(records, mapping, client, thesaurus_lookup, thesaurus_lookup_by_i
             downloads_dir,
             relationship_title_to_id,
             thesaurus_lookup_by_id,
+            registry_entities_by_key=registry_entities_by_key,
+            primary_entities_by_key=primary_entities_by_key,
+            registry_transformer=registry_transformer,
         )
         for source_url, _task_slug, raw_data in records
     )

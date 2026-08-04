@@ -112,14 +112,26 @@ class MatchDriver:
         entities_fetcher = ExistingEntitiesFetcher(context.client)
         issue_detector = RowIssueDetector(entities_fetcher)
         classifier = RowIssueClassifier(entities_fetcher, issue_detector, self._paths.downloads_dir())
-        entities_by_key = entities_fetcher.fetch(
+        entities_by_key = self._fetch_validation_entities(context)
+        counts, issues = classifier.classify(records, context.mapping, context.template, thesaurus_lookup)
+        self._upload_reporter.print_report(context.mapping, counts, issues, len(entities_by_key))
+
+    def _fetch_validation_entities(self, context) -> dict[str, str]:
+        """Fetch existing entities; when registry is set, identity prevails on the registry template."""
+        entities_fetcher = ExistingEntitiesFetcher(context.client)
+        if context.mapping.registry_template:
+            return entities_fetcher.fetch(
+                template_name=context.mapping.registry_template,
+                key_property=context.mapping.identity.key_property or "",
+                select_filter_name=context.mapping.identity.select_filtering_name,
+                select_filter_values=context.mapping.identity.select_filtering_options,
+            )
+        return entities_fetcher.fetch(
             template_name=context.mapping.template,
             key_property=context.mapping.identity.key_property or "",
             select_filter_name=context.mapping.identity.select_filtering_name,
             select_filter_values=context.mapping.identity.select_filtering_options,
         )
-        counts, issues = classifier.classify(records, context.mapping, context.template, thesaurus_lookup)
-        self._upload_reporter.print_report(context.mapping, counts, issues, len(entities_by_key))
 
     def _build_groups(self, context) -> list[dict]:
         """Build the per-thesaurus groups for the active mapping, or print the empty notice."""
@@ -129,6 +141,7 @@ class MatchDriver:
             context.thesauri_by_id,
             context.field_counters,
             context.relationships_by_id,
+            registry_template=context.registry_template,
         )
         if not groups:
             print("No thesauri with extracted values to match.")

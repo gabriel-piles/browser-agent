@@ -42,6 +42,15 @@ class UwaziMapping(BaseModel):
 
     publish: bool = Field(default=False, description="Whether to publish created entities (vs leave them as drafts).")
     upload_pdf: bool = Field(default=False, description="Whether to attach the local PDF file when one exists.")
+    registry_template: str | None = Field(
+        default=None, description="Name of the scraper-registry Uwazi template; None disables the registry flow."
+    )
+    scraper_date_property: str | None = Field(
+        default=None, description="Registry-template property to receive the entity creation date."
+    )
+    scraper_document_relationship: str | None = Field(
+        default=None, description="Registry-template relationship property linking to the primary template entity."
+    )
 
     def property_for_source(self, source_name: str) -> MappedProperty | None:
         """Return the :class:`MappedProperty` whose source is ``source_name``, or None."""

@@ -76,9 +76,14 @@ class RowIssueClassifier:
         return action, issues
 
     def _index_for(self, mapping: UwaziMapping) -> dict[str, str]:
-        """Fetch and index the existing Uwazi entities once for the whole run."""
+        """Fetch and index the existing Uwazi entities once for the whole run.
+
+        When ``registry_template`` is set, identity prevails on the registry
+        template (entities are fetched there, not on the primary template).
+        """
+        template_name = mapping.registry_template or mapping.template
         return self._entities_fetcher.fetch(
-            template_name=mapping.template,
+            template_name=template_name,
             key_property=mapping.identity.key_property or "",
             select_filter_name=mapping.identity.select_filtering_name,
             select_filter_values=mapping.identity.select_filtering_options,

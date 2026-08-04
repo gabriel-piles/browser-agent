@@ -38,6 +38,7 @@ class ThesaurusGroupsBuilder:
         thesauri_by_id: dict[str, ThesauriSnapshot],
         field_counters: dict[str, Counter],
         relationships_by_id: dict[str, ThesauriSnapshot] | None = None,
+        registry_template: UwaziTemplate | None = None,
     ) -> list[dict]:
         """Return one group dict per select/multiselect/relationship property with values to map."""
         groups: list[dict] = []
@@ -45,15 +46,23 @@ class ThesaurusGroupsBuilder:
         for prop in mapping.properties:
             if prop.type not in (FieldType.SELECT, FieldType.MULTI_SELECT, FieldType.RELATIONSHIP):
                 continue
+            ref_template = self._ref_template_for(prop, template, registry_template)
             extracted = field_counters.get(prop.source, Counter()) if prop.source else Counter()
             counter = self._merge_with_default(extracted, prop)
-            group, skip = self._build_one(prop, template, thesauri_by_id, counter, relationships_by_id)
+            group, skip = self._build_one(prop, ref_template, thesauri_by_id, counter, relationships_by_id)
             if group is not None:
                 groups.append(group)
             elif skip:
                 skips.append(skip)
         self._print_skips(skips)
         return groups
+
+    @staticmethod
+    def _ref_template_for(prop, template, registry_template):
+        """Return the template a property belongs to (primary or registry)."""
+        if registry_template is not None and prop.template_name == registry_template.name:
+            return registry_template
+        return template
 
     def bucket_by_thesaurus(self, groups: list[dict]) -> dict[str, list[dict]]:
         """Bucket the per-property groups by their canonical thesaurus name."""

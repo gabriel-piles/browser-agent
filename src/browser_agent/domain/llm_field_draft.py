@@ -18,3 +18,4 @@ class LlmFieldDraft(BaseModel):
     required: bool = False
     notes: str | None = None
     default_value: str | None = None
+    template: str | None = Field(default=None, description="Template name this draft targets; None = primary template.")

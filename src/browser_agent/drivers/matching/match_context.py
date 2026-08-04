@@ -28,4 +28,5 @@ class MatchContext:
     thesauri_by_id: dict[str, ThesauriSnapshot]
     relationships_by_id: dict[str, ThesauriSnapshot]
     field_counters: dict[str, Counter]
-    client: UwaziClient
+    registry_template: UwaziTemplate | None = None
+    client: UwaziClient | None = None

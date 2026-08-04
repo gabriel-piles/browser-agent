@@ -68,6 +68,27 @@ Rules:
   ``export_to_uwazi=false`` and the operator opted not to push it,
   or (b) the field has no plausible Uwazi property to map to. Each
   skipped field goes in the ``skipped`` list with reason + notes.
+- When a second "Uwazi registry template" snapshot is present, you
+  must produce property mappings for BOTH templates. Properties that
+  share the SAME name in both templates are merged: emit them ONCE in
+  ``fields`` (one entry serves both templates). Properties unique to
+  the registry template get their own ``fields`` entries with
+  ``template`` set to the registry template's name (omit ``template``
+  or set it to null for the primary template). Do NOT map a ``title``
+  for the registry template — only the primary template's title is
+  drafted; the registry entity reuses the primary entity's title at
+  upload time. The identity block is shared (same ``key_property`` name
+  in both templates) — emit a single identity block.
+- For the registry template's ``scraper_date_property`` (if named in
+  the user prompt), emit a ``fields`` entry with ``source=null``,
+  ``type="date"``, ``default_value=null``, and ``template`` set to the
+  registry template's name. It is filled at upload time, not from
+  scraped data.
+- For the registry template's ``scraper_document_relationship`` (if
+  named in the user prompt), emit a ``fields`` entry with
+  ``source=null``, ``type="relationship"``, ``default_value=null``,
+  and ``template`` set to the registry template's name. It is filled at
+  upload time by linking to the created primary entity.
 - Output ONLY the structured JSON matching the schema. Do not output
   prose, explanations, or markdown fences.
 """
@@ -83,11 +104,24 @@ class ProposePromptRenderer:
         template: UwaziTemplate,
         catalog: MetadataFieldCatalog,
         thesauri_by_id: dict[str, ThesauriSnapshot],
+        registry_template: UwaziTemplate | None = None,
+        scraper_date_property: str | None = None,
+        scraper_document_relationship: str | None = None,
     ) -> str:
         """Compose the user-turn prompt for the propose Agent call."""
-        return (
-            f"## Uwazi template (snapshot at propose time)\n"
-            f"{self._template_snapshot(template, thesauri_by_id)}\n\n"
+        parts = [
+            f"## Uwazi template (snapshot at propose time)\n{self._template_snapshot(template, thesauri_by_id)}\n\n",
+        ]
+        if registry_template is not None:
+            parts.append(
+                f"## Uwazi registry template (snapshot)\n{self._template_snapshot(registry_template, thesauri_by_id)}\n\n"
+            )
+            parts.append(
+                f"## Registry-template special properties\n"
+                f"scraper_date_property = {scraper_date_property!r} (type=date, source=null, filled at upload time)\n"
+                f"scraper_document_relationship = {scraper_document_relationship!r} (type=relationship, source=null, filled at upload time)\n\n"
+            )
+        parts.append(
             f"## Source catalog (from metadata.db for run {catalog.run!r})\n"
             f"{self._catalog_blob(catalog)}\n\n"
             "Return the JSON object conforming to the schema. Every catalog "
@@ -96,6 +130,7 @@ class ProposePromptRenderer:
             "and every template property with no matching field must get a "
             "source=null default entry."
         )
+        return "".join(parts)
 
     def _template_snapshot(self, template, thesauri_by_id) -> str:
         """Render the Uwazi template as a JSON blob for the LLM prompt."""
