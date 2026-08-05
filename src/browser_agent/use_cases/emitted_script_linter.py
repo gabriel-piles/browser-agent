@@ -296,6 +296,88 @@ def _check_retry_phase(python_code: str) -> list[LintFinding]:
     return out
 
 
+def _check_fanout(python_code: str) -> list[LintFinding]:
+    out: list[LintFinding] = []
+    if "asyncio.gather(" not in python_code:
+        return out
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return out
+    has_queue = "asyncio.Queue(" in python_code
+    has_worker = any(isinstance(node, ast.AsyncFunctionDef) and "worker" in node.name for node in ast.walk(tree))
+    if not (has_queue or has_worker):
+        return out
+    sem_match = re.search(r"asyncio\.Semaphore\(", python_code)
+    modulo_match = re.search(r"idx\s*%\s*\w+|%\s*\w+_tabs", python_code)
+    if sem_match and modulo_match:
+        out.append(
+            LintFinding(
+                rule="15c",
+                severity="error",
+                message=(
+                    "FORBIDDEN: asyncio.Semaphore with idx % N tab assignment — "
+                    "slots release out of order, two tasks share one tab, "
+                    "concurrent tab.get() invalidates element handles "
+                    "(DOM.resolveNode -32000). Use one worker coroutine per "
+                    "tab consuming a shared asyncio.Queue."
+                ),
+                line=_line_of(python_code, sem_match.start()),
+            )
+        )
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.AsyncFunctionDef) and "worker" in node.name):
+            continue
+        try_ranges: list[tuple[int, int]] = []
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Try):
+                start = sub.lineno
+                end = getattr(sub, "end_lineno", start)
+                try_ranges.append((start, end))
+        for sub in ast.walk(node):
+            if not isinstance(sub, ast.Await):
+                continue
+            call = sub.value
+            if not isinstance(call, ast.Call):
+                continue
+            func = call.func
+            name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
+            if name != "process_document":
+                continue
+            in_try = any(start <= sub.lineno <= end for start, end in try_ranges)
+            if not in_try:
+                out.append(
+                    LintFinding(
+                        rule="15c",
+                        severity="error",
+                        message=(
+                            "per-task try/except around process_document is "
+                            "MANDATORY — without it one document's "
+                            "TimeoutError propagates through asyncio.gather "
+                            "and kills the whole run before the retry phase "
+                            "recovers the row."
+                        ),
+                        line=sub.lineno,
+                    )
+                )
+    if "bring_to_front(" not in python_code:
+        out.append(
+            LintFinding(
+                rule="15h",
+                severity="error",
+                message=(
+                    "multi-tab script missing tab.bring_to_front() — hidden "
+                    "background tabs never fire IntersectionObserver/RAF so "
+                    "SPA late-bound metadata never renders and the gate times "
+                    "out. Call await tab.bring_to_front() before the metadata "
+                    "gate in each per-document task."
+                ),
+                line=None,
+            )
+        )
+    return out
+
+
 def _check_bare_paths(python_code: str) -> list[LintFinding]:
     out: list[LintFinding] = []
     pat = re.compile(r"""Path\(\s*["']downloads["']\s*\)|\./downloads""")
@@ -470,6 +552,7 @@ class EmittedScriptLinter:
             _check_bare_paths,
             _check_self_contained,
             _check_retry_phase,
+            _check_fanout,
         )
 
     def lint(self, python_code: str) -> list[LintFinding]:
