@@ -138,7 +138,7 @@ class UwaziPusher:
         """Create the registry entity with its date, relationship and hash set in metadata."""
         registry_metadata = dict(row.registry_metadata)
         if mapping.scraper_date_property:
-            registry_metadata[mapping.scraper_date_property] = int(datetime.now(timezone.utc).timestamp() * 1000)
+            registry_metadata[mapping.scraper_date_property] = int(datetime.now(timezone.utc).timestamp())
         if mapping.scraper_document_relationship and primary_shared_id:
             registry_metadata[mapping.scraper_document_relationship] = [{"value": primary_shared_id}]
         if mapping.scraper_document_hash:
