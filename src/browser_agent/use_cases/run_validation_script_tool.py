@@ -92,6 +92,18 @@ _STATIC_CHECK_PATTERNS: list[tuple[re.Pattern[str], str]] = [
         re.compile(r"\bawait\s+\w+\.text_content\s*\("),
         "await el.text_content(...) — zendriver elements have no text_content() method (rule 4b). Use await el.apply('(el) => el.textContent') or el.text.",
     ),
+    (
+        re.compile(
+            r"(?s)\b(\w+),\s*\w+\s*=\s*await wait_for_anchors\s*\([^)]*\)\s*"
+            r"(?:[^\n]*\n){0,4}?"
+            r"[^\n]*\bif\s+(?:not\s+\1\b|\1\s*==\s*0\b)"
+        ),
+        "wait_for_anchors(...) followed by `if count == 0:` is UNREACHABLE — "
+        "wait_for_anchors RAISES TimeoutError on zero matches; it never returns 0. "
+        "Wrap the gate in `try: ... except TimeoutError:` and run the modal-open "
+        "fallback / metadata-gate retry (rule 14b) in the except block. Record "
+        "download_status='load_failed' only after the retries fail.",
+    ),
 ]
 
 

@@ -251,6 +251,51 @@ def _check_evaluate_args(python_code: str) -> list[LintFinding]:
     return out
 
 
+def _check_evaluate_slice(python_code: str) -> list[LintFinding]:
+    out: list[LintFinding] = []
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return out
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Subscript):
+            continue
+        awaited = node.value
+        if not isinstance(awaited, ast.Await):
+            continue
+        call = awaited.value
+        if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr == "evaluate":
+            out.append(
+                LintFinding(
+                    rule="9",
+                    severity="error",
+                    message="tab.evaluate returns a Python dict/list, not a string — slicing it with [:N] raises; use str(result)[:N] or json.dumps(result)",
+                    line=node.lineno,
+                )
+            )
+    return out
+
+
+def _check_retry_phase(python_code: str) -> list[LintFinding]:
+    out: list[LintFinding] = []
+    imported = re.search(r"\bload_failed_downloads\b", python_code) is not None
+    called = re.search(r"\bload_failed_downloads\s*\(", python_code) is not None
+    if imported and not called:
+        out.append(
+            LintFinding(
+                rule="8a",
+                severity="error",
+                message=(
+                    "load_failed_downloads is imported but never called — main() MUST call "
+                    "it in the rule-8a retry phase after the worker gather and before "
+                    "browser.stop()"
+                ),
+                line=1,
+            )
+        )
+    return out
+
+
 def _check_bare_paths(python_code: str) -> list[LintFinding]:
     out: list[LintFinding] = []
     pat = re.compile(r"""Path\(\s*["']downloads["']\s*\)|\./downloads""")
@@ -297,6 +342,7 @@ _ZENDRIVER_RULES: frozenset[str] = frozenset(
         "10",  # tab.evaluate calling convention
         "11",  # await save_record (sync)
         "13",  # file_size vs size key
+        "9",  # tab.evaluate returns a dict/list, not a slicable string
     }
 )
 
@@ -313,6 +359,7 @@ _ZENDRIVER_RULE_NAMES: dict[str, str] = {
     "10": "tab.evaluate — wrong calling convention (extra positional args or bare arrow function)",
     "11": "save_record — awaited a synchronous helper (TypeError at runtime)",
     "13": "result shape — uses file_size key instead of size",
+    "9": "tab.evaluate — returns a Python dict/list, not a string (slicing it raises)",
 }
 
 
@@ -419,8 +466,10 @@ class EmittedScriptLinter:
             _check_el_text_content,
             _check_evaluate_iife,
             _check_evaluate_args,
+            _check_evaluate_slice,
             _check_bare_paths,
             _check_self_contained,
+            _check_retry_phase,
         )
 
     def lint(self, python_code: str) -> list[LintFinding]:
