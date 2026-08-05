@@ -6,6 +6,7 @@ import re
 from browser_agent.domain.lint_finding import LintFinding
 
 _HTTP_MODULES = frozenset({"requests", "httpx", "aiohttp", "urllib", "urllib3"})
+_ALLOWED_URL_MODULES = frozenset({"urllib.parse"})
 _HTTP_MSG = "no HTTP libraries; use tab.get() and script_tools download helpers"
 _SELF_MSG = (
     "script imports must be stdlib, zendriver, or script_tools.* (real modules copied beside the script at emit time)"
@@ -187,8 +188,11 @@ def _check_http_imports(python_code: str) -> list[LintFinding]:
     for node in ast.walk(tree):
         if not isinstance(node, (ast.Import, ast.ImportFrom)):
             continue
-        if any(root.split(".")[0] in _HTTP_MODULES for root in _import_roots(node)):
-            out.append(LintFinding(rule="8", severity="error", message=_HTTP_MSG, line=node.lineno))
+        for root in _import_roots(node):
+            if root in _ALLOWED_URL_MODULES:
+                continue
+            if root.split(".")[0] in _HTTP_MODULES:
+                out.append(LintFinding(rule="8", severity="error", message=_HTTP_MSG, line=node.lineno))
     return out
 
 
@@ -431,6 +435,36 @@ def _check_bare_paths(python_code: str) -> list[LintFinding]:
     return out
 
 
+_BARE_HOST_CONCAT_MSG = (
+    "never bare-concatenate a host onto an href (rule 13): build file_url "
+    'with urljoin(base, quote(href, safe="/%")) so leading whitespace and '
+    "unsafe chars are percent-encoded, not embedded as raw spaces"
+)
+
+
+def _operand_has_href(node: ast.AST) -> bool:
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Attribute) and sub.attr == "href":
+            return True
+        if isinstance(sub, ast.Constant) and sub.value == "href":
+            return True
+    return False
+
+
+def _check_bare_host_concat(python_code: str) -> list[LintFinding]:
+    out: list[LintFinding] = []
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return out
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Add):
+            continue
+        if _operand_has_href(node.left) or _operand_has_href(node.right):
+            out.append(LintFinding(rule="13", severity="error", message=_BARE_HOST_CONCAT_MSG, line=node.lineno))
+    return out
+
+
 def _bad_self_root(root: str) -> bool:
     return root == "browser_agent" or root.startswith("browser_agent.")
 
@@ -622,6 +656,7 @@ class EmittedScriptLinter:
             _check_evaluate_args,
             _check_evaluate_slice,
             _check_bare_paths,
+            _check_bare_host_concat,
             _check_self_contained,
             _check_zd_start,
             _check_handwritten_discovery,
@@ -641,6 +676,7 @@ class EmittedScriptLinter:
             _check_evaluate_args,
             _check_evaluate_slice,
             _check_bare_paths,
+            _check_bare_host_concat,
             _check_self_contained,
             _check_retry_phase,
             _check_fanout,

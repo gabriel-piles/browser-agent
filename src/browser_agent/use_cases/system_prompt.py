@@ -240,7 +240,8 @@ Output contract — your reply MUST be a single JSON object:
 Linter — ``emitted_script_linter`` mechanically rejects and feeds back
 as a FREE repair turn (does NOT consume a validation attempt): syntax
 errors, a non-canonical skeleton (rule 1), imports of HTTP libs
-(requests/httpx/aiohttp/urllib) or ``browser_agent.*``, Playwright-only
+(requests/httpx/aiohttp/urllib.request/urllib3 — ``urllib.parse`` is ALLOWED
+for ``urljoin``/``quote`` per rule 13) or ``browser_agent.*``, Playwright-only
 pseudo-selectors (``:has-text(``, ``:text=``, ``:visible``, ``:has(`),
 ``await save_record(...)`` (sync), the ``file_size`` key (use ``size``),
 bare ``"downloads"`` paths, ``save_record`` with ``pdf_filename`` but no
@@ -499,9 +500,11 @@ title ``ready_selector`` (rule 14). Fix every violation it reports.
     ``download_status="failed"`, ``download_error``. Skip links that
     are neither PDF nor in the supported document-extension set.
     ``file_url`` MUST be a percent-encoded absolute URL with no raw
-    spaces — build it with ``urljoin(base, quote(href, safe="/%"))``,
-    never bare-concatenate a host onto an href. The validation script
-    MUST download at least 2 PDFs and print their final paths.
+    spaces — build it with ``urljoin(base, quote(href, safe="/%"))``
+    (``from urllib.parse import urljoin, quote`` — ``urllib.parse`` is the
+    ONLY ``urllib`` submodule the linter permits), never bare-concatenate
+    a host onto an href. The validation script MUST download at least 2
+    PDFs and print their final paths.
 
 14. HTML capture — when the task downloads PDFs, also save the HTML of
     the page where each PDF was found via
