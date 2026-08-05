@@ -23,7 +23,7 @@ from pydantic_ai.models import Model
 
 from browser_agent.agent_logging import agent_logger
 from browser_agent.domain.code_generation_request import CodeGenerationRequest
-from browser_agent.domain.generated_script import GeneratedScript
+from browser_agent.domain.generated_script_set import GeneratedScriptSet
 from browser_agent.use_cases.agent_deps import AgentDeps
 from browser_agent.use_cases.download_pdf_tool import download_pdf
 from browser_agent.use_cases.explore_page_tool import explore_page
@@ -34,24 +34,24 @@ from browser_agent.use_cases.system_prompt import SYSTEM_PROMPT
 
 
 class GenerateZendriverScriptUseCase:
-    """Build the agent, run it once, return the :class:`GeneratedScript`."""
+    """Build the agent, run it once, return the :class:`GeneratedScriptSet`."""
 
     def __init__(self, deps: AgentDeps) -> None:
         self._deps = deps
         self._last_messages: list = []
 
-    def _build_agent(self, model: Model) -> Agent[AgentDeps, GeneratedScript]:
-        agent: Agent[AgentDeps, GeneratedScript] = Agent(
+    def _build_agent(self, model: Model) -> Agent[AgentDeps, GeneratedScriptSet]:
+        agent: Agent[AgentDeps, GeneratedScriptSet] = Agent(
             model=model,
             system_prompt=SYSTEM_PROMPT,
             deps_type=AgentDeps,
-            output_type=GeneratedScript,
+            output_type=GeneratedScriptSet,
             tools=[explore_page, run_validation_script, download_pdf],
             capabilities=[ToolReturnCompactor()],
         )
         return agent
 
-    async def execute(self, request: CodeGenerationRequest) -> GeneratedScript:
+    async def execute(self, request: CodeGenerationRequest) -> GeneratedScriptSet:
         await self._deps.browser_session.start()
         try:
             agent = self._build_agent(self._deps.llm.get_model())
@@ -64,7 +64,7 @@ class GenerateZendriverScriptUseCase:
             await self._deps.browser_session.close()
             raise
 
-    async def repair(self, feedback: str) -> GeneratedScript:
+    async def repair(self, feedback: str) -> GeneratedScriptSet:
         """Run a repair turn with ``feedback`` as a new user message.
 
         Uses the message history from the prior ``execute`` call so the
@@ -107,12 +107,12 @@ class GenerateZendriverScriptUseCase:
         return run
 
     @staticmethod
-    def _log_script(script: GeneratedScript) -> None:
+    def _log_script(script: GeneratedScriptSet) -> None:
         agent_logger.info(
             "SCRIPT  lines={lines} deps={deps} preview={preview}",
-            lines=script.line_count(),
+            lines=script.processing_script().line_count(),
             deps=script.dependency_names(),
-            preview=_truncate(script.python_code, 200),
+            preview=_truncate(script.processing_script().python_code, 200),
         )
 
     @staticmethod
@@ -126,9 +126,9 @@ class GenerateZendriverScriptUseCase:
         )
 
     @staticmethod
-    def _coerce_result(run: Any) -> GeneratedScript:
+    def _coerce_result(run: Any) -> GeneratedScriptSet:
         output = getattr(run, "output", None)
-        if isinstance(output, GeneratedScript):
+        if isinstance(output, GeneratedScriptSet):
             return output
         raise RuntimeError(f"Agent returned an unsupported output type: {type(output).__name__}")
 
@@ -139,6 +139,6 @@ def _truncate(value: str, limit: int) -> str:
     return f"{value[:limit]}…(total={len(value) // 4} tokens)"
 
 
-def run_sync(request: CodeGenerationRequest, deps: AgentDeps) -> GeneratedScript:
+def run_sync(request: CodeGenerationRequest, deps: AgentDeps) -> GeneratedScriptSet:
     """Convenience helper for callers that want a synchronous entry point."""
     return asyncio.run(GenerateZendriverScriptUseCase(deps).execute(request))

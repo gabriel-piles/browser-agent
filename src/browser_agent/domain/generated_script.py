@@ -12,6 +12,8 @@ class GeneratedScript(BaseModel):
     can rely on a single, validated JSON shape.
     """
 
+    kind: str = Field(default="processing", description='"discovery" | "processing"')
+
     explanation: str = Field(
         description=(
             "Step-by-step breakdown of how the generated script solves the "

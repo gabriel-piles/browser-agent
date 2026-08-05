@@ -3,14 +3,16 @@
 Reads the active run from ``active_run.yaml``, finds the most recently
 generated scripts in the ``scripts/`` directory, and executes them as
 standalone subprocesses against a live Chromium instance. Step 0 emits
-TWO scripts per run: a discovery-verification script
-(``<date>__verify_discovery__<slug>.py``) and the actual download
-script (``<date>__<slug>.py``). This driver runs them in order —
-verification first, then the download — so the operator can confirm
-link discovery is complete before PDFs are fetched. Each script is
-self-contained (all vendored helpers prepended at emit time) and uses
-``__file__`` to resolve its metadata database path, so running it
-directly with ``python`` writes into the run's ``metadata.db``.
+up to TWO scripts per run: an optional discovery script
+(``<date>__discover__<slug>.py``) that collects link URLs into the
+``discovered_links`` table, and the processing script
+(``<date>__<slug>.py``) that reads that table and extracts metadata +
+downloads files. This driver runs them in order — discovery first
+(populating ``discovered_links``), then processing (consuming it).
+Each script is self-contained (all vendored helpers prepended at emit
+time) and uses ``__file__`` to resolve its metadata database path, so
+running it directly with ``python`` writes into the run's
+``metadata.db``.
 
 Usage:
     python -m browser_agent.drivers.step_1_run_active_scraper
@@ -40,10 +42,10 @@ _RUN_TIMEOUT_S = int(os.environ.get("SCRAPER_RUN_TIMEOUT_S", str(6 * 3600)))
 # Exit code returned when the active script path cannot be resolved.
 _EXIT_NO_SCRIPT = 2
 
-# Filename token that marks a discovery-verification script emitted by
-# step 0's LinkDiscoveryVerificationRunner. Used to split the scripts/
-# directory into the verification script and the download script.
-_VERIFY_TOKEN = "__verify_discovery"
+# Filename token that marks a discovery script emitted by step 0.
+# Used to split the scripts/ directory into the discovery script and
+# the processing script.
+_DISCOVER_TOKEN = "__discover"
 
 
 class RunActiveScraperDriver:
@@ -55,50 +57,50 @@ class RunActiveScraperDriver:
         return asyncio.run(self._run_async())
 
     async def _run_async(self) -> int:
-        """Load the active run, run verification then the download script."""
+        """Load the active run, run discovery (if present) then the processing script."""
         run = RunsConfigLoader.load_active()
         run_path = RunsConfigLoader.resolve_active_path()
         logger.info("step 1 (run active scraper) starting run={run}", run=run.name)
 
-        download_path = self._latest_script_path(run_path, verification=False)
-        if download_path is None:
+        processing_path = self._latest_script_path(run_path, kind="processing")
+        if processing_path is None:
             return _EXIT_NO_SCRIPT
 
-        await self._run_verification_step(run_path)
+        await self._run_discovery_step(run_path)
 
-        logger.info("running download script {path}", path=download_path)
+        logger.info("running processing script {path}", path=processing_path)
         t0 = time.monotonic()
-        exit_code = await self._run_script(download_path)
+        exit_code = await self._run_script(processing_path)
         elapsed = time.monotonic() - t0
         logger.info(
-            "download script finished in {elapsed:.1f}s (exit code {code})",
+            "processing script finished in {elapsed:.1f}s (exit code {code})",
             elapsed=elapsed,
             code=exit_code,
         )
         return exit_code
 
-    async def _run_verification_step(self, run_path: Path) -> None:
-        """Run the discovery-verification script if present (best-effort)."""
-        verification_path = self._latest_script_path(run_path, verification=True)
-        if verification_path is None:
-            logger.warning("no discovery-verification script found — proceeding to download")
+    async def _run_discovery_step(self, run_path: Path) -> None:
+        """Run the discovery script if present (best-effort, populates discovered_links)."""
+        discovery_path = self._latest_script_path(run_path, kind="discovery")
+        if discovery_path is None:
+            logger.warning("no discovery script found — proceeding to processing")
             return
-        logger.info("running discovery-verification script {path}", path=verification_path)
+        logger.info("running discovery script {path}", path=discovery_path)
         t0 = time.monotonic()
-        exit_code = await self._run_script(verification_path)
+        exit_code = await self._run_script(discovery_path)
         elapsed = time.monotonic() - t0
         logger.info(
-            "verification script finished in {elapsed:.1f}s (exit code {code})",
+            "discovery script finished in {elapsed:.1f}s (exit code {code})",
             elapsed=elapsed,
             code=exit_code,
         )
 
-    def _latest_script_path(self, run_path: Path, *, verification: bool) -> Path | None:
+    def _latest_script_path(self, run_path: Path, *, kind: str) -> Path | None:
         """Return the most recent ``scripts/*.py`` matching the kind, or None.
 
-        ``verification=True`` selects ``<date>__verify_discovery__*.py``;
-        ``verification=False`` selects the download script (everything else
-        dated ``YYYY_MM_DD`` that is not ``.raw.py``).
+        ``kind="discovery"`` selects ``<date>__discover__*.py``;
+        ``kind="processing"`` selects ``<date>__<slug>.py`` (everything
+        dated ``YYYY_MM_DD`` excluding ``__discover`` and ``.raw.py``).
         """
         scripts_dir = run_path / "scripts"
         if not scripts_dir.is_dir():
@@ -109,12 +111,12 @@ class RunActiveScraperDriver:
             for p in scripts_dir.glob("*.py")
             if re.match(r"\d{4}_\d{2}_\d{2}", p.name)
             and not p.name.endswith(".raw.py")
-            and (_VERIFY_TOKEN in p.name) == verification
+            and (_DISCOVER_TOKEN in p.name) == (kind == "discovery")
         )
         if not scripts:
             logger.warning(
                 "no {kind} scripts found in {dir}",
-                kind="verification" if verification else "download",
+                kind=kind,
                 dir=scripts_dir,
             )
             return None

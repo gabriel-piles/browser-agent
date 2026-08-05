@@ -7,8 +7,8 @@ Wires the :class:`ZendriverBrowserSession` (shared with the
 :class:`AgentDeps` and hands the resulting
 :class:`CodeGenerationRequest` to the
 :class:`GenerateZendriverScriptUseCase`. The returned
-:class:`GeneratedScript` is everything the
-:class:`ScriptEmitter` needs to write the on-disk artifact.
+:class:`GeneratedScriptSet` is everything the
+:class:`ScriptEmitter` needs to write the on-disk artifact(s).
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from browser_agent.adapters.execution.in_process_script_runner_adapter import (
 from browser_agent.adapters.llm.ollama_adapter import OllamaAdapter
 from browser_agent.configuration import ZENDRIVER_HEADLESS
 from browser_agent.domain.code_generation_request import CodeGenerationRequest
-from browser_agent.domain.generated_script import GeneratedScript
+from browser_agent.domain.generated_script_set import GeneratedScriptSet
 from browser_agent.use_cases.agent_deps import AgentDeps
 from browser_agent.use_cases.generate_zendriver_script_use_case import (
     GenerateZendriverScriptUseCase,
@@ -42,8 +42,8 @@ class ScriptGenerator:
         task: str,
         run_path: Path,
         context: str = "",
-    ) -> tuple[GeneratedScript, GenerateZendriverScriptUseCase]:
-        """Run the agent for ``task``; return the script + live use case.
+    ) -> tuple[GeneratedScriptSet, GenerateZendriverScriptUseCase]:
+        """Run the agent for ``task``; return the script set + live use case.
 
         ``context`` is an optional directive prepended to the task (e.g. the
         concurrency requirement derived from ``RunConfig.parallel_runners``);
@@ -56,7 +56,7 @@ class ScriptGenerator:
         return script, use_case
 
     @staticmethod
-    async def repair(use_case: GenerateZendriverScriptUseCase, feedback: str) -> GeneratedScript:
+    async def repair(use_case: GenerateZendriverScriptUseCase, feedback: str) -> GeneratedScriptSet:
         """Run a repair turn on ``use_case`` with ``feedback``."""
         return await use_case.repair(feedback)
 

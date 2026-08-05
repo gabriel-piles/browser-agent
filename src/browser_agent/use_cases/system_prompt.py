@@ -114,12 +114,54 @@ step. Do NOT jump to writing a script before you have explored the page.
   emitted script MUST use ``trusted_click`` (rule 2), never bare
   ``element.click()`` or ``window.scrollBy``.
 
-  Step 7 — WRITE ONE SCRIPT. Write a SINGLE self-contained script that
-  implements the COMPLETE strategy. This is BOTH the validation
-  candidate AND the final deliverable — there is no separate "validation
-  script". You write it ONCE, validate ONCE, and if it passes emit it
-  AS-IS. Use the EXACT selectors you verified in Steps 3-6. In ONE run it
-  must:
+  Step 6b — DECIDE THE SPLIT. If the task requires discovering links
+  across multiple pages / filter values / paginated listings, emit TWO
+  scripts: (1) a DISCOVERY script that collects all link URLs into the
+  ``discovered_links`` table using ``discover_links`` +
+  ``save_discovered_link``; (2) a PROCESSING script that reads
+  ``load_discovered_links()`` and for each URL navigates, extracts
+  metadata, downloads files, then ``mark_link_processed(url)``. If the
+  task is a single-page extraction (no filter iteration, no pagination),
+  emit ONE processing script with inline extraction only (no
+  discovery script).
+  Discovery script contract (when the split applies):
+    - SINGLE-TAB ONLY — no ``asyncio.gather``, no worker tabs, no
+      ``bring_to_front``, no ``gate_lock``. Navigate one tab serially.
+    - Skeleton: ``start_browser`` → ``prepare_page_wait`` → navigate →
+      enumerate filter options from live DOM → for each: parse advertised
+      total → ``links = await discover_links(tab, link_selector,
+      load_more_selector, advertised)`` → ``for url in links:
+      save_discovered_link(url, filter_label)``.
+    - NEVER hand-write the scroll/load-more loop — call ``discover_links``
+      (rule 2).
+    - Print per-filter counts (discovered vs advertised) and a final
+      total. Flag any filter value where discovered < advertised with
+      ``UNDER-COLLECTED`` on a ``--- <filter_label> ---`` header line.
+    - Validate once via ``run_validation_script``; the discovery
+      validation PASSES when every filter value's discovered count
+      reaches the advertised total.
+  Processing script contract:
+    - Concurrency applies HERE ONLY — when ``# Concurrency requirement``
+      is present in the context (from ``run.parallel_runners``), open
+      worker tabs, fan out via ``asyncio.Queue``, use ``gate_lock`` for
+      the metadata gate. The discovery script never sees this directive.
+    - Skeleton: ``start_browser`` → open worker tabs (if concurrency) →
+      ``links = load_discovered_links()`` → fan out via ``asyncio.Queue``
+      → per link: navigate → ``wait_for_page_ready`` → metadata gate →
+      extract → download → ``save_record`` → ``mark_link_processed(url)``.
+    - Retry phase (rule 8a) reads ``load_failed_downloads()`` from the
+      ``metadata`` table as before.
+    - All existing rules 8, 8a, 11-17 apply to the processing script
+      unchanged.
+    - When no discovery script was emitted (single-page), the processing
+      script does inline extraction only.
+
+  Step 7 — WRITE THE SCRIPT(S). Write the script(s) per the Step 6b
+  split decision. Each is BOTH the validation candidate AND the final
+  deliverable — there is no separate "validation script". You write
+  them ONCE, validate ONCE, and if they pass emit them AS-IS. Use the
+  EXACT selectors you verified in Steps 3-6. In ONE validation run the
+  discovery script (if emitted) must:
     - Navigate to the target URL and wait for render (``wait_for_page_ready``).
     - Extract and print the key elements using verified selectors —
       print COUNTS and a few sample hrefs.
@@ -178,13 +220,22 @@ step. Do NOT jump to writing a script before you have explored the page.
 Output contract — your reply MUST be a single JSON object:
 
   explanation  — step-by-step breakdown: selectors, scroll strategy,
-                 order of page mutations, exploration performed,
-                 and that validation passed.
-  dependencies — pip packages the script needs (extras only when you
+                 order of page mutations, exploration performed, the
+                 discovery/processing split decision, and that
+                 validation passed.
+  dependencies — pip packages the script(s) need (extras only when you
                 actually import them; ``curl_cffi`` is already installed).
   pdf_download_strategy — "curl_cffi" or "browser_fetch", per the
                 ``download_pdf`` tool probe result.
-  python_code  — a self-contained, executable async script.
+  processing_python_code  — a self-contained, executable async script
+                (REQUIRED). Reads from ``load_discovered_links()`` when
+                a discovery script was emitted, else does inline
+                extraction (single-page tasks).
+  discovery_python_code   — a self-contained, executable async script
+                (OPTIONAL). Emit ONLY when the task requires discovering
+                links across multiple pages / filter values / paginated
+                listings. Collects link URLs into the ``discovered_links``
+                table via ``discover_links`` + ``save_discovered_link``.
 
 Linter — ``emitted_script_linter`` mechanically rejects and feeds back
 as a FREE repair turn (does NOT consume a validation attempt): syntax
@@ -211,6 +262,8 @@ title ``ready_selector`` (rule 14). Fix every violation it reports.
       from script_tools.start_browser import start_browser
       from script_tools.dom_helpers import get_text, get_attr, trusted_click
       from script_tools.form_helpers import select_filter_value
+      from script_tools.discover_links import discover_links
+      from script_tools.discovered_links_store import save_discovered_link, load_discovered_links, mark_link_processed
       from script_tools._file_utils import pdf_id_for, doc_id_for
 
    Signatures::
@@ -232,6 +285,10 @@ title ``ready_selector`` (rule 14). Fix every violation it reports.
       async def start_browser(headless=None, user_data_dir=None) -> Browser
       def pdf_id_for(url: str) -> str
       def doc_id_for(url) -> str
+      async def discover_links(tab, link_selector: str, load_more_selector: str = "", advertised: int = 0, base_url: str = "", scroll_js: str = "", max_rounds: int = 12) -> list[str]
+      def save_discovered_link(url: str, filter_label: str = "") -> None          # SYNC — do NOT await
+      def load_discovered_links() -> list[tuple[str, str]]                        # SYNC — returns [(url, filter_label)]
+      def mark_link_processed(url: str) -> None                                  # SYNC — idempotent re-runs
 
    ``save_path`` is always the downloads DIRECTORY; the helpers derive
    the filename. Every download/HTML helper returns a dict with
@@ -259,45 +316,40 @@ title ``ready_selector`` (rule 14). Fix every violation it reports.
       if __name__ == "__main__":
           asyncio.run(main())
 
-2. Dynamic loading — when the task implies pagination, infinite scroll,
-   or "load more", hand-code the loop. Require 3 CONSECUTIVE no-growth
-   readings before stopping (a single flat read catches lazy content
-   mid-flight and stops prematurely). Track ``document.body.scrollHeight``
-   or, for fixed-height containers, the count of TARGET links::
+2. Dynamic loading — NEVER hand-write the scroll/load-more/termination
+   loop. Call ``discover_links`` (rule 0) — it encodes the correct loop
+   (scroll → click load-more → wait for anchors → collect hrefs, retry
+   the click once on no-growth-while-control-visible, terminate on
+   reached-target OR control-gone-plus-3-stable). The ONLY discovery
+   logic you write is parsing the advertised total and passing the
+   selectors::
 
-       prev = 0
-       stable = 0
-       while True:
-           height = await tab.evaluate('document.body.scrollHeight')
-           if height == prev:
-               stable += 1
-           else:
-               stable = 0
-           if stable >= 3:
-               break
-           await tab.evaluate('window.scrollTo(0, document.body.scrollHeight)')
-           await tab.sleep(1.5)
-           prev = height
+       links = await discover_links(
+           tab,
+           link_selector="<css selector for target links>",
+           load_more_selector="<css selector for load-more/pager>",
+           advertised=<parsed site total, 0 if unknown>,
+       )
 
-   After the loop, call ``wait_for_anchors(tab, "<link-selector>")`` to
-   confirm the lazy elements are in the DOM before extracting. Never
-   guess a fixed number of scrolls.
+   When ``load_more_selector=""`` it is pure scroll discovery (3-stable
+   termination). When ``advertised=0`` it terminates on 3-stable with no
+   load-more; it never stops on no-growth while the control exists and
+   ``count < advertised``.
    TASK-MANDATED MECHANISM — when the task text prescribes HOW more
    results load (e.g. an "Infinite Scroll Loop" section, "click the
    load-more button"), that prescription OVERRIDES the exploration-based
    decision: emit the mandated mechanism even when another would work.
-   CLICK-TO-LOAD-MORE — when results paginate via a control, track the
-   count of TARGET links (not scrollHeight), trigger the control with
-   ``trusted_click`` (rule 0), and keep the 3-consecutive-no-growth
+   CLICK-TO-LOAD-MORE — when results paginate via a control, pass its
+   selector as ``load_more_selector``; ``discover_links`` triggers it
+   with ``trusted_click`` (rule 0) and keeps the 3-consecutive-no-growth
    termination. Exploration clicks via ``explore_page(action='click')``
    are TRUSTED CDP clicks, so growth observed in exploration proves
    nothing about an untrusted ``element.click()`` in the emitted script
-   — reproduce it with ``trusted_click``. When the site advertises a
-   result total (a ``.total_entries`` counter, an "N resultados" label,
-   a filter-badge count), PARSE it from the live DOM and never
-   terminate on no-growth while ``discovered < advertised`` AND the
-   control still exists (retry the click once first — a covering overlay
-   can intercept the first click).
+   — ``discover_links`` reproduces it with ``trusted_click``. When the
+   site advertises a result total (a ``.total_entries`` counter, an "N
+   resultados" label, a filter-badge count), PARSE it from the live DOM
+   and pass it as ``advertised``; ``discover_links`` never terminates on
+   no-growth while ``discovered < advertised`` AND the control exists.
 
 3. Anti-race — after every ``tab.fill``/"tab.click"/"tab.select" or
    scroll, insert ``await tab.sleep(0.5)`` (or longer for AJAX-heavy
@@ -652,9 +704,11 @@ title ``ready_selector`` (rule 14). Fix every violation it reports.
     bounds are ones the task explicitly states.
 
 Remember: explore the page first (navigate -> extract -> click filter
--> scroll -> extract again), then write ONE validation script that
-tests the full strategy in a single run (you only get 3 attempts), then
-emit the final JSON. Skipping exploration leads to wrong selectors that
-fail in production; wasting attempts on tiny one-off probes runs you
-out before the strategy is proven.
+-> scroll -> extract again), decide the discovery/processing split
+(Step 6b), then write the validation script(s) that test the full
+strategy in a single run (you only get 3 attempts), then emit the
+final JSON with ``processing_python_code`` (and ``discovery_python_code``
+when the task needs discovery). Skipping exploration leads to wrong
+selectors that fail in production; wasting attempts on tiny one-off
+probes runs you out before the strategy is proven.
 '''.strip()

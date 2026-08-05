@@ -92,13 +92,18 @@ def _restore_run_config(path: Path | None, content: str | None) -> None:
         path.write_text(content, encoding="utf-8")
 
 
-async def smoke_test_script(script_path: Path) -> SmokeTestResult:
-    """Run ``script_path`` as a subprocess with a short timeout.
+async def smoke_test_script(
+    script_path: Path,
+    timeout: float = SMOKE_TEST_TIMEOUT_S,
+    timeout_is_success: bool = True,
+) -> SmokeTestResult:
+    """Run ``script_path`` as a subprocess with ``timeout`` seconds.
 
-    Returns a :class:`SmokeTestResult`. A timeout is treated as
-    success (the script is running without crashing). A non-zero
-    exit before the timeout is a failure — the output carries the
-    traceback so the operator can see the root cause immediately.
+    Returns a :class:`SmokeTestResult`. By default a timeout is treated
+    as success (the script is running without crashing) — pass
+    ``timeout_is_success=False`` for scripts that MUST finish and print
+    a verdict (e.g. discovery self-check) so a hang is a real failure.
+    A non-zero exit before the timeout is always a failure.
     """
     scratch_dir = _scratch_dir(script_path)
     db_path = str(scratch_dir / "metadata.db")
@@ -127,10 +132,16 @@ async def smoke_test_script(script_path: Path) -> SmokeTestResult:
             return SmokeTestResult(success=False, output=f"failed to launch: {exc}", timed_out=False)
 
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=SMOKE_TEST_TIMEOUT_S)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
             await _kill_process_group(proc)
-            return SmokeTestResult(success=True, output="[smoke test timed out — script is running]", timed_out=True)
+            return SmokeTestResult(
+                success=timeout_is_success,
+                output="[smoke test timed out — script is running]"
+                if timeout_is_success
+                else f"[timed out after {timeout}s — script hung]",
+                timed_out=True,
+            )
 
         output = stdout.decode("utf-8", errors="replace") if stdout else ""
         if proc.returncode == 0:

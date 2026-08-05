@@ -455,6 +455,7 @@ def _check_self_contained(python_code: str) -> list[LintFinding]:
 # Separated from general lint rules so the driver can log them distinctly.
 _ZENDRIVER_RULES: frozenset[str] = frozenset(
     {
+        "2",  # hand-written discovery loop instead of discover_links helper
         "0",  # zd.start() vs start_browser()
         "4b",  # el.text_content() is a Playwright method, not zendriver
         "7",  # Playwright-only selectors (CDP rejects them)
@@ -476,7 +477,7 @@ _ZENDRIVER_RULE_NAMES: dict[str, str] = {
     "4b": "element handle — used el.text_content() which is not a zendriver method (use get_text)",
     "7": "selectors — uses Playwright-only pseudo-selectors rejected by CDP",
     "8": "HTTP client — uses raw HTTP lib instead of zendriver tab.get()",
-    "10": "tab.evaluate — wrong calling convention (extra positional args or bare arrow function)",
+    "2": "discovery loop — hand-written scroll/load-more loop instead of discover_links helper",
     "11": "save_record — awaited a synchronous helper (TypeError at runtime)",
     "13": "result shape — uses file_size key instead of size",
     "9": "tab.evaluate — returns a Python dict/list, not a string (slicing it raises)",
@@ -569,11 +570,63 @@ def _check_skeleton(python_code: str) -> list[LintFinding]:
     return findings
 
 
+def _loop_has_discovery_signals(body: list[ast.stmt]) -> bool:
+    """True when a loop body has scroll + link-read + growth/termination signals."""
+    has_scroll = has_linkread = has_growth = False
+    for node in ast.walk(ast.Module(body=body, type_ignores=[])):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if "scrollTo" in node.value or "scrollHeight" in node.value:
+                has_scroll = True
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if "querySelectorAll" in node.value:
+                has_linkread = True
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id in {"get_links", "_count_links"}:
+                has_linkread = True
+        if isinstance(node, ast.Name) and node.id in {"stable", "prev"}:
+            has_growth = True
+    return has_scroll and has_linkread and has_growth
+
+
+def _check_handwritten_discovery(python_code: str) -> list[LintFinding]:
+    """Rule 2: flag a hand-written discovery loop when no discover_links call exists."""
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return []
+    if "discover_links(" not in python_code:
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.For, ast.While, ast.AsyncFor)) and _loop_has_discovery_signals(node.body):
+                return [
+                    LintFinding(
+                        rule="2",
+                        severity="error",
+                        message="hand-written discovery loop forbidden — call discover_links(tab, ...) from script_tools.discover_links (rule 2)",
+                        line=node.lineno,
+                    )
+                ]
+    return []
+
+
 class EmittedScriptLinter:
     """Lint the RAW LLM python_code (before emit transforms)."""
 
     def __init__(self) -> None:
-        self._checks = (
+        self._DISCOVERY_CHECKS = (
+            _check_syntax,
+            _check_skeleton,
+            _check_http_imports,
+            _check_playwright_selectors,
+            _check_el_text_content,
+            _check_evaluate_iife,
+            _check_evaluate_args,
+            _check_evaluate_slice,
+            _check_bare_paths,
+            _check_self_contained,
+            _check_zd_start,
+            _check_handwritten_discovery,
+        )
+        self._PROCESSING_CHECKS = (
             _check_syntax,
             _check_skeleton,
             _check_ready_selector,
@@ -592,11 +645,13 @@ class EmittedScriptLinter:
             _check_retry_phase,
             _check_fanout,
             _check_gate_lock,
+            _check_handwritten_discovery,
         )
 
-    def lint(self, python_code: str) -> list[LintFinding]:
+    def lint(self, python_code: str, kind: str = "processing") -> list[LintFinding]:
         findings: list[LintFinding] = []
-        for check in self._checks:
+        checks = self._DISCOVERY_CHECKS if kind == "discovery" else self._PROCESSING_CHECKS
+        for check in checks:
             findings.extend(check(python_code))
         return findings
 

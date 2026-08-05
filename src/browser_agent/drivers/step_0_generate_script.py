@@ -24,6 +24,7 @@ from loguru import logger
 
 from browser_agent.adapters.runs_config_loader import RunsConfigLoader
 from browser_agent.domain.generated_script import GeneratedScript
+from browser_agent.domain.generated_script_set import GeneratedScriptSet
 from browser_agent.domain.emit_result import EmitResult
 from browser_agent.domain.lint_finding import LintFinding
 from browser_agent.domain.run_config import RunConfig
@@ -36,9 +37,6 @@ from browser_agent.drivers.generation.script_smoke_tester import (
     SmokeTestResult,
     log_smoke_test_result,
     smoke_test_script,
-)
-from browser_agent.drivers.generation.link_discovery_verification_runner import (
-    LinkDiscoveryVerificationRunner,
 )
 from browser_agent.drivers.generation.task_reader import TaskReader
 from browser_agent.logging_config import configure_logging
@@ -63,6 +61,11 @@ _MAX_SMOKE_REPAIRS = 1
 # re-verification already adds two site re-walks; more cycles multiply
 # runtime on LLM judgement that diminishingly improves.
 _MAX_DISCOVERY_REPAIRS = 1
+
+# Discovery (scroll + load-more across all filter values) takes minutes;
+# the 60s smoke budget is useless here. A timeout is a real failure for
+# discovery (it must finish and print counts), unlike a smoke test.
+_DISCOVERY_RUN_TIMEOUT_S = 600.0
 
 # Exit codes: 0 success, 1 smoke test could not be fixed, 2 could not run.
 EXIT_SMOKE_FAILED = 1
@@ -105,7 +108,7 @@ def _concurrency_context(run: RunConfig) -> str:
 
 
 class GenerateScriptDriver:
-    """End-to-end driver: task -> LLM agent -> lint -> emit -> smoke test -> discovery verification -> bounded repair."""
+    """End-to-end driver: task -> LLM agent -> lint -> emit -> smoke test -> discovery self-check -> bounded repair."""
 
     def __init__(self) -> None:
         self._task_reader: TaskReader = TaskReader(DEFAULT_PROMPT)
@@ -141,7 +144,7 @@ class GenerateScriptDriver:
             logger.exception("step 0 generation failed")
             return EXIT_COULD_NOT_RUN
 
-    async def _log_emit_zendriver_summary(self, emit_result: EmitResult) -> None:
+    def _log_emit_zendriver_summary(self, emit_result: EmitResult) -> None:
         """Log a summary of zendriver-specific issues found in the emitted script."""
         findings = emit_result.lint_findings
         zd_findings = EmittedScriptLinter.zendriver_findings(findings)
@@ -169,63 +172,108 @@ class GenerateScriptDriver:
         emitter: ScriptEmitter,
         context: str = "",
     ) -> int:
-        """Generate, lint-repair, emit, smoke-repair, verify discovery, bounded repair."""
-        script, use_case = await self._generator.generate(task, run_path, context)
-        script = await self._lint_repair_loop(use_case, script)
+        """Generate, lint-repair, emit, smoke-repair, run discovery self-check, bounded repair."""
+        script_set, use_case = await self._generator.generate(task, run_path, context)
+        script_set = await self._lint_repair_loop(use_case, script_set)
         emit_results: list[EmitResult] = []
-        emit_result = emitter.emit(task, script, run_path)
-        emit_results.append(emit_result)
-        emitter.update_sidecar_prior_feedback(emit_result.sidecar_path, context)
-        logger.info("emitted script at {path}", path=emit_result.script_path)
-        await self._log_emit_zendriver_summary(emit_result)
-        smoke_result = await self._smoke_test_with_sidecar(emit_result, emitter, attempt=1)
+        discovery_emit = self._emit_script(task, script_set.discovery_script(), emitter, run_path, context, emit_results)
+        processing_emit = self._emit_script(task, script_set.processing_script(), emitter, run_path, context, emit_results)
+        assert processing_emit is not None
+        smoke_result = await self._smoke_test_with_sidecar(processing_emit, emitter, attempt=1)
         if not smoke_result.success:
-            script = await self._smoke_repair_loop(use_case, script, smoke_result)
-            logger.info("re-emitting script after smoke-test repair")
-            emit_result = emitter.emit(task, script, run_path)
-            emit_results.append(emit_result)
-            emitter.update_sidecar_prior_feedback(emit_result.sidecar_path, context)
-            smoke_result = await self._smoke_test_with_sidecar(emit_result, emitter, attempt=2)
+            script_set = await self._smoke_repair_loop(use_case, script_set, smoke_result)
+            logger.info("re-emitting scripts after smoke-test repair")
+            self._cleanup_emit_artifacts(emit_results)
+            emit_results.clear()
+            discovery_emit = self._emit_script(task, script_set.discovery_script(), emitter, run_path, context, emit_results)
+            processing_emit = self._emit_script(
+                task, script_set.processing_script(), emitter, run_path, context, emit_results
+            )
+            assert processing_emit is not None
+            smoke_result = await self._smoke_test_with_sidecar(processing_emit, emitter, attempt=2)
             if not smoke_result.success:
                 await self._generator.close(use_case)
                 self._cleanup_emit_artifacts(emit_results)
                 return EXIT_SMOKE_FAILED
         await self._generator.close(use_case)
-        verdict = await _run_link_discovery_verification(task, script, run_path)
-        if verdict.status == "under_collected":
-            logger.warning(
-                "discovery verification: main script UNDER-COLLECTS on {paths} — running repair turn",
-                paths=verdict.under_collected_paths,
-            )
-            script = await self._generator.repair(use_case, format_discovery_repair(verdict.report))
-            script = await self._lint_repair_loop(use_case, script)
-            emit_result = emitter.emit(task, script, run_path)
-            emit_results.append(emit_result)
-            emitter.update_sidecar_prior_feedback(emit_result.sidecar_path, context)
-            smoke_result = await self._smoke_test_with_sidecar(emit_result, emitter, attempt=3)
-            await self._generator.close(use_case)
-            if smoke_result.success:
-                verdict = await _run_link_discovery_verification(task, script, run_path)
-                if verdict.status == "under_collected":
-                    logger.error(
-                        "discovery verification STILL under-collects after repair on {paths} — "
-                        "script emitted anyway; review the verification report above",
-                        paths=verdict.under_collected_paths,
-                    )
-            else:
-                logger.warning("discovery-repaired script failed the smoke test — keeping it (verification gap was real)")
+        if discovery_emit is not None:
+            await self._discovery_self_check(task, script_set, use_case, emitter, run_path, context, emit_results)
         self._cleanup_emit_artifacts(emit_results)
         return 0
 
+    def _emit_script(
+        self,
+        task: str,
+        script: GeneratedScript | None,
+        emitter: ScriptEmitter,
+        run_path: Path,
+        context: str,
+        emit_results: list[EmitResult],
+    ) -> EmitResult | None:
+        """Emit one script (if not None), update sidecar, log; return its EmitResult."""
+        if script is None:
+            return None
+        emit_result = emitter.emit(task, script, run_path)
+        emit_results.append(emit_result)
+        emitter.update_sidecar_prior_feedback(emit_result.sidecar_path, context)
+        logger.info("emitted {kind} script at {path}", kind=script.kind, path=emit_result.script_path)
+        self._log_emit_zendriver_summary(emit_result)
+        return emit_result
+
+    async def _discovery_self_check(
+        self,
+        task: str,
+        script_set: GeneratedScriptSet,
+        use_case: GenerateZendriverScriptUseCase,
+        emitter: ScriptEmitter,
+        run_path: Path,
+        context: str,
+        emit_results: list[EmitResult],
+    ) -> None:
+        """Run the emitted discovery script (600s) and repair once on UNDER-COLLECTED."""
+        discovery_path = emit_results[0].script_path
+        logger.info("running discovery self-check {path}", path=discovery_path)
+        result = await smoke_test_script(discovery_path, timeout=_DISCOVERY_RUN_TIMEOUT_S, timeout_is_success=False)
+        log_smoke_test_result(result, discovery_path, attempt=1)
+        if result.success and "UNDER-COLLECTED" not in result.output:
+            logger.info("discovery self-check passed")
+            return
+        paths = _under_collected_paths(result.output)
+        logger.warning("discovery self-check UNDER-COLLECTS on {paths} — running repair turn", paths=paths)
+        script_set = await self._generator.repair(use_case, format_discovery_repair(result.output))
+        script_set = await self._lint_repair_loop(use_case, script_set)
+        self._cleanup_emit_artifacts(emit_results)
+        emit_results.clear()
+        new_discovery = self._emit_script(task, script_set.discovery_script(), emitter, run_path, context, emit_results)
+        self._emit_script(task, script_set.processing_script(), emitter, run_path, context, emit_results)
+        if new_discovery is None:
+            return
+        re_result = await smoke_test_script(
+            new_discovery.script_path, timeout=_DISCOVERY_RUN_TIMEOUT_S, timeout_is_success=False
+        )
+        log_smoke_test_result(re_result, new_discovery.script_path, attempt=2)
+        if re_result.success and "UNDER-COLLECTED" not in re_result.output:
+            logger.info("discovery self-check passed after repair")
+        else:
+            logger.error(
+                "discovery self-check STILL under-collects after repair on {paths} — script emitted anyway",
+                paths=_under_collected_paths(re_result.output),
+            )
+
     @staticmethod
     def _cleanup_emit_artifacts(emit_results: list[EmitResult]) -> None:
-        """Keep only the final .py; remove all .raw.py, .json, and earlier .py files."""
+        """Keep only the final .py of each kind; remove .raw.py, .json, and earlier .py files."""
         if not emit_results:
             return
-        keeper = emit_results[-1].script_path
+        keepers: set[Path] = set()
+        by_kind: dict[str, Path] = {}
+        for emit_result in emit_results:
+            kind = "discovery" if "__discover__" in emit_result.script_path.name else "processing"
+            by_kind[kind] = emit_result.script_path
+        keepers = set(by_kind.values())
         for emit_result in emit_results:
             for path in (emit_result.script_path, emit_result.raw_code_path, emit_result.sidecar_path):
-                if path != keeper and path.is_file():
+                if path not in keepers and path.is_file():
                     path.unlink()
                     logger.debug("removed intermediate artifact {path}", path=path)
 
@@ -252,33 +300,36 @@ class GenerateScriptDriver:
     async def _lint_repair_loop(
         self,
         use_case: GenerateZendriverScriptUseCase,
-        script: GeneratedScript,
-    ) -> GeneratedScript:
-        """Run up to ``_MAX_LINT_REPAIRS`` repair turns for lint violations."""
+        script_set: GeneratedScriptSet,
+    ) -> GeneratedScriptSet:
+        """Run up to ``_MAX_LINT_REPAIRS`` repair turns for lint violations on all scripts."""
         for _ in range(_MAX_LINT_REPAIRS):
-            findings = self._error_findings(script)
+            findings = self._set_error_findings(script_set)
             if not findings:
                 break
             logger.warning("lint found {n} error(s); running repair turn", n=len(findings))
             self._log_zendriver_findings(findings)
-            script = await self._generator.repair(use_case, format_lint_repair(findings))
-        return script
+            script_set = await self._generator.repair(use_case, format_lint_repair(findings))
+        return script_set
 
     async def _smoke_repair_loop(
         self,
         use_case: GenerateZendriverScriptUseCase,
-        script: GeneratedScript,
+        script_set: GeneratedScriptSet,
         smoke_result: SmokeTestResult,
-    ) -> GeneratedScript:
+    ) -> GeneratedScriptSet:
         """Run up to ``_MAX_SMOKE_REPAIRS`` repair turns for smoke failures."""
         if smoke_result.success:
-            return script
+            return script_set
         logger.warning("smoke test FAILED; running repair turn")
         return await self._generator.repair(use_case, format_smoke_repair(smoke_result.output))
 
-    def _error_findings(self, script: GeneratedScript) -> list[LintFinding]:
-        """Return error-severity lint findings for ``script``."""
-        return [f for f in self._linter.lint(script.python_code) if f.severity == "error"]
+    def _set_error_findings(self, script_set: GeneratedScriptSet) -> list[LintFinding]:
+        """Return error-severity lint findings across all scripts in the set."""
+        out: list[LintFinding] = []
+        for script in script_set.all_scripts():
+            out.extend(f for f in self._linter.lint(script.python_code, kind=script.kind) if f.severity == "error")
+        return out
 
     async def _smoke_test_with_sidecar(
         self, emit_result: EmitResult, emitter: ScriptEmitter, attempt: int = 1
@@ -299,10 +350,30 @@ def _smoke_payload(result: SmokeTestResult) -> dict[str, object]:
     return {"success": result.success, "timed_out": result.timed_out, "output": result.output}
 
 
-async def _run_link_discovery_verification(task: str, script: GeneratedScript, run_path: Path) -> LinkDiscoveryVerdict:
-    """Best-effort: generate + emit + EXECUTE a script that verifies link DISCOVERY."""
-    logger.info("running link-discovery-verification step")
-    return await LinkDiscoveryVerificationRunner().run(task, script.python_code, run_path)
+def _path_header(line: str) -> str | None:
+    """Return the path from a ``--- <path> ---`` header line, or None."""
+    stripped = line.strip()
+    if not (stripped.startswith("---") and stripped.endswith("---")):
+        return None
+    return stripped[4:-4].strip() or None
+
+
+def _under_collected_paths(output: str) -> list[str]:
+    """Extract the paths flagged UNDER-COLLECTED from the discovery script output.
+
+    Matches the print format the system prompt mandates: ``--- <path> ---``
+    sets the current path, and any line containing ``UNDER-COLLECTED``
+    attributes the gap to it.
+    """
+    paths: list[str] = []
+    current = "<unknown>"
+    for line in output.splitlines():
+        header = _path_header(line)
+        if header is not None:
+            current = header
+        elif "UNDER-COLLECTED" in line:
+            paths.append(current)
+    return paths
 
 
 def main() -> None:

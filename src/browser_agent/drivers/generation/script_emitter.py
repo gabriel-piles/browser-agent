@@ -38,8 +38,10 @@ class ScriptEmitter:
 
     def emit(self, task: str, script: GeneratedScript, run_path: Path) -> EmitResult:
         """Lint, persist raw code, transform, write, and return the result."""
-        findings = self._linter.lint(script.python_code)
-        script_path = self._path_builder.build(task)
+        findings = self._linter.lint(script.python_code, kind=script.kind)
+        script_path = (
+            self._path_builder.build_discovery(task) if script.kind == "discovery" else self._path_builder.build(task)
+        )
         raw_path = self._raw_path(script_path)
         raw_path.write_text(script.python_code, encoding="utf-8")
         final_code, applied = self._finalize_source(script, run_path)

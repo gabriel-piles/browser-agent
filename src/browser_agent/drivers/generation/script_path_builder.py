@@ -27,6 +27,14 @@ class ScriptPathBuilder:
         base = scripts_dir / f"{today}__{slug}.py"
         return self._unique(base)
 
+    def build_discovery(self, task: str) -> Path:
+        """Return the path the discovery script for ``task`` is written to today."""
+        today = self._today()
+        slug = self._slug(task)
+        scripts_dir = self._scripts_dir()
+        base = scripts_dir / f"{today}__discover__{slug}.py"
+        return self._unique(base)
+
     @staticmethod
     def _unique(base: Path) -> Path:
         """Append ``__HHMMSS`` (then ``__002`` etc.) if ``base`` already exists."""
