@@ -47,6 +47,7 @@ class ReconcileDownloadsUseCase:
         disk_files = self._disk_pdf_basenames()
         per_row = [self._reconcile_row(row, disk_files) for row in rows]
         findings = self._corpus_findings(rows, disk_files, per_row)
+        findings.extend(self._discovered_unprocessed_findings(rows))
         return per_row, findings
 
     def _read_rows(self) -> list[tuple[str, str, str]]:
@@ -58,6 +59,66 @@ class ReconcileDownloadsUseCase:
             ).fetchall()
         finally:
             conn.close()
+
+    def _discovered_unprocessed_findings(self, rows: list[tuple[str, str, str]]) -> list[CorpusFinding]:
+        """Diff ``discovered_links`` (status='discovered') vs ``metadata`` rows.
+
+        A discovered URL is "handled" if a metadata.source_url equals it
+        or starts with ``<url>/pdf/`` (the per-PDF keying convention).
+        Unhandled → discovered_unprocessed; handled but still
+        status='discovered' → stale_link_status. Absent table → no findings.
+        """
+        handled = {src for src, _, _ in rows}
+        try:
+            discovered = self._read_discovered()
+        except sqlite3.OperationalError:
+            return []
+        unprocessed: list[str] = []
+        stale: list[str] = []
+        for url, _label in discovered:
+            (stale if self._is_handled_url(url, handled) else unprocessed).append(url)
+        return self._link_finding_kinds(unprocessed, stale)
+
+    def _read_discovered(self) -> list[tuple[str, str]]:
+        """Return ``[(url, filter_label)]`` for discovered_links rows still pending."""
+        uri = f"file:{self._db_path.as_posix()}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+        try:
+            return conn.execute(
+                "SELECT url, filter_label FROM discovered_links WHERE status='discovered'",
+            ).fetchall()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _is_handled_url(url: str, handled: set[str]) -> bool:
+        """True if ``url`` has a matching metadata.source_url (exact or /pdf/ prefix)."""
+        if url in handled:
+            return True
+        prefix = url + "/pdf/"
+        return any(h.startswith(prefix) for h in handled)
+
+    @staticmethod
+    def _link_finding_kinds(unprocessed: list[str], stale: list[str]) -> list[CorpusFinding]:
+        """Build CorpusFindings for the two discovered-link gap kinds."""
+        out: list[CorpusFinding] = []
+        if unprocessed:
+            out.append(
+                CorpusFinding(
+                    kind="discovered_unprocessed",
+                    detail=f"{len(unprocessed)} links in discovered_links with status='discovered' and no matching metadata row (discovery found them, processing never handled them).",
+                    items=unprocessed[:_MAX_FINDING_ITEMS],
+                )
+            )
+        if stale:
+            out.append(
+                CorpusFinding(
+                    kind="stale_link_status",
+                    detail=f"{len(stale)} links still status='discovered' but have a matching metadata row (processing handled them but mark_link_processed was not called).",
+                    items=stale[:_MAX_FINDING_ITEMS],
+                )
+            )
+        return out
 
     def _disk_pdf_basenames(self) -> set[str]:
         if not self._downloads_path.is_dir():

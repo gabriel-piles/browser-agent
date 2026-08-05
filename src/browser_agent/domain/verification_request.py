@@ -19,12 +19,16 @@ class VerificationRequest(BaseModel):
     """Input to the verification use case.
 
     Carries the original task prompt (source of truth), the step 0
-    generated script source (what the scraper actually did), and a gap
-    map summarizing what is already in ``metadata.db``.
+    generated script sources (what the scraper actually did), and a
+    gap map summarizing what is already in ``metadata.db``.
     """
 
     task_prompt: str = Field(description="The original run prompt from run.yaml.")
-    generated_script: str = Field(description="The step 0 script source code.")
+    discovery_script: str = Field(
+        default="",
+        description="The step 0 discovery script source (empty if no discovery phase).",
+    )
+    processing_script: str = Field(description="The step 0 processing script source code.")
     gap_map: str = Field(description="Coverage summary from the DB.")
     reconciler_inventory: str = Field(
         default="",
@@ -32,10 +36,14 @@ class VerificationRequest(BaseModel):
     )
 
     def render_prompt(self) -> str:
-        parts = [
-            f"## Original Task\n{self.task_prompt}\n\n---\n\n",
-            f"## Generated Script (from step 0)\n```python\n{self.generated_script}\n```\n\n---\n\n",
-        ]
+        parts = [f"## Original Task\n{self.task_prompt}\n\n---\n\n"]
+        if self.discovery_script:
+            parts.append(
+                f"## Discovery Script (from step 0)\n```python\n{self.discovery_script}\n```\n\n---\n\n",
+            )
+        parts.append(
+            f"## Processing Script (from step 0)\n```python\n{self.processing_script}\n```\n\n---\n\n",
+        )
         parts.append(f"## Scraping Coverage (gap map)\n{self.gap_map}\n\n---\n\n")
         if self.reconciler_inventory:
             parts.append(

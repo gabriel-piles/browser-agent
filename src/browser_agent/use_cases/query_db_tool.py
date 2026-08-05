@@ -20,9 +20,11 @@ from browser_agent.use_cases.verification_agent_deps import VerificationAgentDep
 
 _MAX_ROWS = 200
 _SCHEMA_REMINDER = (
-    "Schema: metadata(source_url TEXT, task_slug TEXT, data TEXT). "
+    "Schema: metadata(source_url TEXT PRIMARY KEY, task_slug TEXT, scraped_at TEXT, data TEXT); "
+    "discovered_links(url TEXT PRIMARY KEY, filter_label TEXT, status TEXT, discovered_at TEXT). "
     "`data` is a JSON blob whose keys include file_url, pdf_filename, "
-    "pdf_id, pdf_name, pdf_type, subcategory, year, state."
+    "pdf_id, pdf_name, pdf_type, subcategory, year, state. "
+    "`discovered_links.status` is 'discovered' (not yet processed) or 'processed'."
 )
 _SELECT_RE = re.compile(r"^\s*SELECT\b", re.IGNORECASE)
 

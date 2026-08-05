@@ -5,9 +5,11 @@ Reads the active run from ``active_run.yaml``, builds a
 the run's ``metadata.db`` + ``downloads/`` paths, and a
 :class:`SubprocessReadScriptRunner`, constructs a
 :class:`VerificationRequest` from the run prompt + the latest step 0
-script + a gap map of the DB, runs the
+discovery + processing scripts + a gap map of the DB, runs the
 :class:`VerifyDownloadsUseCase` with the ``minimax-m3:cloud`` model,
-and writes ``verification_report.md`` into the run directory.
+and writes ``verification_report.md`` into the run directory. The
+discovery script (``<date>__discover__<slug>.py``) populates the
+``discovered_links`` table; the processing script consumes it.
 
 Usage:
     python -m browser_agent.drivers.step_2_verify_downloaded_pdfs
@@ -16,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 
 from loguru import logger
@@ -52,6 +55,9 @@ SCRIPTS_DIRNAME = "scripts"
 METADATA_SAMPLE_LIMIT = 25
 SHORT_URL_LIMIT = 80
 
+# Filename token marking a discovery script (mirrors step_1's split logic).
+_DISCOVER_TOKEN = "__discover"
+
 
 class VerifyDownloadsDriver:
     """End-to-end driver: run the verification agent, write the report."""
@@ -66,14 +72,21 @@ class VerifyDownloadsDriver:
         run = RunsConfigLoader.load_active()
         run_path = RunsConfigLoader.resolve_active_path()
         logger.info("verification driver starting run={run}", run=run.name)
-        script_path = self._latest_script_path(run_path)
-        if script_path is None:
+        discovery_path, processing_path = self._latest_script_paths(run_path)
+        if processing_path is None:
             return 2
-        script = script_path.read_text(encoding="utf-8")
+        discovery_script = discovery_path.read_text(encoding="utf-8") if discovery_path else ""
+        processing_script = processing_path.read_text(encoding="utf-8")
         try:
             reconciler_section, per_row, findings = self._run_reconciler(run_path)
             deps = self._build_deps(run_path)
-            request = self._build_request(run, script, run_path, reconciler_section)
+            request = self._build_request(
+                run,
+                discovery_script,
+                processing_script,
+                run_path,
+                reconciler_section,
+            )
             model = OllamaAdapter(model=VERIFICATION_MODEL).get_model()
             report = await VerifyDownloadsUseCase(deps, model).execute(request)
         except Exception as exc:
@@ -122,30 +135,40 @@ class VerifyDownloadsDriver:
     def _build_request(
         self,
         run,
-        script: str,
+        discovery_script: str,
+        processing_script: str,
         run_path: Path,
         reconciler_section: str,
     ) -> VerificationRequest:
-        """Build the verification request from the run prompt, script, gap map, and reconciler."""
+        """Build the request from the run prompt, both scripts, gap map, and reconciler."""
         gap_map = ScrapingGapMapBuilder(run_path / "metadata.db").build()
         return VerificationRequest(
             task_prompt=run.prompt,
-            generated_script=script,
+            discovery_script=discovery_script,
+            processing_script=processing_script,
             gap_map=gap_map,
             reconciler_inventory=reconciler_section,
         )
 
-    def _latest_script_path(self, run_path: Path) -> Path | None:
-        """Return the most recent ``scripts/*.py`` path, or None."""
+    def _latest_script_paths(self, run_path: Path) -> tuple[Path | None, Path | None]:
+        """Return ``(discovery_path, processing_path)`` — newest of each, or None.
+
+        ``__discover__`` in the name → discovery; every other dated
+        ``YYYY_MM_DD_*.py`` (excluding ``.raw.py``) → processing. Mirrors
+        step_1's split so the agent sees both scripts of a two-script run.
+        """
         scripts_dir = run_path / SCRIPTS_DIRNAME
         if not scripts_dir.is_dir():
             logger.warning("no scripts directory at {dir}", dir=scripts_dir)
-            return None
-        scripts = sorted(scripts_dir.glob("*.py"), key=lambda p: p.stat().st_mtime)
-        if not scripts:
-            logger.warning("no step 0 scripts found in {dir}", dir=scripts_dir)
-            return None
-        return scripts[-1]
+            return None, None
+        dated = [
+            p for p in scripts_dir.glob("*.py") if re.match(r"\d{4}_\d{2}_\d{2}", p.name) and not p.name.endswith(".raw.py")
+        ]
+        discovery = sorted((p for p in dated if _DISCOVER_TOKEN in p.name), key=lambda p: p.stat().st_mtime)
+        processing = sorted((p for p in dated if _DISCOVER_TOKEN not in p.name), key=lambda p: p.stat().st_mtime)
+        if not processing:
+            logger.warning("no step 0 processing script found in {dir}", dir=scripts_dir)
+        return (discovery[-1] if discovery else None), (processing[-1] if processing else None)
 
     @staticmethod
     def _print_summary(
