@@ -31,6 +31,7 @@ from browser_agent.drivers.generation.script_emitter import ScriptEmitter
 from browser_agent.drivers.generation.script_generator import ScriptGenerator
 from browser_agent.drivers.generation.script_path_builder import ScriptPathBuilder
 from browser_agent.drivers.generation.script_tools_copier import ScriptToolsCopier
+from browser_agent.drivers.generation.prior_report_reader import PriorReportReader
 from browser_agent.drivers.generation.script_smoke_tester import (
     SmokeTestResult,
     log_smoke_test_result,
@@ -124,7 +125,10 @@ class GenerateScriptDriver:
         emitter = ScriptEmitter(path_builder)
         ScriptToolsCopier().copy(run_path)
         task = self._read_task(argv, run)
+        prior_feedback = PriorReportReader(run_path).read()
         context = _concurrency_context(run)
+        if prior_feedback:
+            context = f"{prior_feedback}\n\n---\n\n{context}" if context else prior_feedback
         logger.info(
             "driver received task tokens={n} run={run} parallel_runners={pr}",
             n=len(task) // 4,
@@ -171,6 +175,7 @@ class GenerateScriptDriver:
         emit_results: list[EmitResult] = []
         emit_result = emitter.emit(task, script, run_path)
         emit_results.append(emit_result)
+        emitter.update_sidecar_prior_feedback(emit_result.sidecar_path, context)
         logger.info("emitted script at {path}", path=emit_result.script_path)
         await self._log_emit_zendriver_summary(emit_result)
         smoke_result = await self._smoke_test_with_sidecar(emit_result, emitter, attempt=1)
@@ -179,6 +184,7 @@ class GenerateScriptDriver:
             logger.info("re-emitting script after smoke-test repair")
             emit_result = emitter.emit(task, script, run_path)
             emit_results.append(emit_result)
+            emitter.update_sidecar_prior_feedback(emit_result.sidecar_path, context)
             smoke_result = await self._smoke_test_with_sidecar(emit_result, emitter, attempt=2)
             if not smoke_result.success:
                 await self._generator.close(use_case)
@@ -195,6 +201,7 @@ class GenerateScriptDriver:
             script = await self._lint_repair_loop(use_case, script)
             emit_result = emitter.emit(task, script, run_path)
             emit_results.append(emit_result)
+            emitter.update_sidecar_prior_feedback(emit_result.sidecar_path, context)
             smoke_result = await self._smoke_test_with_sidecar(emit_result, emitter, attempt=3)
             await self._generator.close(use_case)
             if smoke_result.success:

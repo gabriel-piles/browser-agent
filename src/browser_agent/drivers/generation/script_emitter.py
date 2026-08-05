@@ -103,6 +103,15 @@ class ScriptEmitter:
         sidecar_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
     @staticmethod
+    def update_sidecar_prior_feedback(sidecar_path: Path, feedback: str) -> None:
+        """Merge the applied prior-run feedback into the existing sidecar JSON."""
+        if not sidecar_path.is_file():
+            return
+        payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        payload["prior_feedback"] = feedback
+        sidecar_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    @staticmethod
     def _log_transforms(applied: list[str]) -> None:
         """Log which transforms actually matched (vs silently no-op'd)."""
         if applied:
