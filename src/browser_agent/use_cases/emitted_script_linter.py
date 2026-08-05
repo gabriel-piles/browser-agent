@@ -296,6 +296,44 @@ def _check_retry_phase(python_code: str) -> list[LintFinding]:
     return out
 
 
+def _check_gate_lock(python_code: str) -> list[LintFinding]:
+    """Rule 15h: multi-tab SPA scripts must serialize the gate phase with an asyncio.Lock.
+
+    Fires when a script uses multi-tab fanout (``asyncio.gather`` +
+    ``bring_to_front``) but does NOT declare an ``asyncio.Lock`` and guard
+    the foreground-dependent gate phase with ``async with``. Without the
+    lock, concurrent per-tab ``bring_to_front()`` calls steal foreground
+    from each other and N-1 tabs' SPA metadata never renders.
+    """
+    out: list[LintFinding] = []
+    if "bring_to_front(" not in python_code:
+        return out
+    if "asyncio.gather(" not in python_code:
+        return out
+    has_lock_decl = re.search(r"asyncio\.Lock\s*\(", python_code) is not None
+    has_async_with = re.search(r"async\s+with\s+\w+", python_code) is not None
+    if has_lock_decl and has_async_with:
+        return out
+    out.append(
+        LintFinding(
+            rule="15h",
+            severity="error",
+            message=(
+                "multi-tab script missing asyncio.Lock serialization of the "
+                "metadata-gate phase — only ONE tab can be foreground at a time, "
+                "so concurrent bring_to_front() calls steal foreground from each "
+                "other and N-1 tabs' SPA metadata never renders (gate times out "
+                "-> load_failed). Declare a shared `gate_lock = asyncio.Lock()` "
+                "before the workers and wrap the navigate + bring_to_front + "
+                "metadata-gate (+ retry) block in `async with gate_lock:`. Release "
+                "before extraction/download so PDF I/O still parallelizes."
+            ),
+            line=None,
+        )
+    )
+    return out
+
+
 def _check_fanout(python_code: str) -> list[LintFinding]:
     out: list[LintFinding] = []
     if "asyncio.gather(" not in python_code:
@@ -553,6 +591,7 @@ class EmittedScriptLinter:
             _check_self_contained,
             _check_retry_phase,
             _check_fanout,
+            _check_gate_lock,
         )
 
     def lint(self, python_code: str) -> list[LintFinding]:

@@ -146,7 +146,10 @@ async def _ensure_tab_visible(tab):
     vLex/Corte IDH ``metadata-item`` block) NEVER renders while the tab is
     hidden — the DOM keeps ``<!--anchor-->`` placeholders no matter how long
     a gate waits. Once rendered, the content persists in the DOM even if the
-    tab is hidden again, so one activation before the gate suffices.
+    tab is hidden again. NOTE: "one activation before the gate suffices"
+    is only true when the caller serializes the gate phase with a shared
+    ``asyncio.Lock`` (rule 15h) — without the lock, concurrent per-tab
+    ``bring_to_front()`` calls steal foreground and N-1 tabs never render.
     Capture-anyway: a failed activation must not abort a document row.
     """
     try:
@@ -236,9 +239,13 @@ async def save_page_html(tab, save_path, source_url, filename=None, card_selecto
     background tabs never run IntersectionObserver/requestAnimationFrame —
     framework binding that depends on them (Aurelia repeaters on
     vLex/Corte IDH, React lazy mounts) only happens in the visible tab.
-    Binding persists once rendered, so a single activation up front is
-    enough; parallel workers momentarily stealing each other's
-    foreground is harmless.
+    Binding persists once rendered, BUT on a fresh navigation the binding
+    has not fired yet and cannot fire while another tab holds foreground —
+    so parallel workers that each call ``bring_to_front()`` race and only
+    the last tab to activate actually renders. The CALLER must serialize
+    the navigate + activate + gate phase with a shared ``asyncio.Lock``
+    (rule 15h); this helper's own activation is a belt-and-suspenders
+    safety net, not a substitute for the lock.
 
     PDF VIEWER STRIP: before capture, removes ``#pdf-container`` and
     ``.pdf-viewer`` from the DOM so the saved HTML carries metadata and

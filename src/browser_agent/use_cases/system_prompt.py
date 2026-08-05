@@ -526,9 +526,10 @@ title ``ready_selector`` (rule 14). Fix every violation it reports.
     up to 2 more times. Only after all retries fail, record
     ``download_status="load_failed"` with ``pdf_filename=""" and
     ``source_page_url=page_url`` (so the rule-8a retry phase recovers it
-    on the always-visible main_tab). A metadata-gate timeout under
-    concurrency is almost always a tab-visibility race (rule 15h), not
-    a dead page — one re-navigation with activation resolves it.
+    on the always-visible main_tab). The retry loop MUST stay INSIDE the
+    ``async with gate_lock:`` block (rule 15h) so the re-navigation's
+    foreground is not stolen by another worker — a re-navigation outside
+    the lock reproduces the original race that caused the timeout.
     Structure the retry as a loop around the navigate + activate + poll
     block, not as duplicated code.
 
@@ -557,6 +558,7 @@ title ``ready_selector`` (rule 14). Fix every violation it reports.
            for idx, url in enumerate(doc_urls):
                work_queue.put_nowait((idx, url))
            results = []
+           gate_lock = asyncio.Lock()  # rule 15h: serialize foreground-gated render
 
            async def worker(tab_id, wtab):
                while True:
@@ -566,7 +568,7 @@ title ``ready_selector`` (rule 14). Fix every violation it reports.
                        return
                    print(f"\n--- Doc {idx + 1}/{len(doc_urls)} (tab {tab_id}) ---")
                    try:
-                       results.append(await process_document(wtab, url, out_dir, tab_id))
+                       results.append(await process_document(wtab, url, out_dir, tab_id, gate_lock))
                    except Exception as exc:
                        # One bad page MUST NOT kill the other tabs. Record
                        # load_failed so the rule-8a retry phase re-processes
@@ -603,13 +605,31 @@ title ``ready_selector`` (rule 14). Fix every violation it reports.
       never fire IntersectionObserver/RAF, so SPA late-bound metadata
       (the ``metadata-item`` block on Aurelia/vLex/Corte IDH pages, React
       lazy mounts) NEVER renders while the tab is hidden — the gate polls
-      and times out. Before the metadata gate in each per-document task,
-      activate the worker tab::
+      and times out. CRITICAL: only ONE tab can be foreground at a time,
+      so concurrent per-tab ``bring_to_front()`` calls STEAL foreground
+      from each other — N-1 worker tabs stay background, their SPA
+      metadata never renders, and the gate times out -> ``load_failed``.
+      "Persists once rendered" does NOT help on a fresh navigation: the
+      binding has not fired yet and cannot fire while another tab holds
+      foreground. Serialize the foreground-dependent phase with a SHARED
+      ``asyncio.Lock`` declared ONCE before the workers::
 
-          await tab.bring_to_front()
+          gate_lock = asyncio.Lock()
 
-      One activation before the gate suffices (the metadata persists in
-      the DOM once rendered). Omit for single-tab scripts (rule 1).
+      Then in each per-document task wrap the navigate + activate +
+      metadata-gate (+ rule-14b retry) block in ``async with gate_lock:``::
+
+          async with gate_lock:
+              await tab.get(page_url)
+              await wait_for_page_ready(tab, page_url)
+              await tab.bring_to_front()
+              # metadata gate (+ retry loop) here
+
+      The lock is held ONLY until the gate passes (metadata rendered ->
+      persists in DOM); release it BEFORE metadata extraction and PDF
+      download so PDF I/O still parallelizes across tabs. On non-SPA
+      sites the gate passes in <1s so the lock is a near-no-op. Omit the
+      lock and ``bring_to_front`` for single-tab scripts (rule 1).
 
 16. Per-sub-page selector verification — when the task enumerates
     multiple peer sub-pages (e.g. "Admissibilities, Inadmissibilities,

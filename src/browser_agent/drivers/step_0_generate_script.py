@@ -91,7 +91,15 @@ def _concurrency_context(run: RunConfig) -> str:
         "`tab = await browser.get(url, new_tab=True)` after start_browser and call "
         "`await prepare_page_wait(tab)` on EACH tab before its first navigation. "
         "Pass each task its OWN tab to download_pdf_curl_cffi / save_page_html so "
-        "cookies are not shared across concurrent sessions."
+        "cookies are not shared across concurrent sessions. "
+        "Foreground-gated SPAs (Aurelia/vLex/Corte IDH, React lazy mounts) "
+        "render late-bound metadata ONLY in the visible tab — concurrent "
+        "per-tab bring_to_front() calls steal foreground from each other and "
+        "N-1 tabs' metadata never renders (gate timeout -> load_failed). "
+        "Declare `gate_lock = asyncio.Lock()` before the workers and wrap the "
+        "navigate + bring_to_front + metadata-gate (+ retry) block in "
+        "`async with gate_lock:`; release before extraction/download so PDF "
+        "I/O still parallelizes (rule 15h, lint-enforced)."
     )
 
 
