@@ -1,10 +1,11 @@
 """Persist scraped metadata into a shared SQLite store.
 
-Restructured from the vendored ``EMITTED_SAVE_RECORD_BLOCK`` to fix the
-``no such table: metadata`` crash on fresh runs. The DB path and task slug
-are resolved lazily at call time from env vars or ``__main__.__file__`` so
-both the validation runner (env vars) and standalone scripts (``__file__``)
-work without globals injection.
+The DB path and task slug are resolved lazily at call time from env vars
+or ``__main__.__file__`` so both the validation runner (env vars) and
+standalone scripts (``__file__``) work without globals injection. When
+the env var is unset the DB is only ever written next to a real emitted
+script under ``<run>/scripts/`` (i.e. ``<run>/metadata.db``); it is
+never written into the source tree.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from script_tools._file_utils import _canonical_url
 
 
 def _resolve_db_path() -> str:
-    """Return the SQLite path, preferring the env var, then ``__main__.__file__``."""
+    """Return the SQLite path: env var, else ``<run>/metadata.db`` for emitted scripts."""
     env = os.environ.get("BROWSER_AGENT_SAVE_RECORD_DB_PATH")
     if env:
         return env
@@ -31,12 +32,18 @@ def _resolve_db_path() -> str:
             "save_record cannot resolve the DB path: __main__ has no __file__. "
             "Set BROWSER_AGENT_SAVE_RECORD_DB_PATH to the metadata.db path."
         )
-    base = Path(main_file).resolve().parent.parent / "metadata.db"
-    try:
-        open(base, "a").close()
-    except OSError:
-        base = Path(main_file).resolve().parent / "metadata.db"
-    return str(base)
+    script_path = Path(main_file).resolve()
+    # Only write metadata.db next to the run dir for a real emitted script
+    # under <run>/scripts/. Never derive it from an arbitrary __main__
+    # location (e.g. the step-0 driver in src/browser_agent/) — that would
+    # drop a stray metadata.db into the source tree.
+    if script_path.parent.name != "scripts":
+        raise RuntimeError(
+            "save_record cannot resolve a safe DB path: the running script is not "
+            "under a <run>/scripts/ directory. Set BROWSER_AGENT_SAVE_RECORD_DB_PATH to "
+            f"the metadata.db path (__main__.__file__ = {main_file!r})."
+        )
+    return str(script_path.parent.parent / "metadata.db")
 
 
 def _resolve_task_slug() -> str:
