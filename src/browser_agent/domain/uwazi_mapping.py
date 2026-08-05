@@ -51,6 +51,10 @@ class UwaziMapping(BaseModel):
     scraper_document_relationship: str | None = Field(
         default=None, description="Registry-template relationship property linking to the primary template entity."
     )
+    scraper_document_hash: str | None = Field(
+        default=None,
+        description="Registry-template property to receive the SHA-256 hash of the scraped document file at upload time.",
+    )
 
     def property_for_source(self, source_name: str) -> MappedProperty | None:
         """Return the :class:`MappedProperty` whose source is ``source_name``, or None."""

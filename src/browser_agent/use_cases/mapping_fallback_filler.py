@@ -112,7 +112,7 @@ class MappingFallbackFiller:
         if not missing:
             return
         mapping.properties = mapping.properties + tuple(
-            self._default_entry(p, thesauri_by_id, template_name=template.name) for p in missing
+            self._default_entry(p, thesauri_by_id, template_name=(template.name,)) for p in missing
         )
 
     def _fill_missing_registry_defaults(
@@ -139,7 +139,7 @@ class MappingFallbackFiller:
     ) -> MappedProperty:
         """Build a registry-only ``source=None`` placeholder for one property."""
         entry = self._default_entry(prop, thesauri_by_id)
-        return entry.model_copy(update={"template_name": registry_name})
+        return entry.model_copy(update={"template_name": (registry_name,)})
 
     def _mapped_targets(self, mapping: UwaziMapping) -> set[str]:
         """Return the Uwazi property names already covered by the mapping."""
@@ -149,7 +149,7 @@ class MappingFallbackFiller:
         self,
         prop: UwaziProperty,
         thesauri_by_id: dict[str, ThesauriSnapshot],
-        template_name: str | None = None,
+        template_name: tuple[str, ...] = (),
     ) -> MappedProperty:
         """Build a ``source=None`` :class:`MappedProperty` placeholder for one property."""
         return MappedProperty(

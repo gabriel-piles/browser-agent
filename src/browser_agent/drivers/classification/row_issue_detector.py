@@ -11,7 +11,7 @@ from __future__ import annotations
 from browser_agent.drivers.classification.existing_entities_fetcher import ExistingEntitiesFetcher
 from browser_agent.domain.uwazi_mapping import UwaziMapping
 from browser_agent.domain.uwazi_template import UwaziTemplate
-from browser_agent.use_cases.metadata_value_transformer import build_metadata_for_row
+from browser_agent.use_cases.metadata_value_transformer import MetadataValueTransformer, build_metadata_for_row
 from browser_agent.use_cases.sync_plan_builder import resolve_key_value
 
 
@@ -65,6 +65,11 @@ class RowIssueDetector:
         """Return the required-properties issue, or ``None`` when every required is filled."""
         metadata = build_metadata_for_row(record, source_url, mapping, thesaurus_lookup)
         missing = [n for n in template.required_property_names() if not self._entities_fetcher.has_value(metadata.get(n))]
+        if missing and mapping.registry_template:
+            registry_metadata = MetadataValueTransformer().build_registry_metadata_for_row(
+                record, source_url, mapping, thesaurus_lookup
+            )
+            missing = [n for n in missing if not self._entities_fetcher.has_value(registry_metadata.get(n))]
         if not missing:
             return None
         return f"missing required properties: {', '.join(missing)}"

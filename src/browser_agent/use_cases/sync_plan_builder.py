@@ -13,7 +13,6 @@ from pathlib import Path
 
 from browser_agent.adapters.execution.file_ops import pdf_filename_for
 from browser_agent.domain.field_type import FieldType
-from browser_agent.domain.identity_config import KeySource
 from browser_agent.domain.sync_plan import SyncAction, SyncPlan, SyncPlanRow
 from browser_agent.domain.uwazi_mapping import UwaziMapping
 from browser_agent.domain.uwazi_template import UwaziTemplate
@@ -79,13 +78,15 @@ def resolve_supporting_filename(record: dict, downloads_dir: Path | None) -> str
 
 
 def resolve_key_value(record: dict, source_url: str, identity, mapping: UwaziMapping) -> str | None:
-    """Return the per-row key value based on :class:`IdentityConfig`."""
-    if identity.key_source is KeySource.FIELD:
-        return _key_from_record(record, identity.key_field)
-    if identity.key_source is KeySource.KEY_FIELD_AND_PROPERTY:
-        value = _key_from_record(record, identity.key_field)
-        return value if value is not None else source_url
-    return _placeholder_value(source_url, identity.path_placeholder)
+    """Return the per-row key value from ``identity.key_field``.
+
+    The identity check is always: read ``key_field`` from the record and
+    look for an existing Uwazi entity whose ``key_property`` matches.
+    When ``key_field`` is unset or absent, the source URL is used as the
+    fallback key so a row can still be matched against Uwazi.
+    """
+    value = _key_from_record(record, identity.key_field)
+    return value if value is not None else source_url
 
 
 def _key_from_record(record: dict, key_field: str | None) -> str | None:
@@ -96,14 +97,6 @@ def _key_from_record(record: dict, key_field: str | None) -> str | None:
     return None if value is None else str(value)
 
 
-def _placeholder_value(source_url: str, placeholder: str | None) -> str | None:
-    """Extract a placeholder value from a URL by pattern matching the URL pattern."""
-    if not placeholder:
-        return None
-    idx = source_url.find(placeholder)
-    return source_url[idx:] if idx >= 0 else None
-
-
 def _title_of_record(record: dict, source_url: str, mapping: UwaziMapping) -> str:
     """Return the entity title for one record, falling back to the source URL."""
     title_prop = mapping.title_property()
@@ -111,7 +104,7 @@ def _title_of_record(record: dict, source_url: str, mapping: UwaziMapping) -> st
         title = record.get(title_prop.source)
         if title:
             return str(title)
-    return mapping.identity.path_placeholder or source_url
+    return source_url
 
 
 def _row_action(
@@ -124,7 +117,9 @@ def _row_action(
 ) -> tuple[SyncAction, str | None]:
     """Return the action + skip reason for one record.
 
-    When ``registry_entities_by_key`` is supplied (registry flow), the
+    The identity check looks up ``key_field`` in the record and probes
+    the existing-entity index built from Uwazi. When
+    ``registry_entities_by_key`` is supplied (registry flow), the
     identity value prevails on the registry template: if it exists there
     the row is SKIP (already_on_registry); if it exists only in the
     primary template the action is CREATE_REGISTRY_ONLY (recover the
@@ -135,7 +130,7 @@ def _row_action(
     """
     if not (record.get("file_url") or ""):
         return SyncAction.SKIP, "no_file_url"
-    if mapping.identity.key_source is not KeySource.KEY_FIELD_AND_PROPERTY:
+    if not mapping.identity.key_property:
         return SyncAction.CREATE, None
     key_value = resolve_key_value(record, source_url, mapping.identity, mapping)
     if not key_value:
@@ -169,7 +164,7 @@ def _fetch_existing_entities(client: UwaziClient, mapping: UwaziMapping) -> dict
     The index spans every instance language so a row is treated as
     already uploaded when its link key value exists in any language.
     """
-    if mapping.identity.key_source is not KeySource.KEY_FIELD_AND_PROPERTY:
+    if not mapping.identity.key_property:
         return {}
     fetcher = ExistingEntitiesFetcher(client)
     return fetcher.fetch(
@@ -186,7 +181,7 @@ def _fetch_existing_entities_for_template(
     template_name: str,
 ) -> dict[str, str]:
     """Fetch and index existing entities for one template by the mapping's key property."""
-    if mapping.identity.key_source is not KeySource.KEY_FIELD_AND_PROPERTY:
+    if not mapping.identity.key_property:
         return {}
     fetcher = ExistingEntitiesFetcher(client)
     return fetcher.fetch(
@@ -335,7 +330,7 @@ def _plan_rows(records, mapping, client, thesaurus_lookup, thesaurus_lookup_by_i
     thesaurus_parents: dict[str, dict[str, str | None]] = {}
     for prop in mapping.properties:
         if prop.type in (FieldType.SELECT, FieldType.MULTI_SELECT):
-            ref_template = registry_template if prop.template_name == mapping.registry_template else template
+            ref_template = registry_template if mapping.registry_template in prop.template_name else template
             tprop = ref_template.property_by_name(prop.name) if ref_template else template.property_by_name(prop.name)
             if tprop and tprop.thesaurus_id and tprop.thesaurus_id in parents_by_id:
                 thesaurus_parents[prop.name] = parents_by_id[tprop.thesaurus_id]

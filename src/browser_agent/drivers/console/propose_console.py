@@ -47,6 +47,7 @@ class ProposeConsole:
             print(f"  registry:       {mapping.registry_template}")
             print(f"  date_property:  {mapping.scraper_date_property!r}")
             print(f"  relationship:    {mapping.scraper_document_relationship!r}")
+            print(f"  document_hash:   {mapping.scraper_document_hash!r}")
         print(f"  skipped:        {len(mapping.skipped)}")
         self._print_skipped(mapping)
         self._print_identity(mapping.identity)
@@ -58,12 +59,7 @@ class ProposeConsole:
 
     def _print_identity(self, identity) -> None:
         """Print the identity block of the mapping."""
-        print(
-            f"  identity:       key_source={identity.key_source.value} "
-            f"key_property={identity.key_property!r} "
-            f"path_placeholder={identity.path_placeholder!r} "
-            f"source_url_property={identity.source_url_property!r}"
-        )
+        print(f"  identity:       key_field={identity.key_field!r} key_property={identity.key_property!r}")
         if identity.select_filtering_name or identity.select_filtering_options:
             print(
                 f"  identity filter: select_filtering_name={identity.select_filtering_name!r} "

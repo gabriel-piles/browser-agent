@@ -135,12 +135,14 @@ class UwaziPusher:
         mapping: UwaziMapping,
         primary_shared_id: str | None,
     ) -> str:
-        """Create the registry entity, set its date + relationship, link to the primary."""
+        """Create the registry entity with its date, relationship and hash set in metadata."""
         registry_metadata = dict(row.registry_metadata)
         if mapping.scraper_date_property:
             registry_metadata[mapping.scraper_date_property] = int(datetime.now(timezone.utc).timestamp() * 1000)
         if mapping.scraper_document_relationship and primary_shared_id:
             registry_metadata[mapping.scraper_document_relationship] = [{"value": primary_shared_id}]
+        if mapping.scraper_document_hash:
+            registry_metadata[mapping.scraper_document_hash] = self._document_hash_for(row)
         registry_entity = Entity(
             template=mapping.registry_template,
             title=row.title,
@@ -148,51 +150,21 @@ class UwaziPusher:
             metadata=registry_metadata,
         )
         registry_shared_id = client.entities.upload(entity=registry_entity, language=row.language, files=None)
-        if mapping.scraper_document_relationship and primary_shared_id and registry_shared_id:
-            self._create_relationship(client, row, mapping, registry_shared_id, primary_shared_id)
         return registry_shared_id
 
-    def _create_relationship(
-        self,
-        client: UwaziClient,
-        row,
-        mapping: UwaziMapping,
-        registry_shared_id: str,
-        primary_shared_id: str,
-    ) -> None:
-        """Create the Uwazi relationship linking the registry entity to the primary one."""
-        from uwazi_api.domain.reference import Reference
-
-        relation_type = client.relationships.get_relation_type_by_name(mapping.scraper_document_relationship or "")
-        if relation_type is None:
-            print(
-                f"    WARNING: relation type {mapping.scraper_document_relationship!r} not found; skipping relationship creation"
-            )
-            return
-        file_id = self._resolve_file_id(client, registry_shared_id, row)
-        try:
-            client.relationships.create(
-                file_entity_shared_id=registry_shared_id,
-                file_id=file_id,
-                reference=Reference(text=""),
-                to_entity_shared_id=primary_shared_id,
-                relationship_type_id=relation_type.id,
-                language=row.language,
-            )
-        except Exception as exc:  # noqa: BLE001
-            print(f"    WARNING: relationship creation failed for {registry_shared_id} -> {primary_shared_id}: {exc}")
-
     @staticmethod
-    def _resolve_file_id(client: UwaziClient, registry_shared_id: str, row) -> str:
-        """Return the registry entity's first file id, or empty string when it has none."""
-        try:
-            entity = client.entities.get_one(registry_shared_id, language=row.language)
-            documents = getattr(entity, "documents", None) or []
-            if documents:
-                return documents[0].id
-        except Exception:  # noqa: BLE001
-            pass
-        return ""
+    def _document_hash_for(row) -> str | None:
+        """Return the SHA-256 hex of the row's document file (PDF or DOC), or None."""
+        import hashlib
+
+        for path in (row.pdf_path, row.supporting_path, row.html_path):
+            if not path:
+                continue
+            candidate = Path(path)
+            if not candidate.exists():
+                continue
+            return hashlib.sha256(candidate.read_bytes()).hexdigest()
+        return None
 
     def _build_entity_files(self, row, mapping: UwaziMapping) -> list[EntityFileUpload]:
         """Build the primary + supporting file uploads for one entity."""

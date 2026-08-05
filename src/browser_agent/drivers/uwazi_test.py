@@ -23,8 +23,8 @@ from browser_agent.configuration import UWAZI_URL, UWAZI_USER, UWAZI_PASSWORD
 # leave False to just dump the thesaurus list as a smoke test.
 DELETE_ENTITIES: bool = True
 
-# Template whose entities get wiped. Other templates stay untouched.
-WIPE_TEMPLATE: str = "DOCUMENT"
+# Templates whose entities get wiped. Other templates stay untouched.
+WIPE_TEMPLATES: list[str] = ["DOCUMENT", "DOCUMENT SOURCE"]
 
 # Page size for both the search and the bulk-delete batches.
 WIPE_PAGE_SIZE: int = 200
@@ -68,20 +68,21 @@ def _delete_in_batches(client: UwaziClient, shared_ids: list[str], page_size: in
 
 
 def _delete_all_entities(client: UwaziClient) -> None:
-    """Bulk-delete every entity on ``WIPE_TEMPLATE``, after a y/N prompt."""
-    shared_ids = _collect_template_shared_ids(client, WIPE_TEMPLATE, WIPE_PAGE_SIZE)
-    if not shared_ids:
-        print(f"No entities on template {WIPE_TEMPLATE!r}.")
-        return
-    print(f"About to delete {len(shared_ids)} entities")
-    print(f"instance={UWAZI_URL!r}")
-    print(f"template={WIPE_TEMPLATE!r}")
-    confirm = input("Type 'y' to confirm, anything else aborts: ").strip().lower()
-    if confirm != "y":
-        print("Aborted; no entities were deleted.")
-        return
-    _delete_in_batches(client, shared_ids, WIPE_PAGE_SIZE)
-    print("Done.")
+    """Bulk-delete every entity on each template in ``WIPE_TEMPLATES``, after a y/N prompt."""
+    for template_name in WIPE_TEMPLATES:
+        shared_ids = _collect_template_shared_ids(client, template_name, WIPE_PAGE_SIZE)
+        if not shared_ids:
+            print(f"No entities on template {template_name!r}.")
+            continue
+        print(f"About to delete {len(shared_ids)} entities")
+        print(f"instance={UWAZI_URL!r}")
+        print(f"template={template_name!r}")
+        confirm = input("Type 'y' to confirm, anything else aborts: ").strip().lower()
+        if confirm != "y":
+            print("Aborted; no entities were deleted.")
+            return
+        _delete_in_batches(client, shared_ids, WIPE_PAGE_SIZE)
+        print("Done.")
 
 
 def main() -> None:

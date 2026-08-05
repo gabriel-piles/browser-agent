@@ -14,7 +14,6 @@ class LlmFieldDraft(BaseModel):
     target: str
     type: str
     thesaurus: str | None = None
-    parse_formats: list[str] = Field(default_factory=list)
     required: bool = False
     notes: str | None = None
     default_value: str | None = None

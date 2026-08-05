@@ -24,7 +24,7 @@ the template properties that have no matching scraped field.
 Rules:
 - Place every field you can; use ``type="title"`` for the entity title
   (always target the ``title`` common property, never leave it empty),
-  ``type="date"`` for dates (with ``parse_formats``), ``type="select"``
+  ``type="date"`` for dates, ``type="select"``
   / ``type="multiselect"`` for fields backed by a thesaurus (set
   ``thesaurus`` to the thesaurus name), ``type="text"`` for plain
   strings, ``type="numeric"`` for numbers, ``type="markdown"`` for
@@ -37,14 +37,15 @@ Rules:
   value best identifies one record (e.g. a heading, document title,
   or case name); if no good match exists, pick the most descriptive
   free-text field.
-- For the identity block: pick the simplest key source that uniquely
-  identifies a record. Prefer ``path_placeholder`` when the source
-  URLs share a stable pattern; otherwise use ``field``. When the
-  template has a ``link``-type property, prefer
-  ``key_source="key_field_and_property"`` with that property as
-  ``key_property`` and the source URL (or a URL-derived field) as
-  ``key_field`` so already-uploaded entities are detected by their link.
-- If you set ``source_url_property`` (the Uwazi property that receives the original scrape-page URL for provenance), it MUST NOT be the same property name you mapped ``file_url`` into. When ``file_url`` is mapped to a ``link``-type property (commonly named ``source_url``), leave ``source_url_property`` as ``null`` — the file link already populates that property, and overwriting it with the page URL destroys the identity key. Only set ``source_url_property`` to a distinct, dedicated provenance property that has no ``source`` mapping.
+- For the identity block: set ``key_field`` to the source field whose
+  value uniquely identifies one record and ``key_property`` to the
+  Uwazi property name to match against existing entities. The apply
+  pipeline reads ``key_field`` from the record and skips any row whose
+  value already exists on Uwazi under ``key_property``. When the
+  template has a ``link``-type property, prefer it as ``key_property``
+  and the source URL (or a URL-derived field) as ``key_field`` so
+  already-uploaded entities are detected by their link. Leave both
+  null only when every record should be created unconditionally.
 - For the ``select_filtering`` block: when the template has one or
   more ``select`` properties whose value space partitions the
   entities in a way the operator can predict (e.g. a ``status``,
@@ -81,14 +82,20 @@ Rules:
   in both templates) — emit a single identity block.
 - For the registry template's ``scraper_date_property`` (if named in
   the user prompt), emit a ``fields`` entry with ``source=null``,
-  ``type="date"``, ``default_value=null``, and ``template`` set to the
-  registry template's name. It is filled at upload time, not from
+  ``type="date"``, ``default_value=null``, and ``template`` set to
+  the registry template's name. It is filled at upload time, not from
   scraped data.
 - For the registry template's ``scraper_document_relationship`` (if
   named in the user prompt), emit a ``fields`` entry with
   ``source=null``, ``type="relationship"``, ``default_value=null``,
   and ``template`` set to the registry template's name. It is filled at
   upload time by linking to the created primary entity.
+- For the registry template's ``scraper_document_hash`` (if named in
+  the user prompt), emit a ``fields`` entry with ``source=null``,
+  ``type="text"``, ``default_value=null``, and ``template`` set to
+  the registry template's name. It is filled at upload time with the
+  SHA-256 hash of the scraped document file (PDF/DOC), or left empty
+  when no file exists; never map a scraped field to it.
 - Output ONLY the structured JSON matching the schema. Do not output
   prose, explanations, or markdown fences.
 """
@@ -107,6 +114,7 @@ class ProposePromptRenderer:
         registry_template: UwaziTemplate | None = None,
         scraper_date_property: str | None = None,
         scraper_document_relationship: str | None = None,
+        scraper_document_hash: str | None = None,
     ) -> str:
         """Compose the user-turn prompt for the propose Agent call."""
         parts = [
@@ -119,7 +127,8 @@ class ProposePromptRenderer:
             parts.append(
                 f"## Registry-template special properties\n"
                 f"scraper_date_property = {scraper_date_property!r} (type=date, source=null, filled at upload time)\n"
-                f"scraper_document_relationship = {scraper_document_relationship!r} (type=relationship, source=null, filled at upload time)\n\n"
+                f"scraper_document_relationship = {scraper_document_relationship!r} (type=relationship, source=null, filled at upload time)\n"
+                f"scraper_document_hash = {scraper_document_hash!r} (type=text, source=null, filled at upload time with the file SHA-256)\n\n"
             )
         parts.append(
             f"## Source catalog (from metadata.db for run {catalog.run!r})\n"

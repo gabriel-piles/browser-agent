@@ -3,7 +3,7 @@
 The :class:`UwaziMapping` is a tuple of :class:`FieldMapping`. Each
 one describes a single column of the source data: its name, the
 target Uwazi property, the type, optional thesaurus link, and any
-type-specific hints (``parse_formats`` for date strings, etc.).
+type-specific hints (``default_value`` for constant entries, etc.).
 
 A :class:`FieldMapping` whose ``source`` is ``None`` carries a
 constant ``default_value`` the apply pipeline writes verbatim (after
@@ -33,10 +33,6 @@ class FieldMapping(BaseModel):
     thesaurus: str | None = Field(
         default=None,
         description="Thesaurus name (must match a thesauri_mappings/*.yaml file).",
-    )
-    parse_formats: tuple[str, ...] = Field(
-        default_factory=tuple,
-        description="Date parse formats to try in order (date fields).",
     )
     required: bool = Field(default=False, description="Whether the apply pipeline must produce a value for this field.")
     notes: str | None = Field(default=None, description="Free-form human notes for the reviewer.")

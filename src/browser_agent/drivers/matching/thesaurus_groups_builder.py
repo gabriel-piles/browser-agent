@@ -60,7 +60,7 @@ class ThesaurusGroupsBuilder:
     @staticmethod
     def _ref_template_for(prop, template, registry_template):
         """Return the template a property belongs to (primary or registry)."""
-        if registry_template is not None and prop.template_name == registry_template.name:
+        if registry_template is not None and registry_template.name in prop.template_name:
             return registry_template
         return template
 

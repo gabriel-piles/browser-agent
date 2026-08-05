@@ -31,6 +31,8 @@ from browser_agent.drivers.mapping.mapping_loader import MappingLoader
 from browser_agent.drivers.paths.run_paths import RunPaths
 from browser_agent.drivers.clients.uwazi_client_factory import UwaziClientFactory
 
+MAX_ENTITIES_TO_UPLOAD = 50
+
 
 class ApplyDriver:
     """End-to-end driver: read mapping -> build plan -> push (or dry-run)."""
@@ -47,6 +49,9 @@ class ApplyDriver:
         mapping = self._loader.load_or_die(self._paths.default_mapping_path())
         client = self._uwazi.build()
         plan = self._build_plan(client, mapping, run_config)
+        if len(plan.rows) > MAX_ENTITIES_TO_UPLOAD:
+            plan = plan.model_copy(update={"rows": plan.rows[:MAX_ENTITIES_TO_UPLOAD]})
+            print(f"Apply capped to the first {MAX_ENTITIES_TO_UPLOAD} plan rows.")
         self._printer.print_plan_rows(plan)
         self._printer.print_plan_counts(plan)
         if not plan.rows:

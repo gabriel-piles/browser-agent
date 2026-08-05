@@ -75,6 +75,7 @@ class ProposeDriver:
             registry_template_name=run_config.scraper_registry_template,
             scraper_date_property=run_config.scraper_date_property,
             scraper_document_relationship=run_config.scraper_document_relationship,
+            scraper_document_hash=run_config.scraper_document_hash,
         )
 
 

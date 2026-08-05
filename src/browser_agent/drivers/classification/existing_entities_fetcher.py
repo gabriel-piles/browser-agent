@@ -18,7 +18,6 @@ language, so the dedup index must span all of them.
 
 from __future__ import annotations
 
-from browser_agent.domain.identity_config import KeySource
 from browser_agent.domain.uwazi_mapping import UwaziMapping
 from uwazi_api.client import UwaziClient
 from uwazi_api.domain.search_filters import SearchFilters, SelectFilter
@@ -179,8 +178,6 @@ class ExistingEntitiesFetcher:
         entities_by_key: dict[str, str],
     ) -> str | None:
         """Return the existing Uwazi shared id for ``key_value``, or ``None``."""
-        if mapping.identity.key_source is not KeySource.KEY_FIELD_AND_PROPERTY:
-            return None
         if not mapping.identity.key_property or not key_value:
             return None
         return entities_by_key.get(str(key_value).strip())

@@ -3,10 +3,15 @@
 This model is the single list the operator edits. It contains the
 live Uwazi template property metadata (``name``, ``label``, ``type``,
 ``required``) plus the mapping-specific choices
-(``source``, ``thesaurus``, ``parse_formats``, ``default_value``, ``notes``).
+(``source``, ``thesaurus``, ``default_value``, ``notes``).
 The thesaurus id is excluded from the YAML mapping — operators refer
 to the thesaurus by its name and the downstream scripts resolve the
 id from the live Uwazi template.
+
+``template_name`` lists every Uwazi template this property belongs to.
+A property shared by the primary and registry templates carries both
+names, so the apply pipeline maps it for both at the same time; a
+registry-only property carries only the registry name.
 
 Special ``type`` values that are NOT part of ``Entity.metadata``:
 - ``title`` (``FieldType.TITLE``) targets the Uwazi entity title. The
@@ -43,18 +48,18 @@ class MappedProperty(BaseModel):
         default=None,
         description="Thesaurus name (must match a thesauri_mappings/*.yaml file).",
     )
-    parse_formats: tuple[str, ...] = Field(
-        default_factory=tuple,
-        description="Date parse formats to try in order (date fields).",
-    )
     default_value: str | None = Field(
         default=None,
         description="Constant value for entries with source=None; None leaves the property unset.",
     )
     notes: str | None = Field(default=None, description="Free-form human notes for the reviewer.")
-    template_name: str | None = Field(
-        default=None,
-        description="Primary-template properties carry the primary template name; registry-only properties carry the registry template name. Legacy YAML may still emit null (= primary).",
+    template_name: tuple[str, ...] = Field(
+        default_factory=tuple,
+        description=(
+            "Templates this property belongs to. A property shared by the primary and "
+            "registry templates carries both names; a registry-only property carries only "
+            "the registry name. Empty means primary-only (legacy YAML)."
+        ),
     )
 
     @field_validator("default_value", mode="before")
@@ -72,16 +77,15 @@ class MappedProperty(BaseModel):
         cls,
         template_prop,
         draft: LlmFieldDraft | None,
-        template_name: str | None = None,
+        template_name: tuple[str, ...] = (),
     ) -> MappedProperty:
         """Merge a live template property with an optional LLM draft.
 
         When ``draft`` is ``None`` the entry is a source-less default
         placeholder. The ``type`` and ``required`` come from the live
         template so the YAML always reflects the real Uwazi shape.
-        ``template_name`` tags the property with its owning template
-        (primary properties carry the primary template name; registry-only
-        properties carry the registry name).
+        ``template_name`` lists every template this property belongs to
+        (a shared property carries both the primary and registry names).
         """
         return cls(
             name=template_prop.name,
@@ -90,14 +94,15 @@ class MappedProperty(BaseModel):
             required=template_prop.required,
             source=draft.source if draft is not None else None,
             thesaurus=draft.thesaurus if draft is not None else None,
-            parse_formats=tuple(draft.parse_formats or ()) if draft is not None else (),
             default_value=draft.default_value if draft is not None else None,
             notes=draft.notes if draft is not None else None,
             template_name=template_name,
         )
 
     @classmethod
-    def title_from_draft(cls, title_prop, draft: LlmFieldDraft | None, template_name: str | None = None) -> MappedProperty:
+    def title_from_draft(
+        cls, title_prop, draft: LlmFieldDraft | None, template_name: tuple[str, ...] = ()
+    ) -> MappedProperty:
         """Build the title entry: forced to :attr:`FieldType.TITLE`, thesaurus dropped."""
         entry = cls.from_template_and_draft(title_prop, draft, template_name=template_name)
         return entry.model_copy(update={"type": FieldType.TITLE, "thesaurus": None})

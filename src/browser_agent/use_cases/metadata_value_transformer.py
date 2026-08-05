@@ -59,18 +59,26 @@ class MetadataValueTransformer:
         relationship_title_to_id: dict[str, dict[str, str]] | None = None,
         thesaurus_lookup_by_id: dict[str, dict[str, str | None]] | None = None,
     ) -> dict:
-        """Build the post-transform metadata dict for one record.
+        """Build the primary-template metadata dict for one record.
 
-        The title and any non-metadata-bound property (file) are skipped
-        here because Uwazi stores them on the entity itself, not in
-        ``Entity.metadata``. Public so the upload-validation report can
-        reuse the substitution logic.
+        Title and file properties are skipped (stored on the entity, not in
+        ``metadata``). When a registry template is set, properties that belong
+        only to the registry template are skipped here; shared properties
+        (also on the primary template) are kept. Public so the upload-validation
+        report can reuse the substitution logic.
         """
         out: dict = {}
         for prop in mapping.properties:
             if prop.type in (FieldType.TITLE, FieldType.SKIPPED, FieldType.FILE):
                 continue
-            if mapping.registry_template and prop.template_name == mapping.registry_template:
+            if (
+                mapping.registry_template
+                and mapping.registry_template in prop.template_name
+                and not (
+                    (not prop.template_name or mapping.template in prop.template_name)
+                    and (self._template is None or self._template.property_by_name(prop.name) is not None)
+                )
+            ):
                 continue
             out[prop.name] = self._property_value(
                 record,
@@ -81,12 +89,6 @@ class MetadataValueTransformer:
                 relationship_title_to_id,
                 thesaurus_lookup_by_id,
             )
-        if (
-            mapping.identity.source_url_property
-            and mapping.identity.source_url_property not in out
-            and self._looks_like_url(source_url)
-        ):
-            out[mapping.identity.source_url_property] = self._link_value(source_url, source_url)
         return {k: v for k, v in out.items() if v is not None}
 
     def build_registry_metadata_for_row(
@@ -102,16 +104,17 @@ class MetadataValueTransformer:
     ) -> dict:
         """Build the registry-template metadata dict for one record.
 
-        Includes shared properties (template_name null or equal to the
+        Includes shared properties (template_name empty or containing the
         primary template name) plus registry-only properties
-        (template_name=registry_template). Excludes the
-        ``scraper_date_property`` and ``scraper_document_relationship``
-        which are filled at push time.
+        (template_name containing the registry name). Excludes the
+        ``scraper_date_property``, ``scraper_document_relationship`` and
+        ``scraper_document_hash`` which are filled at push time.
         """
         registry_name = mapping.registry_template
         skip_names = {
             mapping.scraper_date_property,
             mapping.scraper_document_relationship,
+            mapping.scraper_document_hash,
         }
         out: dict = {}
         for prop in mapping.properties:
@@ -119,10 +122,10 @@ class MetadataValueTransformer:
                 continue
             if prop.name in skip_names:
                 continue
-            is_shared = prop.template_name in (None, mapping.template) and (
+            is_shared = (not prop.template_name or mapping.template in prop.template_name) and (
                 self._template is None or self._template.property_by_name(prop.name) is not None
             )
-            is_registry = prop.template_name == registry_name
+            is_registry = registry_name in prop.template_name
             if not (is_shared or is_registry):
                 continue
             out[prop.name] = self._property_value(
@@ -188,7 +191,7 @@ class MetadataValueTransformer:
     def _format_field(self, raw, prop: MappedProperty, lookup) -> object:
         """Apply type-specific transformation to one property's raw value."""
         if prop.type is FieldType.DATE:
-            return self._coerce_date(raw, prop.parse_formats)
+            return self._coerce_date(raw)
         if prop.type in _THESAURUS_TYPES:
             return self._substitute_thesaurus(raw, prop.type, lookup)
         return raw
@@ -225,12 +228,12 @@ class MetadataValueTransformer:
             return [{"value": relationship_title_to_id.get(v, v)} for v in value if v is not None]
         return [{"value": relationship_title_to_id.get(value, value)}]
 
-    def _coerce_date(self, value, parse_formats: tuple[str, ...]) -> str | None:
-        """Parse a date string with the first matching format, or pass it through."""
+    def _coerce_date(self, value) -> str | None:
+        """Parse a date string with the first matching default format, or pass it through."""
         if value is None or value == "":
             return None
         text = str(value).strip()
-        for fmt in parse_formats or _DEFAULT_DATE_FORMATS:
+        for fmt in _DEFAULT_DATE_FORMATS:
             parsed = self._try_parse_date(text, fmt)
             if parsed is not None:
                 return parsed

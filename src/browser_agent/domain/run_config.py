@@ -52,6 +52,10 @@ class RunConfig(BaseModel):
         default=None,
         description="Registry-template relationship property linking the registry entity to the primary `template` entity.",
     )
+    scraper_document_hash: str | None = Field(
+        default=None,
+        description="Registry-template property to receive the SHA-256 hash of the scraped document file (PDF/DOC) at upload time; empty when no file exists.",
+    )
     parallel_runners: int | None = Field(
         default=None,
         ge=1,
