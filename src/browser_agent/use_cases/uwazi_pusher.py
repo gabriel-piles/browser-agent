@@ -146,7 +146,7 @@ class UwaziPusher:
         registry_entity = Entity(
             template=mapping.registry_template,
             title=row.title,
-            published=mapping.publish,
+            published=False,
             metadata=registry_metadata,
         )
         registry_shared_id = client.entities.upload(entity=registry_entity, language=row.language, files=None)
