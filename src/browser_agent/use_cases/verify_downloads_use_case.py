@@ -19,7 +19,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.usage import UsageLimitExceeded
 
 from browser_agent.agent_logging import agent_logger
-from browser_agent.configuration import MAX_LLM_CALLS, MAX_OUTPUT_TOKENS
+from browser_agent.configuration import AGENT_INPUT_TOKEN_LIMIT, MAX_LLM_CALLS, MAX_OUTPUT_TOKENS
 from browser_agent.domain.verification_report import VerificationReport
 from browser_agent.domain.verification_request import VerificationRequest
 from browser_agent.use_cases.check_pdf_tool import check_pdf
@@ -86,7 +86,10 @@ class VerifyDownloadsUseCase:
                 agent,
                 prompt,
                 deps=self._deps,
-                usage_limits=UsageLimits(request_limit=MAX_LLM_CALLS),
+                usage_limits=UsageLimits(
+                    request_limit=MAX_LLM_CALLS,
+                    input_tokens_limit=AGENT_INPUT_TOKEN_LIMIT,
+                ),
             )
         finally:
             agent_logger.info(

@@ -21,7 +21,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.usage import UsageLimitExceeded
 
 from browser_agent.agent_logging import agent_logger
-from browser_agent.configuration import COMPACT_MAX_RETAINED, WRITER_MAX_LLM_CALLS, MAX_OUTPUT_TOKENS
+from browser_agent.configuration import AGENT_INPUT_TOKEN_LIMIT, WRITER_MAX_LLM_CALLS, MAX_OUTPUT_TOKENS
 from browser_agent.domain.generated_script import GeneratedScript
 from browser_agent.domain.task_split import TaskSplit
 from browser_agent.use_cases.agent_deps import AgentDeps
@@ -83,26 +83,29 @@ class GenerateProcessingScriptUseCase:
             return await agent.run(
                 prompt,
                 deps=self._deps,
-                usage_limits=UsageLimits(request_limit=WRITER_MAX_LLM_CALLS),
+                usage_limits=_usage_limits(),
                 message_history=message_history,
             )
         except (UnexpectedModelBehavior, UsageLimitExceeded) as exc:
-            if message_history is not None:
-                agent_logger.warning("Context overflow, retrying with truncated history: {exc}", exc=exc)
-                truncated = list(message_history[-COMPACT_MAX_RETAINED:])
-                return await agent.run(
-                    prompt,
-                    deps=self._deps,
-                    usage_limits=UsageLimits(request_limit=WRITER_MAX_LLM_CALLS),
-                    message_history=truncated,
-                )
-            agent_logger.warning("Context overflow on fresh run, retrying with finalize directive: {exc}", exc=exc)
-            directive = "\n\nIMPORTANT: your exploration context is full. Emit your final structured result now without further tool calls."
+            return await self._retry_overflow(agent, prompt, message_history, exc)
+
+    async def _retry_overflow(self, agent: Agent, prompt: str, message_history: list | None, exc: Exception) -> Any:
+        directive = "\n\nIMPORTANT: your exploration context is full. Emit your final structured result now without further tool calls."
+        if message_history is not None:
+            agent_logger.warning("Context overflow, retrying with truncated history + finalize: {exc}", exc=exc)
+            truncated = list(message_history[-6:])
             return await agent.run(
                 prompt + directive,
                 deps=self._deps,
-                usage_limits=UsageLimits(request_limit=WRITER_MAX_LLM_CALLS),
+                usage_limits=_usage_limits(),
+                message_history=truncated,
             )
+        agent_logger.warning("Context overflow on fresh run, retrying with finalize directive: {exc}", exc=exc)
+        return await agent.run(
+            prompt + directive,
+            deps=self._deps,
+            usage_limits=_usage_limits(),
+        )
 
     @staticmethod
     def _coerce_result(run: Any) -> GeneratedScript:
@@ -120,6 +123,13 @@ class GenerateProcessingScriptUseCase:
             input_tok=usage.input_tokens,
             output_tok=usage.output_tokens,
         )
+
+
+def _usage_limits() -> UsageLimits:
+    return UsageLimits(
+        request_limit=WRITER_MAX_LLM_CALLS,
+        input_tokens_limit=AGENT_INPUT_TOKEN_LIMIT,
+    )
 
 
 def _truncate(value: str, limit: int) -> str:

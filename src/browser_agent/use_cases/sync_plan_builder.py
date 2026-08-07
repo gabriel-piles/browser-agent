@@ -19,6 +19,7 @@ from browser_agent.domain.uwazi_template import UwaziTemplate
 from browser_agent.drivers.classification.existing_entities_fetcher import ExistingEntitiesFetcher
 from browser_agent.use_cases.metadata_db import normalize_record, parse_row_data, query_rows
 from browser_agent.use_cases.metadata_value_transformer import (
+    MetadataValueTransformer,
     build_thesaurus_parents,
     load_thesauri_mappings_by_property,
 )

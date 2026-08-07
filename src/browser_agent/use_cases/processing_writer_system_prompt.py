@@ -175,6 +175,15 @@ does inline extraction only (no ``load_discovered_links()`` call).
        print("attr title:", await get_attr(row, "title"))
        print("inner text:", await get_text(row, tab))
 
+4d. Scoped compound selectors — when you prefix a compound CSS
+    selector (containing commas) with a scope (e.g. a container id),
+    the comma splits it into independent selectors and ONLY the first
+    is scoped. ``f"{scope} a[href$='.pdf'], a[href$='.doc']"`` matches
+    the first scoped but the second GLOBALLY. Wrap in ``:is()``:
+    ``f"{scope} :is(a[href$='.pdf'], a[href$='.doc'])"``. Also use the
+    CSS ``i`` flag for case-insensitive extension matching:
+    ``a[href$='.doc' i]`` matches ``.DOC`` and ``.doc``.
+
 5. Cloudflare challenge detection — after every ``goto_ready`` (or
    equivalent navigation+wait), check whether the page is a Cloudflare
    challenge by testing ``document.title`` for "Just a moment" or

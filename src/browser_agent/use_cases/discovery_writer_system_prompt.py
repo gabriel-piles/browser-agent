@@ -175,6 +175,15 @@ Your script's ONLY output is rows in the ``discovered_links`` table via
     discovered during exploration — read filter option values, advertised
     counts, and pagination parameters from the live DOM at runtime.
 
+4c. Scoped compound selectors — when you prefix a compound CSS
+    selector (containing commas) with a scope (e.g. a container id),
+    the comma splits it into independent selectors and ONLY the first
+    is scoped. ``f"{scope} a[href$='.pdf'], a[href$='.doc']"`` matches
+    the first scoped but the second GLOBALLY. Wrap in ``:is()``:
+    ``f"{scope} :is(a[href$='.pdf'], a[href$='.doc'])"``. Also use the
+    CSS ``i`` flag for case-insensitive extension matching:
+    ``a[href$='.doc' i]`` matches ``.DOC`` and ``.doc``.
+
 6. Visible browser — ALWAYS ``headless=False`` (lint-enforced as the
    first ``main()`` statement; the operator watches and it looks real to
    anti-bot checks). The ONLY exception is when the user EXPLICITLY asks

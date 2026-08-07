@@ -24,7 +24,7 @@ from browser_agent.configuration import UWAZI_URL, UWAZI_USER, UWAZI_PASSWORD
 DELETE_ENTITIES: bool = True
 
 # Templates whose entities get wiped. Other templates stay untouched.
-WIPE_TEMPLATES: list[str] = ["DOCUMENT", "DOCUMENT SOURCE"]
+WIPE_TEMPLATES: list[str] = ["DOCUMENT SOURCE", "DOCUMENT"]
 
 # Page size for both the search and the bulk-delete batches.
 WIPE_PAGE_SIZE: int = 200

@@ -643,6 +643,158 @@ def _check_handwritten_discovery(python_code: str) -> list[LintFinding]:
     return []
 
 
+_DOC_EXTENSIONS = ("pdf", "doc", "docx", "rtf", "xls", "xlsx", "ppt", "pptx")
+_HREF_EXT_RE = re.compile(r"href\$=(['\"])(\.[A-Za-z]{2,5})\1(\s+i)?\]")
+
+
+def _is_scope_name(node: ast.AST) -> bool:
+    """True when ``node`` looks like a scope variable (bare Name, not a str)."""
+    return isinstance(node, ast.Name)
+
+
+def _joined_str_text(node: ast.JoinedStr) -> str:
+    """Concatenate the literal Constant parts of an f-string into a string."""
+    parts: list[str] = []
+    for p in node.values:
+        if isinstance(p, ast.Constant) and isinstance(p.value, str):
+            parts.append(p.value)
+    return "".join(parts)
+
+
+def _selector_has_unscoped_comma(selector: str) -> bool:
+    """Compound ``href$=`` selector split by comma without ``:is(``/``:where(``."""
+    if "href$=" not in selector or "," not in selector:
+        return False
+    return ":is(" not in selector and ":where(" not in selector
+
+
+def _check_unscoped_compound_selector(python_code: str) -> list[LintFinding]:
+    """Rule 16: scope-prefixed compound CSS selector — comma unscopes later parts."""
+    out: list[LintFinding] = []
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return out
+    for node in ast.walk(tree):
+        selector: str | None = None
+        scope: str | None = None
+        line: int | None = None
+        if isinstance(node, ast.JoinedStr):
+            has_scope = any(isinstance(v, ast.FormattedValue) and _is_scope_name(v.value) for v in node.values)
+            text = _joined_str_text(node)
+            if has_scope and _selector_has_unscoped_comma(text):
+                selector = text
+                scope = next(
+                    (v.value.id for v in node.values if isinstance(v, ast.FormattedValue) and isinstance(v.value, ast.Name)),
+                    "scope",
+                )
+                line = node.lineno
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left, right = node.left, node.right
+            if isinstance(left, ast.Name) and isinstance(right, ast.Constant):
+                text = right.value
+                if isinstance(text, str) and _selector_has_unscoped_comma(text):
+                    selector = text
+                    scope = left.id
+                    line = node.lineno
+            elif isinstance(right, ast.Name) and isinstance(left, ast.Constant):
+                text = left.value
+                if isinstance(text, str) and _selector_has_unscoped_comma(text):
+                    selector = text
+                    scope = right.id
+                    line = node.lineno
+        if selector is not None and scope is not None and line is not None:
+            inner = selector.strip()
+            out.append(
+                LintFinding(
+                    rule="16",
+                    severity="error",
+                    message=(
+                        f"compound CSS selector '{inner}' is prefixed with a scope "
+                        f"but the comma splits it into independent selectors — only the first "
+                        f"part is scoped to {scope}. Wrap the compound selector in :is() so "
+                        f'the scope applies to all parts: f"{{{scope}}} :is({inner})".'
+                    ),
+                    line=line,
+                )
+            )
+    # Two-step constant pattern: a module-level str constant with the
+    # compound shape, later prefixed by a scope in an f-string/concat.
+    compound_consts: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                    if _selector_has_unscoped_comma(node.value.value):
+                        compound_consts[tgt.id] = node.value.value
+    for node in ast.walk(tree):
+        ref_name: ast.Name | None = None
+        scope_name: str | None = None
+        if isinstance(node, ast.JoinedStr):
+            for v in node.values:
+                if isinstance(v, ast.FormattedValue) and isinstance(v.value, ast.Name):
+                    if v.value.id in compound_consts:
+                        ref_name = v.value
+                    elif scope_name is None:
+                        scope_name = v.value.id
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left, right = node.left, node.right
+            name_node = left if isinstance(left, ast.Name) else right
+            if isinstance(name_node, ast.Name):
+                if name_node.id in compound_consts:
+                    ref_name = name_node
+                elif scope_name is None:
+                    scope_name = name_node.id
+        if ref_name is not None and scope_name is not None and hasattr(node, "lineno"):
+            selector = compound_consts[ref_name.id]
+            out.append(
+                LintFinding(
+                    rule="16",
+                    severity="error",
+                    message=(
+                        f"compound CSS selector '{selector.strip()}' is prefixed with a scope "
+                        f"but the comma splits it into independent selectors — only the first "
+                        f"part is scoped to {scope_name}. Wrap the compound selector in :is() "
+                        f'so the scope applies to all parts: f"{{{scope_name}}} :is({selector.strip()})".'
+                    ),
+                    line=getattr(node, "lineno", None),
+                )
+            )
+    return out
+
+
+def _check_case_sensitive_extension_selector(python_code: str) -> list[LintFinding]:
+    """Rule 17: ``a[href$='.doc']`` without the CSS ``i`` flag misses ``.DOC``."""
+    out: list[LintFinding] = []
+    seen: set[int] = set()
+    for match in _HREF_EXT_RE.finditer(python_code):
+        quote, ext, iflag = match.group(1), match.group(2).lower(), match.group(3)
+        if iflag:
+            continue
+        upper = ext.upper()
+        span_text = python_code[max(0, match.start() - 200) : match.end() + 200]
+        both_cases = f"href$={quote}{upper}{quote}" in span_text
+        if both_cases:
+            continue
+        line = _line_of(python_code, match.start())
+        if line in seen:
+            continue
+        seen.add(line)
+        out.append(
+            LintFinding(
+                rule="17",
+                severity="warning",
+                message=(
+                    f"CSS $= is case-sensitive: a[href$={quote}{ext}{quote}] misses "
+                    f"{upper} links. Use the CSS i flag for case-insensitive matching: "
+                    f"a[href$={quote}{ext}{quote} i]."
+                ),
+                line=line,
+            )
+        )
+    return out
+
+
 class EmittedScriptLinter:
     """Lint the RAW LLM python_code (before emit transforms)."""
 
@@ -661,6 +813,8 @@ class EmittedScriptLinter:
             _check_self_contained,
             _check_zd_start,
             _check_handwritten_discovery,
+            _check_unscoped_compound_selector,
+            _check_case_sensitive_extension_selector,
         )
         self._PROCESSING_CHECKS = (
             _check_syntax,
@@ -683,6 +837,8 @@ class EmittedScriptLinter:
             _check_fanout,
             _check_gate_lock,
             _check_handwritten_discovery,
+            _check_unscoped_compound_selector,
+            _check_case_sensitive_extension_selector,
         )
 
     def lint(self, python_code: str, kind: str = "processing") -> list[LintFinding]:

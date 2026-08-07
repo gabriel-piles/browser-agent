@@ -40,6 +40,7 @@ from browser_agent.drivers.generation.script_smoke_tester import (
     smoke_test_script,
 )
 from browser_agent.drivers.generation.script_tools_copier import ScriptToolsCopier
+from browser_agent.drivers.generation.discovery_audit import DiscoveryAuditor
 from browser_agent.drivers.generation.task_reader import TaskReader
 from browser_agent.logging_config import configure_logging
 from browser_agent.script_tools.discovered_links_store import preseed_sample_links
@@ -64,11 +65,10 @@ from browser_agent.use_cases.script_repair_prompt import (
 DEFAULT_PROMPT = "Visit https://quotes.toscrape.com and print every quote on the first three pages."
 
 _MAX_LINT_REPAIRS = 1
-_MAX_SMOKE_REPAIRS = 1
-# One repair cycle is the chosen bound: verification + repair +
-# re-verification already adds two site re-walks; more cycles multiply
-# runtime on LLM judgement that diminishingly improves.
-_MAX_DISCOVERY_REPAIRS = 1
+# Two repair cycles: the first repairs UNDER-COLLECTED (self-check),
+# the second repairs discrepancies flagged by the independent
+# DiscoveryAuditor (post-run cross-filter verification).
+_MAX_DISCOVERY_REPAIRS = 2
 
 # Discovery (scroll + load-more across all filter values) takes minutes;
 # the 60s smoke budget is useless here. A timeout is a real failure for
@@ -233,33 +233,99 @@ class GenerateScriptDriver:
         context: str,
         emit_results: list[EmitResult],
     ) -> None:
-        """Run the emitted discovery script (600s) and repair once on UNDER-COLLECTED."""
+        """Run the emitted discovery script, repair UNDER-COLLECTED, then run the independent audit."""
         discovery_path = emit_results[0].script_path
         logger.info("running discovery self-check {path}", path=discovery_path)
         result = await smoke_test_script(discovery_path, timeout=_DISCOVERY_RUN_TIMEOUT_S, timeout_is_success=False)
         log_smoke_test_result(result, discovery_path, attempt=1)
-        if result.success and "UNDER-COLLECTED" not in result.output:
-            logger.info("discovery self-check passed")
+        current_script_set = script_set
+        current_disc_path = discovery_path
+        current_stdout = result.output
+        if not (result.success and "UNDER-COLLECTED" not in result.output):
+            paths = under_collected_paths(result.output)
+            logger.warning("discovery self-check UNDER-COLLECTS on {paths} — running repair turn", paths=paths)
+            new_discovery = await self._generator.repair_discovery(discovery_uc, format_discovery_repair(result.output))
+            current_script_set = current_script_set.replace_discovery(new_discovery)
+            self._cleanup_emit_artifacts(emit_results)
+            emit_results.clear()
+            new_disc_emit = self._emit_script(
+                task, current_script_set.discovery_script(), emitter, run_path, context, emit_results
+            )
+            self._emit_script(task, current_script_set.processing_script(), emitter, run_path, context, emit_results)
+            if new_disc_emit is None:
+                return
+            current_disc_path = new_disc_emit.script_path
+            re_result = await smoke_test_script(
+                current_disc_path, timeout=_DISCOVERY_RUN_TIMEOUT_S, timeout_is_success=False
+            )
+            log_smoke_test_result(re_result, current_disc_path, attempt=2)
+            current_stdout = re_result.output
+            if re_result.success and "UNDER-COLLECTED" not in re_result.output:
+                logger.info("discovery self-check passed after repair")
+            else:
+                logger.error(
+                    "discovery self-check STILL under-collects after repair on {paths} — proceeding to audit",
+                    paths=under_collected_paths(re_result.output),
+                )
+        else:
+            logger.info("discovery self-check passed — proceeding to independent audit")
+        # Independent cross-filter audit — does NOT trust the script's
+        # own UNDER-COLLECTED signal; uses a correct-by-construction
+        # selector as an oracle. Triggers a second repair on discrepancy.
+        await self._discovery_audit_repair(
+            task,
+            current_script_set,
+            discovery_uc,
+            emitter,
+            run_path,
+            context,
+            emit_results,
+            current_disc_path,
+            current_stdout,
+        )
+
+    async def _discovery_audit_repair(
+        self,
+        task: str,
+        script_set: GeneratedScriptSet,
+        discovery_uc: GenerateDiscoveryScriptUseCase,
+        emitter: ScriptEmitter,
+        run_path: Path,
+        context: str,
+        emit_results: list[EmitResult],
+        discovery_path: Path,
+        self_check_stdout: str,
+    ) -> None:
+        """Run the independent DiscoveryAuditor and repair once on discrepancies."""
+        session = self._generator._session
+        if session is None:
+            logger.warning("discovery audit: shared browser session closed — skipping audit")
             return
-        paths = under_collected_paths(result.output)
-        logger.warning("discovery self-check UNDER-COLLECTS on {paths} — running repair turn", paths=paths)
-        new_discovery = await self._generator.repair_discovery(discovery_uc, format_discovery_repair(result.output))
-        script_set = script_set.replace_discovery(new_discovery)
+        db_path = run_path / "metadata.db"
+        auditor = DiscoveryAuditor(session, db_path)
+        logger.info("running independent discovery audit {path}", path=discovery_path)
+        report = await auditor.audit(discovery_path, self_check_stdout)
+        if not report:
+            logger.info("discovery audit passed — no discrepancies")
+            return
+        logger.warning("discovery audit found discrepancies — running repair turn")
+        new_discovery = await self._generator.repair_discovery(discovery_uc, format_discovery_repair(report))
+        new_script_set = script_set.replace_discovery(new_discovery)
         self._cleanup_emit_artifacts(emit_results)
         emit_results.clear()
-        new_disc_emit = self._emit_script(task, script_set.discovery_script(), emitter, run_path, context, emit_results)
-        self._emit_script(task, script_set.processing_script(), emitter, run_path, context, emit_results)
+        new_disc_emit = self._emit_script(task, new_script_set.discovery_script(), emitter, run_path, context, emit_results)
+        self._emit_script(task, new_script_set.processing_script(), emitter, run_path, context, emit_results)
         if new_disc_emit is None:
             return
         re_result = await smoke_test_script(
             new_disc_emit.script_path, timeout=_DISCOVERY_RUN_TIMEOUT_S, timeout_is_success=False
         )
-        log_smoke_test_result(re_result, new_disc_emit.script_path, attempt=2)
+        log_smoke_test_result(re_result, new_disc_emit.script_path, attempt=3)
         if re_result.success and "UNDER-COLLECTED" not in re_result.output:
-            logger.info("discovery self-check passed after repair")
+            logger.info("discovery self-check passed after audit repair")
         else:
             logger.error(
-                "discovery self-check STILL under-collects after repair on {paths} — script emitted anyway",
+                "discovery self-check STILL under-collects after audit repair on {paths} — script emitted anyway",
                 paths=under_collected_paths(re_result.output),
             )
 

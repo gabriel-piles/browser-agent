@@ -1,33 +1,40 @@
-"""A pydantic-ai capability that keeps tool returns bounded.
+"""A pydantic-ai capability that keeps tool returns bounded by a token budget.
 
 Pydantic-AI's agent loop keeps every tool return in the message
 history and resends the full history on each LLM request. The
 ``explore_page`` tool returns up to ``SNAPSHOT_MAX_CHARS`` of
-cleaned HTML per call; over a long run the cumulative history
-exceeds the model's context window (we hit 270k tokens against
-a 262k cap).
+cleaned HTML per call (~12.5k tokens); over a long run the cumulative
+history can exceed the model's 1M-token context window.
 
 This capability trims old tool returns in the message history copy
-sent to the model, keeping only the most recent returns full. The
+sent to the model, keeping the most recent returns full. The
 underlying ``state.message_history`` is untouched, so the final
 agent result still has the full audit trail.
 
-For ``explore_page`` returns we keep all metadata header lines
-(Action, URL, Title, summary, URL CHANGED, scroll_height, ERROR)
-plus the ``# Extracted elements`` block (header + up to
-``COMPACT_MAX_EXTRACTED_LINES`` element lines with text + href) —
-the structural clues the agent needs to remember what each page
-looked like — and replace the HTML body with a single placeholder.
+Trimming is **budget-driven** (``COMPACT_INPUT_TOKEN_BUDGET``):
+``estimate_message_tokens`` is the oracle, and the compactor applies
+trims in priority order until the prompt is under budget:
 
-For any other tool return over ``COMPACT_MIN_TRIM_CHARS`` we keep
-only the first few non-empty lines and drop the rest, with a
-placeholder appended.
+1. Blank old ``ThinkingPart`` content (keep the 2 most recent) — the
+   cheapest, biggest single win on reasoning models.
+2. Summarise the oldest ``explore_page`` returns (keep 2 most recent).
+3. Summarise the oldest ``run_validation_script`` returns (keep 1).
+4. Summarise the oldest other tool returns (keep 1).
+5. Aggressive fallback: summarise the most-recent returns too, keeping
+   only the single most-recent of each bucket.
+
+For ``explore_page`` returns we keep all metadata header lines plus
+the ``# Extracted elements`` block and replace the HTML body with a
+single placeholder. For any other tool return over
+``COMPACT_MIN_TRIM_CHARS`` we keep only the first few non-empty lines
+and drop the rest, with a placeholder appended.
 """
 
 from __future__ import annotations
 
-from typing import TypeVar
-from dataclasses import dataclass, field, replace
+from typing import Callable, TypeVar
+
+from dataclasses import replace
 
 from pydantic_ai import RunContext
 from pydantic_ai.capabilities import AbstractCapability
@@ -35,14 +42,14 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, Thin
 from pydantic_ai.models import ModelRequestContext
 from browser_agent.configuration import (
     COMPACT_HEAD_LINES,
-    COMPACT_KEEP_RECENT_STRUCTURED,
+    COMPACT_INPUT_TOKEN_BUDGET,
     COMPACT_KEEP_RECENT_VALIDATIONS,
     COMPACT_MAX_ANALYZE_LINES,
     COMPACT_MAX_EXTRACTED_LINES,
-    COMPACT_MAX_RETAINED,
     COMPACT_MIN_TRIM_CHARS,
     COMPACT_TRUNCATED_PLACEHOLDER,
 )
+from browser_agent.use_cases.token_estimate import estimate_message_tokens
 
 # Type var so the same capability works for both the step-0 agent
 # (``AgentDeps``) and the verification agent (``VerificationAgentDeps``).
@@ -52,27 +59,17 @@ AnyAgentDeps = TypeVar("AnyAgentDeps", covariant=True)
 _EXPLORE_TOOL = "explore_page"
 _VALIDATION_TOOL = "run_validation_script"
 _THINKING_KEEP_RECENT = 2
+_EXPLORE_KEEP_RECENT = 2
 
-_KEEP_ALL = 0
-# Sentinel: trim every index in the bucket (cut above all real indices).
-_TRIM_ALL = 10**9
-
-
-@dataclass(frozen=True)
-class _CutPlan:
-    """Per-bucket index sets + the lowest index to KEEP for each."""
-
-    snaps: set[int] = field(default_factory=set)
-    vals: set[int] = field(default_factory=set)
-    others: set[int] = field(default_factory=set)
-    snap_cut: int = _KEEP_ALL
-    val_cut: int = _KEEP_ALL
-    oth_cut: int = _KEEP_ALL
-    think_cut: int = _KEEP_ALL
+_Summariser = Callable[[str], str]
 
 
 class ToolReturnCompactor(AbstractCapability[AnyAgentDeps]):
     """pydantic-ai capability that trims old tool returns in the prompt."""
+
+    def __init__(self, budget: int = COMPACT_INPUT_TOKEN_BUDGET) -> None:
+        super().__init__()
+        self._budget = budget
 
     async def before_model_request(
         self,
@@ -80,58 +77,110 @@ class ToolReturnCompactor(AbstractCapability[AnyAgentDeps]):
         request_context: ModelRequestContext,
     ) -> ModelRequestContext:
         messages = request_context.messages
-        if len(messages) <= 2:
+        if estimate_message_tokens(messages) <= self._budget:
             return request_context
         compacted = self._compact(messages)
         if compacted is messages:
             return request_context
         return replace(request_context, messages=compacted)
 
-    @staticmethod
-    def _compact(messages: list[ModelMessage]) -> list[ModelMessage]:
-        plan = _build_plan(messages)
-        if plan is None:
-            return messages
-        out: list[ModelMessage] = []
-        for idx, msg in enumerate(messages):
-            rewritten = _maybe_rewrite(idx, msg, plan)
-            if rewritten is None:
-                rewritten = _maybe_rewrite_response(idx, msg, plan)
-            out.append(rewritten if rewritten is not None else msg)
-        return out
+    def _compact(self, messages: list[ModelMessage]) -> list[ModelMessage]:
+        actions = _plan_trims(messages)
+        return _apply_until_budget(messages, actions, self._budget)
 
 
-def _build_plan(messages: list[ModelMessage]) -> _CutPlan | None:
-    """Classify messages and decide which indices to trim.
+def _apply_until_budget(
+    messages: list[ModelMessage],
+    actions: list[tuple[int, str, _Summariser]],
+    budget: int,
+) -> list[ModelMessage]:
+    current = messages
+    pending = list(actions)
+    while pending and estimate_message_tokens(current) > budget:
+        idx, tool, summarise = pending.pop(0)
+        current = _apply_trim(current, idx, tool, summarise)
+    return current
 
-    Uses ``COMPACT_KEEP_RECENT_STRUCTURED`` for explore_page returns
-    so structured analysis (which is low-token) stays visible longer.
-    A sliding-window backstop (``COMPACT_MAX_RETAINED``) kicks in when
-    the total number of trimmable returns exceeds the cap: only the
-    most recent returns across *all* buckets are kept full.
-    """
+
+def _apply_trim(
+    messages: list[ModelMessage],
+    idx: int,
+    tool: str | None,
+    summarise: _Summariser,
+) -> list[ModelMessage]:
+    out: list[ModelMessage] = []
+    for j, msg in enumerate(messages):
+        if j == idx and isinstance(msg, ModelRequest):
+            trimmed = _trim_request(msg, tool, summarise)
+            out.append(trimmed)
+            continue
+        if j == idx and isinstance(msg, ModelResponse):
+            out.append(_blank_thinking(msg))
+            continue
+        out.append(msg)
+    return out
+
+
+def _plan_trims(messages: list[ModelMessage]) -> list[tuple[int, str, _Summariser]]:
     snaps, vals, others = _classify_indices(messages)
     thinkers = _thinking_indices(messages)
-    if not snaps and not vals and not others and not thinkers:
-        return None
-    snap_cut = _cut_index(snaps, COMPACT_KEEP_RECENT_STRUCTURED)
-    val_cut = _cut_index(vals, COMPACT_KEEP_RECENT_VALIDATIONS)
-    oth_cut = _cut_index(others, 0)
-    think_cut = _cut_index(thinkers, _THINKING_KEEP_RECENT)
-    all_idx = snaps | vals | others
-    if len(all_idx) > COMPACT_MAX_RETAINED:
-        keep = set(sorted(all_idx, reverse=True)[:COMPACT_MAX_RETAINED])
-        snap_cut = max(snap_cut, _backstop_cut(snaps, keep))
-        val_cut = max(val_cut, _backstop_cut(vals, keep))
-    return _CutPlan(
-        snaps=snaps,
-        vals=vals,
-        others=others,
-        snap_cut=snap_cut,
-        val_cut=val_cut,
-        oth_cut=oth_cut,
-        think_cut=think_cut,
-    )
+    actions: list[tuple[int, str, _Summariser]] = []
+    actions += _thinking_actions(thinkers)
+    actions += _bucket_actions(snaps, _EXPLORE_TOOL, _summarise_explore, _EXPLORE_KEEP_RECENT)
+    actions += _bucket_actions(vals, _VALIDATION_TOOL, _summarise_generic, COMPACT_KEEP_RECENT_VALIDATIONS)
+    actions += _bucket_actions(others, None, _summarise_generic, 1)
+    actions += _aggressive_actions(snaps, vals, others)
+    return actions
+
+
+def _thinking_actions(thinkers: set[int]) -> list[tuple[int, str, _Summariser]]:
+    ordered = sorted(thinkers)
+    keep = max(len(ordered) - _THINKING_KEEP_RECENT, 0)
+    return [(idx, "", _blank) for idx in ordered[:keep]]
+
+
+def _bucket_actions(
+    indices: set[int],
+    tool: str | None,
+    summarise: _Summariser,
+    keep_recent: int,
+) -> list[tuple[int, str, _Summariser]]:
+    ordered = sorted(indices)
+    keep = max(len(ordered) - keep_recent, 0)
+    return [(idx, tool or "", summarise) for idx in ordered[:keep]]
+
+
+def _aggressive_actions(
+    snaps: set[int],
+    vals: set[int],
+    others: set[int],
+) -> list[tuple[int, str, _Summariser]]:
+    actions: list[tuple[int, str, _Summariser]] = []
+    actions += _aggressive_bucket(snaps, _EXPLORE_TOOL, _summarise_explore)
+    actions += _aggressive_bucket(vals, _VALIDATION_TOOL, _summarise_generic)
+    actions += _aggressive_bucket(others, None, _summarise_generic)
+    return actions
+
+
+def _aggressive_bucket(
+    indices: set[int],
+    tool: str | None,
+    summarise: _Summariser,
+) -> list[tuple[int, str, _Summariser]]:
+    ordered = sorted(indices)
+    if len(ordered) <= 1:
+        return []
+    keep = ordered[-1]
+    return [(idx, tool or "", summarise) for idx in ordered if idx != keep]
+
+
+def _blank(content: str) -> str:
+    return "[trimmed thinking]"
+
+
+def _blank_thinking(msg: ModelResponse) -> ModelResponse:
+    new_parts = [replace(p, content="[trimmed thinking]") if isinstance(p, ThinkingPart) else p for p in msg.parts]
+    return replace(msg, parts=new_parts)
 
 
 def _classify_indices(messages: list[ModelMessage]) -> tuple[set[int], set[int], set[int]]:
@@ -139,7 +188,8 @@ def _classify_indices(messages: list[ModelMessage]) -> tuple[set[int], set[int],
     vals: set[int] = set()
     others: set[int] = set()
     for idx, msg in enumerate(messages):
-        _collect_message_bucket(idx, msg, snaps, vals, others)
+        if isinstance(msg, ModelRequest):
+            _collect_message_bucket(idx, msg, snaps, vals, others)
     return snaps, vals, others
 
 
@@ -154,19 +204,13 @@ def _thinking_indices(messages: list[ModelMessage]) -> set[int]:
 
 def _collect_message_bucket(
     idx: int,
-    msg: ModelMessage,
+    msg: ModelRequest,
     snaps: set[int],
     vals: set[int],
     others: set[int],
 ) -> None:
-    if not _has_trimmable_part(msg):
-        return
     for part in msg.parts:
         _add_part_bucket(idx, part, snaps, vals, others)
-
-
-def _has_trimmable_part(msg: ModelMessage) -> bool:
-    return isinstance(msg, ModelRequest) and any(isinstance(p, ToolReturnPart) for p in msg.parts)
 
 
 def _add_part_bucket(
@@ -194,49 +238,6 @@ def _trim_bucket(part: ToolReturnPart) -> str | None:
     if len(part.content) < COMPACT_MIN_TRIM_CHARS:
         return None
     return part.tool_name
-
-
-def _cut_index(indices: set[int], keep_recent: int) -> int:
-    """Return the lowest index to KEEP; older ones get trimmed."""
-    if keep_recent <= 0 or len(indices) <= keep_recent:
-        return _KEEP_ALL
-    return sorted(indices, reverse=True)[keep_recent - 1]
-
-
-def _backstop_cut(indices: set[int], keep: set[int]) -> int:
-    """Return the lowest index to KEEP under the sliding-window backstop.
-
-    Only indices in ``keep`` survive; the rest are trimmed.  Returns
-    ``_KEEP_ALL`` only when every bucket index is kept.  When no
-    bucket index survives, returns a large value so ``max()`` trims
-    everything in the bucket.
-    """
-    survivors = indices & keep
-    if not survivors:
-        return _TRIM_ALL
-    if survivors == indices:
-        return _KEEP_ALL
-    return min(survivors)
-
-
-def _maybe_rewrite(idx: int, msg: ModelMessage, plan: _CutPlan) -> ModelRequest | None:
-    if not isinstance(msg, ModelRequest):
-        return None
-    if idx in plan.snaps and idx < plan.snap_cut:
-        return _trim_request(msg, _EXPLORE_TOOL, _summarise_explore)
-    if idx in plan.vals and idx < plan.val_cut:
-        return _trim_request(msg, _VALIDATION_TOOL, _summarise_generic)
-    if idx in plan.others and idx < plan.oth_cut:
-        return _trim_request(msg, None, _summarise_generic)
-    return None
-
-
-def _maybe_rewrite_response(idx: int, msg: ModelMessage, plan: _CutPlan) -> ModelResponse | None:
-    """Blank thinking on old ``ModelResponse`` messages; keep tool calls intact."""
-    if not isinstance(msg, ModelResponse) or idx >= plan.think_cut:
-        return None
-    new_parts = [replace(p, content="[trimmed thinking]") if isinstance(p, ThinkingPart) else p for p in msg.parts]
-    return replace(msg, parts=new_parts)
 
 
 def _trim_request(msg: ModelRequest, tool_name: str | None, summarise) -> ModelRequest:

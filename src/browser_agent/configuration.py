@@ -20,8 +20,10 @@ WRITER_MAX_LLM_CALLS = 40
 # Output token budget sent to the provider on every LLM request. Without an
 # explicit `max_tokens`, reasoning models (deepseek-v4-flash) can spend the
 # provider's default budget entirely on thinking and return `finish_reason='length'`
-# with no actionable output, which pydantic-ai treats as a fatal error.
-MAX_OUTPUT_TOKENS = 16_000
+# with no actionable output, which pydantic-ai treats as a fatal error. 32k
+# leaves room for a reasoning pass plus a full structured result; 16k let the
+# model think over a huge context and never emit.
+MAX_OUTPUT_TOKENS = 32_000
 VERIFICATION_MODEL = "deepseek-v4-flash:0731-cloud"
 VERIFICATION_PDF_COUNT = 10
 
@@ -62,6 +64,20 @@ UWAZI_DEFAULT_LANGUAGE = os.environ.get("UWAZI_DEFAULT_LANGUAGE", "en")
 UWAZI_PUSH_MAX_WORKERS = 1
 
 
+# Target max prompt tokens sent to the model by the compactor. The
+# model (deepseek-v4-flash:0731-cloud) has a 1M-token context window;
+# 300k leaves ~700k for reasoning + output (MAX_OUTPUT_TOKENS=32k plus
+# thinking). Large enough that a normal 6-10 tool-call run is never
+# trimmed; the compactor only acts on genuinely long explorations.
+COMPACT_INPUT_TOKEN_BUDGET = 300_000
+# Cumulative input-token ceiling on ``UsageLimits`` across the whole
+# run (pydantic-ai sums input tokens across every request, so this is
+# NOT a per-prompt cap — each prompt is bounded to COMPACT_INPUT_TOKEN_BUDGET
+# by the compactor). Set far above 40 × 300k so it never trips a normal
+# exploration; it only guards against a runaway agent looping forever.
+# If it fires on a legitimate run, raise it further.
+AGENT_INPUT_TOKEN_LIMIT = 10_000_000
+
 SNAPSHOT_MAX_CHARS = 50_000
 COMPACT_KEEP_RECENT_VALIDATIONS = 1
 COMPACT_TRUNCATED_PLACEHOLDER = "[trimmed — see latest snapshot]"
@@ -78,11 +94,6 @@ ANALYZE_MAX_HEADINGS = 20
 ANALYZE_MAX_TABLES = 5
 
 # --- Compactor — structured-analysis tuning ---
-# Keep more recent structured/summary returns full (they're small)
-COMPACT_KEEP_RECENT_STRUCTURED = 4
-# Sliding-window backstop: max tool returns kept full across all buckets.
-# When total trimmable returns exceed this, only the most recent are kept.
-COMPACT_MAX_RETAINED = 12
 # Max element lines per section kept in trimmed ``analyze`` returns;
 # higher than ``COMPACT_MAX_EXTRACTED_LINES`` because link/button
 # sections need more visible entries for correct selector choice.

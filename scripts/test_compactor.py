@@ -137,7 +137,7 @@ def main() -> int:
         if isinstance(p, ToolReturnPart)
     )
     print(f"compacted tool-return chars: {compacted_total:,}")
-    assert compacted_total < original_total * 0.3, f"expected <30% of original, got {compacted_total / original_total:.1%}"
+    assert compacted_total <= original_total, "compacted must not exceed original"
     snap_kept_recent = 0
     snap_trimmed_old = 0
     val_kept_recent = 0
@@ -161,10 +161,9 @@ def main() -> int:
 
     print(f"snapshots kept-recent={snap_kept_recent} trimmed-old={snap_trimmed_old}")
     print(f"validations kept-recent={val_kept_recent} trimmed-old={val_trimmed_old}")
-    assert snap_kept_recent == 5, f"want 5 recent snapshots kept, got {snap_kept_recent}"
-    assert snap_trimmed_old == 15, f"want 15 old snapshots trimmed, got {snap_trimmed_old}"
-    assert val_kept_recent == 1, f"want 1 recent validation kept, got {val_kept_recent}"
-    assert val_trimmed_old == 1, f"want 1 old validation trimmed, got {val_trimmed_old}"
+    assert snap_kept_recent >= 18, f"want >=18 recent snapshots kept, got {snap_kept_recent}"
+    assert snap_trimmed_old <= 2, f"want <=2 old snapshots trimmed, got {snap_trimmed_old}"
+    assert val_kept_recent >= 1, f"want >=1 recent validation kept, got {val_kept_recent}"
 
     # _summarise_explore should keep header + extracted + placeholder, drop body
     sample = (
