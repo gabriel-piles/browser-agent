@@ -23,7 +23,7 @@ WRITER_MAX_LLM_CALLS = 40
 # with no actionable output, which pydantic-ai treats as a fatal error. 32k
 # leaves room for a reasoning pass plus a full structured result; 16k let the
 # model think over a huge context and never emit.
-MAX_OUTPUT_TOKENS = 32_000
+MAX_OUTPUT_TOKENS = 128_000
 VERIFICATION_MODEL = "deepseek-v4-flash:0731-cloud"
 VERIFICATION_PDF_COUNT = 10
 

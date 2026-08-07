@@ -184,6 +184,31 @@ Your script's ONLY output is rows in the ``discovered_links`` table via
     CSS ``i`` flag for case-insensitive extension matching:
     ``a[href$='.doc' i]`` matches ``.DOC`` and ``.doc``.
 
+5. Cloudflare challenge detection — after every navigation+wait
+   (``tab.get`` + ``wait_for_page_ready``), check whether the page is a
+   Cloudflare challenge by testing ``document.title`` for "Just a
+   moment" or "Attention Required". If a challenge is detected, wait 10s
+   and re-check, up to 3 times (30s total). Only proceed to extract/filter
+   options after the challenge clears. If it doesn't clear after 3
+   retries, log a warning and skip that page — do NOT attempt to extract
+   from a challenge page (you'll get 0 results and waste a tool call).
+   Encapsulate this check in a ``goto_ready`` helper::
+
+      async def goto_ready(tab, url):
+          await tab.get(url)
+          for _ in range(3):
+              title = await tab.evaluate("document.title") or ""
+              if "just a moment" not in title.lower() and "attention required" not in title.lower():
+                  break
+              await tab.sleep(10)
+          try:
+              await asyncio.wait_for(
+                  wait_for_page_ready(tab, url, timeout=6, quiet_window_ms=300), timeout=8
+              )
+          except Exception:
+              pass
+          await tab.sleep(0.4)
+
 6. Visible browser — ALWAYS ``headless=False`` (lint-enforced as the
    first ``main()`` statement; the operator watches and it looks real to
    anti-bot checks). The ONLY exception is when the user EXPLICITLY asks

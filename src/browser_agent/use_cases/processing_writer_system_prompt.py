@@ -209,6 +209,19 @@ does inline extraction only (no ``load_discovered_links()`` call).
               pass
           await tab.sleep(0.4)
 
+5a. Cloudflare session warm-up — when the target site is behind
+    Cloudflare (the ``download_pdf`` probe returned 403, or the
+    explorer noted WAF), the browser session starts COLD — no
+    Cloudflare clearance cookies. Direct file-URL fetches will get 403
+    immediately. Before any download or ``save_page_html`` call,
+    navigate the tab to a listing/landing page on the same domain (the
+    site's main entry URL or a category page) using ``goto_ready`` so
+    the Cloudflare challenge clears and clearance cookies are set.
+    Only after the warm-up navigation succeeds (title is NOT "Just a
+    moment") should you proceed to download files. If downloads start
+    returning 403 again mid-run, re-navigate to a listing page to
+    re-warm the session, then retry.
+
 
 6. Visible browser — ALWAYS ``headless=False`` (lint-enforced as the
    first ``main()`` statement; the operator watches and it looks real to
