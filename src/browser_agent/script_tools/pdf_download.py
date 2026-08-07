@@ -19,6 +19,7 @@ import base64
 import json
 import random
 from pathlib import Path
+from urllib.parse import urljoin, urlsplit
 
 from script_tools._file_utils import (
     _assert_pdf_magic,
@@ -45,6 +46,25 @@ _BLOCK_MESSAGE = (
 )
 
 _consecutive_403 = 0
+
+
+def _resolve_url(url, tab=None):
+    """Resolve a site-relative URL against the tab's current page URL.
+
+    CDP ``Network.loadNetworkResource`` and ``curl_cffi`` both require
+    absolute URLs; site-relative paths (``/en/iachr/...``) are rejected.
+    When ``url`` already has a scheme or ``tab`` has no URL, return it
+    unchanged.
+    """
+    if not url:
+        return url
+    parts = urlsplit(url)
+    if parts.scheme:
+        return url
+    base = getattr(tab, "url", None) or ""
+    if not base:
+        return url
+    return urljoin(base, url)
 
 
 def _is_http_403(exc):
@@ -176,6 +196,7 @@ async def download_pdf_curl_cffi(url, save_path, tab=None):
     HTTP 403 (Cloudflare rate-limit); re-running resumes via skip-existing.
     """
     save_dir = _resolve_download_dir(save_path)
+    url = _resolve_url(url, tab)
     save_path = save_dir / _pdf_filename_for(url)
 
     existing = _existing_size(save_path)
@@ -195,6 +216,7 @@ async def download_file_curl_cffi(url, save_path, tab=None):
     (``file_filename_for``) and the body is NOT validated as PDF.
     """
     save_dir = _resolve_download_dir(save_path)
+    url = _resolve_url(url, tab)
     save_path = save_dir / file_filename_for(url)
 
     existing = _existing_size(save_path)
@@ -224,16 +246,19 @@ async def _fetch_pdf_via_cdp_navigation(tab, url):
         frame_id = tree.frame.id_
     except Exception:
         frame_id = None
-    res = await tab.send(
-        _net.load_network_resource(
-            url=url,
-            options=_net.LoadNetworkResourceOptions(
-                disable_cache=True,
-                include_credentials=True,
-            ),
-            frame_id=frame_id,
+    try:
+        res = await tab.send(
+            _net.load_network_resource(
+                url=url,
+                options=_net.LoadNetworkResourceOptions(
+                    disable_cache=True,
+                    include_credentials=True,
+                ),
+                frame_id=frame_id,
+            )
         )
-    )
+    except Exception as exc:
+        raise RuntimeError(f"CDP load_network_resource failed for {url}: {exc}") from exc
     if not res.success:
         raise RuntimeError(f"CDP fetch failed net_error={res.net_error} ({res.net_error_name}) for {url}")
     if res.http_status_code and res.http_status_code >= 400:
@@ -409,6 +434,7 @@ async def download_pdf_browser(tab, url, save_path):
     Raises ``SystemExit`` when 5 consecutive downloads are blocked with
     HTTP 403 (Cloudflare rate-limit); re-running resumes via skip-existing.
     """
+    url = _resolve_url(url, tab)
     if url.startswith("http://"):
         url = "https://" + url[7:]
     save_dir = _resolve_download_dir(save_path)
@@ -428,6 +454,7 @@ async def download_file_browser(tab, url, save_path):
     (``file_filename_for``) and the body is NOT validated as PDF
     (a supporting document must never trip the magic check).
     """
+    url = _resolve_url(url, tab)
     if url.startswith("http://"):
         url = "https://" + url[7:]
     save_dir = _resolve_download_dir(save_path)
