@@ -6,9 +6,11 @@ Run this driver after :mod:`browser_agent.drivers.step_3_propose_mapping`
 the YAML mapping written by ``step_3_propose_mapping.py``, the live
 ``metadata.db`` rows for the active run, and the live Uwazi
 thesauri; it writes one :class:`ThesaurusMapping` YAML per
-thesaurus to ``data/runs/<active_run>/thesauri_mappings/``,
-prints a per-field "missing from thesaurus" report so a human
-can add values on the Uwazi side, verifies that any
+Uwazi select/multiselect/relationship property (named after the
+property, so two properties sharing a thesaurus get two files)
+to ``data/runs/<active_run>/thesauri_mappings/``, prints a
+per-field "missing from thesaurus" report so a human can add
+values on the Uwazi side, verifies that any
 ``default_value`` set on a select/multiselect mapping field is
 actually present in the live thesaurus, and prints an upload-
 validation report: how many entities of the target template
@@ -50,7 +52,7 @@ from browser_agent.drivers.matching.thesaurus_processor import ThesaurusProcesso
 from browser_agent.drivers.matching.thesaurus_yaml_writer import ThesaurusYamlWriter
 from browser_agent.drivers.classification.upload_validation_reporter import UploadValidationReporter
 from browser_agent.drivers.clients.uwazi_client_factory import UwaziClientFactory
-from browser_agent.use_cases.metadata_value_transformer import load_thesauri_mappings
+from browser_agent.use_cases.metadata_value_transformer import load_thesauri_mappings_by_property
 
 
 class MatchDriver:
@@ -107,13 +109,15 @@ class MatchDriver:
 
     def _run_upload_validation(self, context) -> None:
         """Fetch existing entities, classify every row, and print the report."""
-        thesaurus_lookup = load_thesauri_mappings(self._paths.thesauri_mappings_dir())
+        thesaurus_lookup_by_property = load_thesauri_mappings_by_property(self._paths.thesauri_mappings_dir())
         records = self._query_metadata_rows()
         entities_fetcher = ExistingEntitiesFetcher(context.client)
         issue_detector = RowIssueDetector(entities_fetcher)
         classifier = RowIssueClassifier(entities_fetcher, issue_detector, self._paths.downloads_dir())
         entities_by_key = self._fetch_validation_entities(context)
-        counts, issues = classifier.classify(records, context.mapping, context.template, thesaurus_lookup)
+        counts, issues = classifier.classify(
+            records, context.mapping, context.template, thesaurus_lookup_by_property, context.registry_template
+        )
         self._upload_reporter.print_report(context.mapping, counts, issues, len(entities_by_key))
 
     def _fetch_validation_entities(self, context) -> dict[str, str]:
@@ -148,10 +152,11 @@ class MatchDriver:
         return groups
 
     async def _process_all_thesauri(self, groups: list[dict], context) -> None:
-        """Process every thesaurus the groups bucket into."""
+        """Process every group (one per Uwazi property) into its own YAML file."""
         llm = OllamaAdapter()
-        for thesaurus_name, thesaurus_groups in self._groups_builder.bucket_by_thesaurus(groups).items():
-            out_path = self._paths.default_thesaurus_path(thesaurus_name)
+        for group in groups:
+            prop = group["property"]
+            out_path = self._paths.default_thesaurus_path(prop.name)
             if out_path.exists():
                 logger.info(
                     "thesaurus mapping exists at {path} — using existing file (delete to regenerate)",
@@ -159,8 +164,9 @@ class MatchDriver:
                 )
                 continue
             await self._processor.process(
-                thesaurus_name=thesaurus_name,
-                groups=thesaurus_groups,
+                property_name=prop.name,
+                thesaurus_name=group["thesaurus"].name,
+                groups=[group],
                 llm=llm,
                 mapping_default_language=context.mapping.default_language,
                 out_path=out_path,

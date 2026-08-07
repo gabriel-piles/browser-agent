@@ -1,18 +1,19 @@
-"""Build the per-thesaurus groups the match driver iterates over.
+"""Build the per-property groups the match driver iterates over.
 
 Hides the per-field select/multiselect filtering, the thesaurus
-lookup for each field's target property, the bucketing-by-thesaurus
-step, and the cross-field counter merge behind one object. The
-match driver calls :meth:`build` once for the mapping and
-:meth:`bucket_by_thesaurus` to group the resulting groups.
+lookup for each field's target property, and the cross-field
+counter merge behind one object. The match driver calls
+:meth:`build` once for the mapping and processes each returned
+group individually.
 
 Every select/multiselect property in the mapping produces one
-group, even when the property carries only a constant
-``default_value`` and no extracted column: the default tokens
-are added to the group's counter so the per-thesaurus mapping
-YAML still gets written. ``step_5_upload_to_uwazi.py`` then
-substitutes the default through the same lookup the extracted
-values use.
+group — even two properties that share the same thesaurus get
+separate groups — so each property gets its own mapping YAML.
+Even a property carrying only a constant ``default_value`` and
+no extracted column produces a group: the default tokens are
+added to the group's counter so its mapping YAML still gets
+written. ``step_5_upload_to_uwazi.py`` then substitutes the
+default through the same lookup the extracted values use.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from browser_agent.drivers.matching.thesaurus_lookup import split_default_tokens
 
 
 class ThesaurusGroupsBuilder:
-    """Build per-thesaurus groups from a mapping, template, and field counters."""
+    """Build per-property groups from a mapping, template, and field counters."""
 
     def build(
         self,
@@ -46,8 +47,11 @@ class ThesaurusGroupsBuilder:
         for prop in mapping.properties:
             if prop.type not in (FieldType.SELECT, FieldType.MULTI_SELECT, FieldType.RELATIONSHIP):
                 continue
+            extracted = Counter()
+            if prop.source:
+                for name in prop.source:
+                    extracted.update(field_counters.get(name, Counter()))
             ref_template = self._ref_template_for(prop, template, registry_template)
-            extracted = field_counters.get(prop.source, Counter()) if prop.source else Counter()
             counter = self._merge_with_default(extracted, prop)
             group, skip = self._build_one(prop, ref_template, thesauri_by_id, counter, relationships_by_id)
             if group is not None:
@@ -64,15 +68,8 @@ class ThesaurusGroupsBuilder:
             return registry_template
         return template
 
-    def bucket_by_thesaurus(self, groups: list[dict]) -> dict[str, list[dict]]:
-        """Bucket the per-property groups by their canonical thesaurus name."""
-        out: dict[str, list[dict]] = {}
-        for group in groups:
-            out.setdefault(self._thesaurus_name_of(group), []).append(group)
-        return out
-
     def combined_counter(self, groups: Iterable[dict]) -> Counter:
-        """Merge the value Counters of every group that targets the same thesaurus."""
+        """Merge the value Counters of every group (one group per property)."""
         counter: Counter = Counter()
         for group in groups:
             counter.update(group["counter"])
@@ -137,8 +134,3 @@ class ThesaurusGroupsBuilder:
         SectionPrinter().subheading("Skipped fields (no thesaurus / no extracted values / no default)")
         for reason in skips:
             print(f"    - {reason}")
-
-    def _thesaurus_name_of(self, group: dict) -> str:
-        """Resolve the canonical thesaurus name for a group."""
-        prop = group["property"]
-        return prop.thesaurus or group["thesaurus"].name

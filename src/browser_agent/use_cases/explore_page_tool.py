@@ -17,8 +17,10 @@ from __future__ import annotations
 from loguru import logger
 from pydantic_ai import RunContext
 from browser_agent.agent_logging import traced_tool
+from browser_agent.domain.element_info import ElementInfo
 from browser_agent.domain.link_pattern import LinkPattern
 from browser_agent.domain.page_action import PageAction
+from browser_agent.domain.page_structure import PageStructure
 from browser_agent.domain.page_snapshot import PageSnapshot
 from browser_agent.use_cases.agent_deps import AgentDeps
 

@@ -27,6 +27,7 @@ from typing import Any
 
 from loguru import logger
 
+import zendriver as zd
 from zendriver.cdp import network
 from zendriver.core.connection import ProtocolException as _ProtocolException
 
@@ -66,6 +67,7 @@ _apply_zendriver_patch()
 
 _DEFAULT_SETTLE_SECONDS = 3.0
 _DEFAULT_WAIT_SECONDS = 1.0
+_DEFAULT_INSPECT_CONTEXT = 2000
 _EXTRACT_MAX_ELEMENTS = 50
 
 _SELECT_MAX_OPTIONS = 60

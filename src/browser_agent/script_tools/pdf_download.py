@@ -32,9 +32,10 @@ _PDF_DOWNLOAD_TIMEOUT_S = 90.0
 _PDF_DOWNLOAD_RETRIES = 3
 _PDF_DOWNLOAD_RETRY_DELAY_S = 1.5
 
-_BLOCK_STREAK_LIMIT = 5
-_DOWNLOAD_DELAY_MIN_S = 1.0
-_DOWNLOAD_DELAY_MAX_S = 3.0
+_BLOCK_STREAK_LIMIT = 8
+_DOWNLOAD_DELAY_MIN_S = 2.0
+_DOWNLOAD_DELAY_MAX_S = 5.0
+_BLOCK_COOLDOWN_S = 30.0
 _BLOCK_MESSAGE = (
     "Cloudflare is blocking PDF downloads: {n} consecutive downloads failed "
     "with HTTP 403. The site is rate-limiting this IP/session, not rejecting "
@@ -121,7 +122,10 @@ async def _download_curl(url, save_path, tab, check_magic):
         if r.status_code >= 400:
             last_exc = RuntimeError(f"HTTP {r.status_code} for {url}")
             if attempt < _PDF_DOWNLOAD_RETRIES:
-                await asyncio.sleep(_PDF_DOWNLOAD_RETRY_DELAY_S * attempt)
+                delay = _PDF_DOWNLOAD_RETRY_DELAY_S * attempt * (3 if r.status_code == 403 else 1)
+                await asyncio.sleep(delay)
+            elif r.status_code == 403:
+                await asyncio.sleep(_BLOCK_COOLDOWN_S)
             continue
         body = r.content
         if not body:
@@ -355,6 +359,8 @@ async def _download_browser(tab, url, save_path, check_magic):
             result = await _try_curl_cffi(url, save_path, check_magic)
     except RuntimeError as exc:
         _track_download_outcome(exc)
+        if _is_http_403(exc) and _consecutive_403 < _BLOCK_STREAK_LIMIT:
+            await asyncio.sleep(_BLOCK_COOLDOWN_S)
         raise
     _track_download_outcome(None)
     return result

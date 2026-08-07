@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 
+from browser_agent.domain.metadata_coverage import MetadataCoverage
 from browser_agent.domain.metadata_field import MetadataField
 from browser_agent.domain.metadata_field_catalog import MetadataFieldCatalog
 from browser_agent.domain.run_config import RunConfig
@@ -30,16 +31,26 @@ class MetadataCatalogBuilder:
         self._examples_per_field = run_config.examples_per_field
         self._value_type = value_type or MetadataValueTypeHeuristic()
 
-    def build(self, db_path: Path) -> tuple[MetadataFieldCatalog | None, int]:
-        """Return ``(catalog, total_rows)`` from the rows in ``db_path``.
+    def build(self, db_path: Path) -> tuple[MetadataFieldCatalog | None, MetadataCoverage]:
+        """Return ``(catalog, coverage)`` from the rows in ``db_path``.
 
-        ``catalog`` is ``None`` when the database has no rows at all.
+        ``catalog`` is ``None`` when the database has no rows at all;
+        ``coverage`` always carries the full per-field stats.
         """
         rows = self._query_rows(db_path)
         if not rows:
-            return None, 0
+            return None, MetadataCoverage(total_entities=0)
         distinct, page_count, total_rows = self._aggregate(rows)
-        return self._assemble(distinct, page_count, total_rows), total_rows
+        catalog = self._assemble(distinct, page_count, total_rows)
+        return catalog, self._coverage(page_count, total_rows)
+
+    def _coverage(self, page_count: Counter, total_rows: int) -> MetadataCoverage:
+        """Build the full per-field entity counts, highest count first."""
+        names = sorted(page_count, key=lambda name: (-page_count[name], name))
+        return MetadataCoverage(
+            total_entities=total_rows,
+            fields={name: page_count[name] for name in names},
+        )
 
     def _query_rows(self, db_path: Path) -> list[tuple[str, str, str]]:
         """Return ``(source_url, task_slug, data_json)`` rows from ``metadata.db``."""

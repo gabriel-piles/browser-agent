@@ -3,6 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from browser_agent.domain.generated_script import GeneratedScript
+from browser_agent.domain.task_split import TaskSplit
 
 
 class GeneratedScriptSet(BaseModel):
@@ -73,3 +74,41 @@ class GeneratedScriptSet(BaseModel):
                     seen.add(name.lower())
                     ordered.append(name)
         return ordered
+
+    @classmethod
+    def from_scripts(
+        cls, discovery: GeneratedScript | None, processing: GeneratedScript, split: TaskSplit
+    ) -> GeneratedScriptSet:
+        """Assemble a set from the two independent scripts + the explorer's split."""
+        if discovery is not None:
+            explanation = f"Discovery: {discovery.explanation}\nProcessing: {processing.explanation}"
+        else:
+            explanation = processing.explanation
+        seen: set[str] = set()
+        deps = [
+            n
+            for s in [discovery, processing]
+            if s
+            for n in s.dependency_names()
+            if n.lower() not in seen and not seen.add(n.lower())
+        ]
+        return cls(
+            discovery_python_code=discovery.python_code if discovery else None,
+            processing_python_code=processing.python_code,
+            explanation=explanation,
+            dependencies=deps,
+            pdf_download_strategy=split.pdf_download_strategy,
+        )
+
+    def replace_discovery(self, new_discovery: GeneratedScript) -> GeneratedScriptSet:
+        """Return a new set with the discovery script replaced."""
+        return self.model_copy(update={"discovery_python_code": new_discovery.python_code})
+
+    def replace_processing(self, new_processing: GeneratedScript) -> GeneratedScriptSet:
+        """Return a new set with the processing script replaced."""
+        return self.model_copy(
+            update={
+                "processing_python_code": new_processing.python_code,
+                "pdf_download_strategy": new_processing.pdf_download_strategy,
+            }
+        )

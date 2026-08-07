@@ -141,6 +141,9 @@ def main() -> None:
     conn = connect()
     try:
         summary(conn)
+        for row in all_rows(conn)[:2]:
+            print(render_card(parsed(row)))
+            print()
         while True:
             q = input(SUBSTR_PROMPT).strip()
             if not q:

@@ -31,13 +31,15 @@ from dataclasses import dataclass, field, replace
 
 from pydantic_ai import RunContext
 from pydantic_ai.capabilities import AbstractCapability
-from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
+from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, ThinkingPart, ToolReturnPart
 from pydantic_ai.models import ModelRequestContext
 from browser_agent.configuration import (
     COMPACT_HEAD_LINES,
     COMPACT_KEEP_RECENT_STRUCTURED,
     COMPACT_KEEP_RECENT_VALIDATIONS,
+    COMPACT_MAX_ANALYZE_LINES,
     COMPACT_MAX_EXTRACTED_LINES,
+    COMPACT_MAX_RETAINED,
     COMPACT_MIN_TRIM_CHARS,
     COMPACT_TRUNCATED_PLACEHOLDER,
 )
@@ -49,9 +51,11 @@ AnyAgentDeps = TypeVar("AnyAgentDeps", covariant=True)
 
 _EXPLORE_TOOL = "explore_page"
 _VALIDATION_TOOL = "run_validation_script"
-
+_THINKING_KEEP_RECENT = 2
 
 _KEEP_ALL = 0
+# Sentinel: trim every index in the bucket (cut above all real indices).
+_TRIM_ALL = 10**9
 
 
 @dataclass(frozen=True)
@@ -64,6 +68,7 @@ class _CutPlan:
     snap_cut: int = _KEEP_ALL
     val_cut: int = _KEEP_ALL
     oth_cut: int = _KEEP_ALL
+    think_cut: int = _KEEP_ALL
 
 
 class ToolReturnCompactor(AbstractCapability[AnyAgentDeps]):
@@ -90,6 +95,8 @@ class ToolReturnCompactor(AbstractCapability[AnyAgentDeps]):
         out: list[ModelMessage] = []
         for idx, msg in enumerate(messages):
             rewritten = _maybe_rewrite(idx, msg, plan)
+            if rewritten is None:
+                rewritten = _maybe_rewrite_response(idx, msg, plan)
             out.append(rewritten if rewritten is not None else msg)
         return out
 
@@ -99,17 +106,31 @@ def _build_plan(messages: list[ModelMessage]) -> _CutPlan | None:
 
     Uses ``COMPACT_KEEP_RECENT_STRUCTURED`` for explore_page returns
     so structured analysis (which is low-token) stays visible longer.
+    A sliding-window backstop (``COMPACT_MAX_RETAINED``) kicks in when
+    the total number of trimmable returns exceeds the cap: only the
+    most recent returns across *all* buckets are kept full.
     """
     snaps, vals, others = _classify_indices(messages)
-    if not snaps and not vals and not others:
+    thinkers = _thinking_indices(messages)
+    if not snaps and not vals and not others and not thinkers:
         return None
+    snap_cut = _cut_index(snaps, COMPACT_KEEP_RECENT_STRUCTURED)
+    val_cut = _cut_index(vals, COMPACT_KEEP_RECENT_VALIDATIONS)
+    oth_cut = _cut_index(others, 0)
+    think_cut = _cut_index(thinkers, _THINKING_KEEP_RECENT)
+    all_idx = snaps | vals | others
+    if len(all_idx) > COMPACT_MAX_RETAINED:
+        keep = set(sorted(all_idx, reverse=True)[:COMPACT_MAX_RETAINED])
+        snap_cut = max(snap_cut, _backstop_cut(snaps, keep))
+        val_cut = max(val_cut, _backstop_cut(vals, keep))
     return _CutPlan(
         snaps=snaps,
         vals=vals,
         others=others,
-        snap_cut=_cut_index(snaps, COMPACT_KEEP_RECENT_STRUCTURED),
-        val_cut=_cut_index(vals, COMPACT_KEEP_RECENT_VALIDATIONS),
-        oth_cut=_cut_index(others, 0),
+        snap_cut=snap_cut,
+        val_cut=val_cut,
+        oth_cut=oth_cut,
+        think_cut=think_cut,
     )
 
 
@@ -120,6 +141,15 @@ def _classify_indices(messages: list[ModelMessage]) -> tuple[set[int], set[int],
     for idx, msg in enumerate(messages):
         _collect_message_bucket(idx, msg, snaps, vals, others)
     return snaps, vals, others
+
+
+def _thinking_indices(messages: list[ModelMessage]) -> set[int]:
+    """Indices of ``ModelResponse`` messages that carry a ``ThinkingPart``."""
+    return {
+        idx
+        for idx, msg in enumerate(messages)
+        if isinstance(msg, ModelResponse) and any(isinstance(p, ThinkingPart) for p in msg.parts)
+    }
 
 
 def _collect_message_bucket(
@@ -173,6 +203,22 @@ def _cut_index(indices: set[int], keep_recent: int) -> int:
     return sorted(indices, reverse=True)[keep_recent - 1]
 
 
+def _backstop_cut(indices: set[int], keep: set[int]) -> int:
+    """Return the lowest index to KEEP under the sliding-window backstop.
+
+    Only indices in ``keep`` survive; the rest are trimmed.  Returns
+    ``_KEEP_ALL`` only when every bucket index is kept.  When no
+    bucket index survives, returns a large value so ``max()`` trims
+    everything in the bucket.
+    """
+    survivors = indices & keep
+    if not survivors:
+        return _TRIM_ALL
+    if survivors == indices:
+        return _KEEP_ALL
+    return min(survivors)
+
+
 def _maybe_rewrite(idx: int, msg: ModelMessage, plan: _CutPlan) -> ModelRequest | None:
     if not isinstance(msg, ModelRequest):
         return None
@@ -183,6 +229,14 @@ def _maybe_rewrite(idx: int, msg: ModelMessage, plan: _CutPlan) -> ModelRequest 
     if idx in plan.others and idx < plan.oth_cut:
         return _trim_request(msg, None, _summarise_generic)
     return None
+
+
+def _maybe_rewrite_response(idx: int, msg: ModelMessage, plan: _CutPlan) -> ModelResponse | None:
+    """Blank thinking on old ``ModelResponse`` messages; keep tool calls intact."""
+    if not isinstance(msg, ModelResponse) or idx >= plan.think_cut:
+        return None
+    new_parts = [replace(p, content="[trimmed thinking]") if isinstance(p, ThinkingPart) else p for p in msg.parts]
+    return replace(msg, parts=new_parts)
 
 
 def _trim_request(msg: ModelRequest, tool_name: str | None, summarise) -> ModelRequest:
@@ -217,19 +271,63 @@ def _maybe_rewrite_part(part, tool_name, summarise):
 def _summarise_explore(content: str) -> str:
     """Keep header lines + extracted elements, drop the HTML body.
 
-    Structured ``analyze`` returns are kept full (they are small and
-    contain selectors the agent needs).  ``inspect`` returns lose the
-    HTML snippet but keep their metadata headers, which is fine — the
-    agent can call ``inspect`` again to re-fetch the snippet.
+    ``inspect`` returns lose the HTML snippet but keep their metadata
+    headers, which is fine — the agent can call ``inspect`` again to
+    re-fetch the snippet.  ``analyze`` returns are dispatched to
+    :func:`_summarise_analyze` which trims each section's element list.
     """
     if _is_analyze_return(content):
-        return content
+        return _summarise_analyze(content)
     kept: list[str] = []
     state = _ExploreState()
     for line in content.splitlines():
         if state.step(line, kept):
             break
     kept.append(COMPACT_TRUNCATED_PLACEHOLDER)
+    return "\n".join(kept)
+
+
+def _flush_analyze_placeholder(kept, seen, trimmed):
+    """Emit a ``[{n} more trimmed]`` line when a section was capped."""
+    if trimmed:
+        kept.append(f"[{trimmed} more trimmed]")
+
+
+def _summarise_analyze(content: str) -> str:
+    """Keep all section headers, trim each section's element lines.
+
+    The analyze return format is ``#`` header lines (section name +
+    count) followed by indented ``  <`` element lines.  We keep every
+    header but only the first ``COMPACT_MAX_ANALYZE_LINES`` element
+    lines per section; when a section is capped we emit a
+    ``[{n} more trimmed]`` placeholder at its boundary so the agent
+    knows how many elements were dropped.
+    """
+    kept: list[str] = []
+    section_seen = 0
+    section_trimmed = 0
+    for line in content.splitlines():
+        if line.startswith("#"):
+            _flush_analyze_placeholder(kept, section_seen, section_trimmed)
+            kept.append(line)
+            section_seen = 0
+            section_trimmed = 0
+            continue
+        if line.startswith("  "):
+            if section_seen < COMPACT_MAX_ANALYZE_LINES:
+                kept.append(line)
+                section_seen += 1
+            else:
+                section_trimmed += 1
+            continue
+        if line.strip():
+            _flush_analyze_placeholder(kept, section_seen, section_trimmed)
+            kept.append(line)
+            section_seen = 0
+            section_trimmed = 0
+            continue
+        kept.append(line)
+    _flush_analyze_placeholder(kept, section_seen, section_trimmed)
     return "\n".join(kept)
 
 

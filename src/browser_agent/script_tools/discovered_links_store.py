@@ -18,7 +18,12 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from script_tools._file_utils import _canonical_url
+from loguru import logger
+
+try:
+    from script_tools._file_utils import _canonical_url
+except ImportError:
+    from browser_agent.script_tools._file_utils import _canonical_url
 
 
 def _resolve_db_path() -> str:
@@ -90,3 +95,24 @@ def mark_link_processed(url: str) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def preseed_sample_links(urls: list[str], db_path: str) -> None:
+    """Insert sample URLs as filter_label='sample' links (idempotent)."""
+    if not urls:
+        return
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    conn = sqlite3.connect(db_path, timeout=5)
+    try:
+        _ensure_schema(conn)
+        for url in urls:
+            canon = _canonical_url(url)
+            conn.execute(
+                "INSERT OR IGNORE INTO discovered_links (url, filter_label, status, discovered_at) "
+                "VALUES (?, 'sample', 'discovered', ?)",
+                (canon, now),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    logger.info("pre-seeded {n} sample links into discovered_links", n=len(urls))

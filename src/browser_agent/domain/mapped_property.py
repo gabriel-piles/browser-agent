@@ -3,10 +3,11 @@
 This model is the single list the operator edits. It contains the
 live Uwazi template property metadata (``name``, ``label``, ``type``,
 ``required``) plus the mapping-specific choices
-(``source``, ``thesaurus``, ``default_value``, ``notes``).
-The thesaurus id is excluded from the YAML mapping — operators refer
-to the thesaurus by its name and the downstream scripts resolve the
-id from the live Uwazi template.
+(``source``, ``default_value``, ``notes``).
+The thesaurus reference is excluded from the YAML mapping entirely:
+the downstream scripts resolve the thesaurus id from the live Uwazi
+template at run time, so the same mapping works against any instance
+with the same template (even when the internal thesaurus ids differ).
 
 ``template_name`` lists every Uwazi template this property belongs to.
 A property shared by the primary and registry templates carries both
@@ -25,7 +26,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 from browser_agent.domain.field_type import FieldType
 from browser_agent.domain.llm_field_draft import LlmFieldDraft
@@ -38,21 +39,14 @@ class MappedProperty(BaseModel):
 
     name: str = Field(description="Uwazi property name. Use 'title' for the entity title and 'file' for the primary file.")
     label: str | None = Field(default=None, description="UI label from the Uwazi template.")
-    type: FieldType = Field(description="Normalised property type.")
-    required: bool = Field(default=False, description="Whether the template requires this property.")
-    source: str | None = Field(
+    source: tuple[str, ...] | None = Field(
         default=None,
-        description="Source column name in the metadata.db row; None for a constant/default-only entry.",
-    )
-    thesaurus: str | None = Field(
-        default=None,
-        description="Thesaurus name (must match a thesauri_mappings/*.yaml file).",
+        description="Candidate source column name(s) in the metadata.db row; the first non-empty value wins. None for a constant/default-only entry.",
     )
     default_value: str | None = Field(
         default=None,
         description="Constant value for entries with source=None; None leaves the property unset.",
     )
-    notes: str | None = Field(default=None, description="Free-form human notes for the reviewer.")
     template_name: tuple[str, ...] = Field(
         default_factory=tuple,
         description=(
@@ -61,6 +55,31 @@ class MappedProperty(BaseModel):
             "the registry name. Empty means primary-only (legacy YAML)."
         ),
     )
+    type: FieldType = Field(description="Normalised property type.")
+    required: bool = Field(default=False, description="Whether the template requires this property.")
+    notes: str | None = Field(default=None, description="Free-form human notes for the reviewer.")
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def _coerce_source(cls, value: object) -> object:
+        """Coerce a YAML scalar/list into an internal tuple of candidate column names."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return (value,)
+        if isinstance(value, (list, tuple)):
+            coerced = tuple(str(v) for v in value)
+            return coerced if coerced else None
+        return value
+
+    @field_serializer("source")
+    def _serialize_source(self, value: tuple[str, ...] | None) -> str | list[str] | None:
+        """Collapse a single-element tuple back to a scalar so YAML round-trips as ``source: foo``."""
+        if value is None:
+            return None
+        if len(value) == 1:
+            return value[0]
+        return list(value)
 
     @field_validator("default_value", mode="before")
     @classmethod
@@ -93,7 +112,6 @@ class MappedProperty(BaseModel):
             type=template_prop.type,
             required=template_prop.required,
             source=draft.source if draft is not None else None,
-            thesaurus=draft.thesaurus if draft is not None else None,
             default_value=draft.default_value if draft is not None else None,
             notes=draft.notes if draft is not None else None,
             template_name=template_name,
@@ -103,9 +121,9 @@ class MappedProperty(BaseModel):
     def title_from_draft(
         cls, title_prop, draft: LlmFieldDraft | None, template_name: tuple[str, ...] = ()
     ) -> MappedProperty:
-        """Build the title entry: forced to :attr:`FieldType.TITLE`, thesaurus dropped."""
+        """Build the title entry: forced to :attr:`FieldType.TITLE`."""
         entry = cls.from_template_and_draft(title_prop, draft, template_name=template_name)
-        return entry.model_copy(update={"type": FieldType.TITLE, "thesaurus": None})
+        return entry.model_copy(update={"type": FieldType.TITLE})
 
     def match_rank(self) -> int:
         """Sort key: 0 source-backed, 1 default-only, 2 ignored (source=None and default_value=None)."""

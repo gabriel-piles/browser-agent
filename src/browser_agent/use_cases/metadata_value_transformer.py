@@ -19,6 +19,7 @@ import yaml
 
 from browser_agent.domain.field_type import FieldType
 from browser_agent.domain.mapped_property import MappedProperty
+from browser_agent.use_cases.source_value_resolver import resolve_source_value
 from browser_agent.domain.uwazi_mapping import UwaziMapping
 from browser_agent.domain.uwazi_template import UwaziTemplate
 from uwazi_api.domain.thesauri_value import ThesauriValue
@@ -32,13 +33,14 @@ def build_metadata_for_row(
     record: dict,
     source_url: str,
     mapping: UwaziMapping,
-    thesaurus_lookup: dict[str, dict[str, str | None]],
+    thesaurus_lookup_by_property: dict[str, dict[str, str | None]],
     thesaurus_parents: dict[str, dict[str, str | None]] | None = None,
     relationship_title_to_id: dict[str, dict[str, str]] | None = None,
+    template: UwaziTemplate | None = None,
 ) -> dict:
     """Build the post-transform metadata dict for one record (module-level convenience)."""
-    return MetadataValueTransformer().build_for_row(
-        record, source_url, mapping, thesaurus_lookup, thesaurus_parents, relationship_title_to_id
+    return MetadataValueTransformer(template=template).build_for_row(
+        record, source_url, mapping, thesaurus_lookup_by_property, thesaurus_parents, relationship_title_to_id
     )
 
 
@@ -46,7 +48,7 @@ class MetadataValueTransformer:
     """Apply per-property value transformations for the Uwazi metadata blob."""
 
     def __init__(self, template: UwaziTemplate | None = None) -> None:
-        """Store the optional live ``template`` used to resolve relationship keys."""
+        """Store the live ``template`` used to resolve thesaurus ids on the fly."""
         self._template = template
 
     def build_for_row(
@@ -54,10 +56,9 @@ class MetadataValueTransformer:
         record: dict,
         source_url: str,
         mapping: UwaziMapping,
-        thesaurus_lookup: dict[str, dict[str, str | None]],
+        thesaurus_lookup_by_property: dict[str, dict[str, str | None]],
         thesaurus_parents: dict[str, dict[str, str | None]] | None = None,
         relationship_title_to_id: dict[str, dict[str, str]] | None = None,
-        thesaurus_lookup_by_id: dict[str, dict[str, str | None]] | None = None,
     ) -> dict:
         """Build the primary-template metadata dict for one record.
 
@@ -84,10 +85,9 @@ class MetadataValueTransformer:
                 record,
                 prop,
                 source_url,
-                thesaurus_lookup,
                 thesaurus_parents,
                 relationship_title_to_id,
-                thesaurus_lookup_by_id,
+                thesaurus_lookup_by_property,
             )
         return {k: v for k, v in out.items() if v is not None}
 
@@ -96,10 +96,9 @@ class MetadataValueTransformer:
         record: dict,
         source_url: str,
         mapping: UwaziMapping,
-        thesaurus_lookup: dict[str, dict[str, str | None]],
+        thesaurus_lookup_by_property: dict[str, dict[str, str | None]],
         thesaurus_parents: dict[str, dict[str, str | None]] | None = None,
         relationship_title_to_id: dict[str, dict[str, str]] | None = None,
-        thesaurus_lookup_by_id: dict[str, dict[str, str | None]] | None = None,
         registry_template: UwaziTemplate | None = None,
     ) -> dict:
         """Build the registry-template metadata dict for one record.
@@ -132,60 +131,62 @@ class MetadataValueTransformer:
                 record,
                 prop,
                 source_url,
-                thesaurus_lookup,
                 thesaurus_parents,
                 relationship_title_to_id,
-                thesaurus_lookup_by_id,
+                thesaurus_lookup_by_property,
             )
         return {k: v for k, v in out.items() if v is not None}
 
     def _relationship_map_for(self, prop, relationship_title_to_id) -> dict[str, str] | None:
         """Return the title->id map for ``prop`` using the live template's thesaurus_id."""
-        if not relationship_title_to_id:
+        if not relationship_title_to_id or self._template is None:
             return None
-        if self._template is None:
-            return relationship_title_to_id.get(prop.thesaurus) if prop.thesaurus else None
         tprop = self._template.property_by_name(prop.name)
         if tprop is None or tprop.thesaurus_id is None:
             return None
         return relationship_title_to_id.get(tprop.thesaurus_id)
 
-    def _thesaurus_lookup_for(self, prop, thesaurus_lookup, thesaurus_lookup_by_id) -> dict[str, str | None] | None:
-        """Return the substitution map for ``prop``.
+    def _thesaurus_lookup_for(self, prop, thesaurus_lookup_by_property) -> dict[str, str | None] | None:
+        """Return the substitution map for ``prop`` keyed by the Uwazi property name.
 
-        Relationships resolve from the id-keyed map via the live template
-        (whose ``thesaurus_id`` is the target template's id), matching the
-        ``thesaurus_id`` field every relationship YAML carries regardless
-        of its filename. Select/multiselect keep the name-keyed lookup.
+        ``step_4_validate_data.py`` writes one ``thesauri_mappings/*.yaml``
+        per Uwazi property (named after it, carrying a ``property_name``
+        field), so two properties sharing a thesaurus stay separate. The
+        lookup is keyed by ``prop.name``; the live template only confirms
+        the property is thesaurus-backed on the target instance, so the
+        same mapping works against any instance even when the internal
+        thesaurus ids differ.
         """
-        if prop.type is FieldType.RELATIONSHIP and self._template is not None and thesaurus_lookup_by_id:
-            tprop = self._template.property_by_name(prop.name)
-            if tprop and tprop.thesaurus_id:
-                return thesaurus_lookup_by_id.get(tprop.thesaurus_id)
+        if self._template is None:
             return None
-        return thesaurus_lookup.get(prop.thesaurus) if prop.thesaurus else None
+        tprop = self._template.property_by_name(prop.name)
+        if tprop is None or tprop.thesaurus_id is None:
+            return None
+        if not thesaurus_lookup_by_property:
+            return None
+        return thesaurus_lookup_by_property.get(prop.name)
 
     def _property_value(
         self,
         record,
         prop,
         source_url,
-        thesaurus_lookup,
         thesaurus_parents,
         relationship_title_to_id,
-        thesaurus_lookup_by_id=None,
+        thesaurus_lookup_by_property=None,
     ) -> object:
         """Return the coerced value for one property, or None to skip it."""
-        lookup = self._thesaurus_lookup_for(prop, thesaurus_lookup, thesaurus_lookup_by_id)
+        lookup = self._thesaurus_lookup_for(prop, thesaurus_lookup_by_property)
         rel_map = self._relationship_map_for(prop, relationship_title_to_id)
         if prop.source is None:
             value = self._default_value(prop)
             if value is None:
                 return None
             return self._coerce(value, prop, thesaurus_parents, rel_map)
-        if prop.source not in record:
+        raw = resolve_source_value(record, prop.source)
+        if raw is None:
             return None
-        value = self._format_field(record[prop.source], prop, lookup)
+        value = self._format_field(raw, prop, lookup)
         return self._coerce(value, prop, thesaurus_parents, rel_map)
 
     def _format_field(self, raw, prop: MappedProperty, lookup) -> object:
@@ -323,26 +324,14 @@ def _walk_parents(values: Iterable[ThesauriValue], out: dict[str, str | None], p
             _walk_parents(v.values, out, parent_label=v.label)
 
 
-def load_thesauri_mappings(thesauri_dir: Path) -> dict[str, dict[str, str | None]]:
-    """Read every ``thesauri_mappings/*.yaml`` into a name -> {crawl: uwazi} dict."""
-    out: dict[str, dict[str, str | None]] = {}
-    if not thesauri_dir.is_dir():
-        return out
-    for path in sorted(thesauri_dir.glob("*.yaml")):
-        data = _thesauri_dict_from_yaml(path)
-        if not data:
-            continue
-        out[path.stem] = data
-    return out
+def load_thesauri_mappings_by_property(thesauri_dir: Path) -> dict[str, dict[str, str | None]]:
+    """Read every ``thesauri_mappings/*.yaml`` into a property_name -> {crawl: uwazi} dict.
 
-
-def load_thesauri_mappings_by_id(thesauri_dir: Path) -> dict[str, dict[str, str | None]]:
-    """Read every ``thesauri_mappings/*.yaml`` into a thesaurus_id -> {crawl: uwazi} dict.
-
-    Relationship YAMLs name the file after the target template's display
-    name or id, but always carry ``thesaurus_id``; keying by id lets the
-    transformer resolve the substitution map from the live template
-    regardless of how the file was named.
+    Step 4 writes one file per Uwazi property, named after it and
+    carrying a ``property_name`` field; keying by that field (not the
+    file stem) keeps two properties that share a thesaurus separate
+    and survives a human renaming the file. The instance-specific
+    ``thesaurus_id`` plays no part in the lookup.
     """
     out: dict[str, dict[str, str | None]] = {}
     if not thesauri_dir.is_dir():
@@ -351,22 +340,22 @@ def load_thesauri_mappings_by_id(thesauri_dir: Path) -> dict[str, dict[str, str 
         data = _thesauri_dict_from_yaml(path)
         if not data:
             continue
-        thesaurus_id = _thesaurus_id_from_yaml(path)
-        if thesaurus_id:
-            out[thesaurus_id] = data
+        property_name = _property_name_from_yaml(path)
+        if property_name:
+            out[property_name] = data
     return out
 
 
-def _thesaurus_id_from_yaml(path: Path) -> str | None:
-    """Return the ``thesaurus_id`` field of one mapping YAML, or None."""
+def _property_name_from_yaml(path: Path) -> str | None:
+    """Return the ``property_name`` field of one mapping YAML, or None."""
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except Exception:
         return None
     if not isinstance(data, dict):
         return None
-    thesaurus_id = data.get("thesaurus_id")
-    return thesaurus_id if isinstance(thesaurus_id, str) else None
+    property_name = data.get("property_name")
+    return property_name if isinstance(property_name, str) else None
 
 
 def _thesauri_dict_from_yaml(path: Path) -> dict[str, str | None]:

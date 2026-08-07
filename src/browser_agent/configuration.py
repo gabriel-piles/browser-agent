@@ -15,6 +15,13 @@ load_dotenv(PROJECT_ROOT / ".env")
 OLLAMA_BASE_URL = "https://ollama.com/v1"
 ORCHESTRATOR_MODEL = "deepseek-v4-flash:0731-cloud"
 MAX_LLM_CALLS = 70
+EXPLORER_MAX_LLM_CALLS = 30
+WRITER_MAX_LLM_CALLS = 40
+# Output token budget sent to the provider on every LLM request. Without an
+# explicit `max_tokens`, reasoning models (deepseek-v4-flash) can spend the
+# provider's default budget entirely on thinking and return `finish_reason='length'`
+# with no actionable output, which pydantic-ai treats as a fatal error.
+MAX_OUTPUT_TOKENS = 16_000
 VERIFICATION_MODEL = "deepseek-v4-flash:0731-cloud"
 VERIFICATION_PDF_COUNT = 10
 
@@ -72,9 +79,14 @@ ANALYZE_MAX_TABLES = 5
 
 # --- Compactor — structured-analysis tuning ---
 # Keep more recent structured/summary returns full (they're small)
-COMPACT_KEEP_RECENT_STRUCTURED = 5
-# Max chars for structured-analysis content before compactor considers trimming
-COMPACT_STRUCTURED_MAX_TRIM_CHARS = 3_000
+COMPACT_KEEP_RECENT_STRUCTURED = 4
+# Sliding-window backstop: max tool returns kept full across all buckets.
+# When total trimmable returns exceed this, only the most recent are kept.
+COMPACT_MAX_RETAINED = 12
+# Max element lines per section kept in trimmed ``analyze`` returns;
+# higher than ``COMPACT_MAX_EXTRACTED_LINES`` because link/button
+# sections need more visible entries for correct selector choice.
+COMPACT_MAX_ANALYZE_LINES = 20
 MAX_VALIDATION_ATTEMPTS = 3
 
 # ``headless`` defaults to False — the operator can watch Chrome

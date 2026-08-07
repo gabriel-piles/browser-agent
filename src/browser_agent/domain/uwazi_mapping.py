@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from browser_agent.domain.identity_config import IdentityConfig
 from browser_agent.domain.mapped_property import MappedProperty
+from browser_agent.domain.metadata_coverage import MetadataCoverage
 from browser_agent.domain.skipped_field import SkippedField
 
 
@@ -25,20 +26,19 @@ class UwaziMapping(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    version: int = Field(default=2, description="YAML schema version; bumped on breaking changes.")
+    version: int = Field(default=3, description="YAML schema version; bumped on breaking changes.")
     template: str = Field(description="Name of the Uwazi template to push to.")
     default_language: str = Field(default="en", description="ISO language code sent on every create/update.")
     identity: IdentityConfig = Field(default_factory=IdentityConfig)
-    properties: tuple[MappedProperty, ...] = Field(
-        default_factory=tuple,
+    skipped: tuple[SkippedField, ...] = Field(default_factory=tuple, description="Catalog fields the LLM declined to map.")
+    metadata_stats: MetadataCoverage | None = Field(
+        default=None,
         description=(
-            "The single list the operator edits: every target property on Uwazi plus how it is filled. "
-            "The first entry (when the template declares a title) is the ``title`` common property "
-            "(type=TITLE); the apply step reads it as ``Entity.title`` and the metadata builder skips it."
+            "Optional snapshot of the metadata.db coverage (total entities + per-field counts) "
+            "recorded by step_3 when the mapping was drafted. Older or hand-written mappings "
+            "omit it; the apply and validate steps do not read it."
         ),
     )
-
-    skipped: tuple[SkippedField, ...] = Field(default_factory=tuple, description="Catalog fields the LLM declined to map.")
 
     publish: bool = Field(default=False, description="Whether to publish created entities (vs leave them as drafts).")
     upload_pdf: bool = Field(default=False, description="Whether to attach the local PDF file when one exists.")
@@ -55,11 +55,19 @@ class UwaziMapping(BaseModel):
         default=None,
         description="Registry-template property to receive the SHA-256 hash of the scraped document file at upload time.",
     )
+    properties: tuple[MappedProperty, ...] = Field(
+        default_factory=tuple,
+        description=(
+            "The single list the operator edits: every target property on Uwazi plus how it is filled. "
+            "The first entry (when the template declares a title) is the ``title`` common property "
+            "(type=TITLE); the apply step reads it as ``Entity.title`` and the metadata builder skips it."
+        ),
+    )
 
     def property_for_source(self, source_name: str) -> MappedProperty | None:
         """Return the :class:`MappedProperty` whose source is ``source_name``, or None."""
         for prop in self.properties:
-            if prop.source == source_name:
+            if prop.source and source_name in prop.source:
                 return prop
         return None
 

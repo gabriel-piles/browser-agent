@@ -23,13 +23,15 @@ the template properties that have no matching scraped field.
 
 Rules:
 - Place every field you can; use ``type="title"`` for the entity title
-  (always target the ``title`` common property, never leave it empty),
+  (always lead the ``title`` common property, never leave it empty),
   ``type="date"`` for dates, ``type="select"``
-  / ``type="multiselect"`` for fields backed by a thesaurus (set
-  ``thesaurus`` to the thesaurus name), ``type="text"`` for plain
-  strings, ``type="numeric"`` for numbers, ``type="markdown"`` for
-  long-form text, ``type="link"`` for URL-valued fields, ``type="skipped"``
-  for fields you cannot place.
+  / ``type="multiselect"`` for fields backed by a thesaurus,
+  ``type="text"`` for plain strings, ``type="numeric"`` for numbers,
+  ``type="markdown"`` for long-form text, ``type="link"`` for
+  URL-valued fields, ``type="skipped"`` for fields you cannot place.
+  Do NOT emit a ``thesaurus`` field: the mapping YAML carries no
+  thesaurus reference, the thesaurus is resolved from the live Uwazi
+  instance at apply time.
 - The ``title`` common property is mandatory. Always emit a
   ``fields`` entry whose ``target`` is the name of the title common
   property (see ``common_properties`` in the template snapshot) and

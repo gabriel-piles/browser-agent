@@ -14,10 +14,12 @@ import asyncio
 from typing import Any
 
 from pydantic_ai import Agent, UsageLimits
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.models import Model
+from pydantic_ai.usage import UsageLimitExceeded
 
 from browser_agent.agent_logging import agent_logger
-from browser_agent.configuration import MAX_LLM_CALLS
+from browser_agent.configuration import MAX_LLM_CALLS, MAX_OUTPUT_TOKENS
 from browser_agent.domain.verification_report import VerificationReport
 from browser_agent.domain.verification_request import VerificationRequest
 from browser_agent.use_cases.check_pdf_tool import check_pdf
@@ -45,6 +47,7 @@ class VerifyDownloadsUseCase:
             output_type=VerificationReport,
             tools=[declare_paths, explore_page, check_pdf, query_db, run_read_script],
             capabilities=[ToolReturnCompactor()],
+            model_settings={"max_tokens": MAX_OUTPUT_TOKENS},
         )
         return agent
 
@@ -123,11 +126,29 @@ _AGENT_RUN_RETRY_DELAY_S = 5.0
 
 
 async def _run_with_retry(agent: Agent, prompt: str, **kwargs: Any) -> Any:
-    """Run the agent, retrying transient model errors up to twice."""
+    """Run the agent, retrying transient model errors up to twice.
+
+    Overflow exceptions (``UnexpectedModelBehavior``,
+    ``UsageLimitExceeded``) get a single fresh-start retry with no
+    ``message_history`` — the verification agent has no prior history
+    to truncate.  A second overflow propagates.  Transient errors
+    keep the existing retry-with-delay behavior.
+    """
     last_exc: Exception | None = None
+    overflow_retried = False
     for attempt in range(_AGENT_RUN_RETRIES + 1):
         try:
             return await agent.run(prompt, **kwargs)
+        except (UnexpectedModelBehavior, UsageLimitExceeded) as exc:
+            if not overflow_retried:
+                overflow_retried = True
+                agent_logger.warning(
+                    "Context overflow, retrying with fresh history: {exc}",
+                    exc=exc,
+                )
+                kwargs.pop("message_history", None)
+                continue
+            raise
         except Exception as exc:  # noqa: BLE001 — transient model errors
             last_exc = exc
             if attempt < _AGENT_RUN_RETRIES:

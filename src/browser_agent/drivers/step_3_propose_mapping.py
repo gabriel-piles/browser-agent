@@ -47,12 +47,12 @@ class ProposeDriver:
         if not db_path.exists():
             self._console.print_no_db(db_path)
             return
-        catalog, total_rows = MetadataCatalogBuilder(run_config).build(db_path)
+        catalog, coverage = MetadataCatalogBuilder(run_config).build(db_path)
         if catalog is None:
             self._console.print_no_rows()
             return
-        self._console.print_catalog(catalog, total_rows)
-        mapping = await self._propose(run_config, catalog)
+        self._console.print_catalog(coverage)
+        mapping = await self._propose(run_config, catalog, coverage)
         self._console.print_mapping(mapping)
 
     def _has_template(self, run_config: RunConfig) -> bool:
@@ -62,7 +62,7 @@ class ProposeDriver:
         print(f"Run {run_config.name!r} has no 'template' set in active_run.yaml; cannot propose.")
         return False
 
-    async def _propose(self, run_config: RunConfig, catalog):
+    async def _propose(self, run_config: RunConfig, catalog, coverage):
         """Build the use case and call ``propose_with_catalog`` for the active run."""
         use_case = ProposeMappingUseCase(
             client=self._uwazi.build(),
@@ -76,6 +76,7 @@ class ProposeDriver:
             scraper_date_property=run_config.scraper_date_property,
             scraper_document_relationship=run_config.scraper_document_relationship,
             scraper_document_hash=run_config.scraper_document_hash,
+            metadata_stats=coverage,
         )
 
 

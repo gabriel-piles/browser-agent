@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from browser_agent.domain.metadata_field_catalog import MetadataFieldCatalog
+from browser_agent.domain.metadata_coverage import MetadataCoverage
 from browser_agent.domain.uwazi_mapping import UwaziMapping
 
 
@@ -18,13 +18,14 @@ class ProposeConsole:
     def __init__(self, mapping_path: Path) -> None:
         self._mapping_path = mapping_path
 
-    def print_catalog(self, catalog: MetadataFieldCatalog, total_rows: int) -> None:
-        """Print a one-line summary of the catalog built from the database."""
-        sample = [f.name for f in catalog.fields[:8]]
-        suffix = "…" if len(catalog.fields) > 8 else ""
-        print(f"Loaded {total_rows} row(s) from metadata.db")
-        print(f"  distinct fields: {len(catalog.fields)}")
-        print(f"  sample fields:   {sample}{suffix}")
+    def print_catalog(self, coverage: MetadataCoverage) -> None:
+        """Print the full per-field coverage of the database."""
+        total = coverage.total_entities
+        print(f"Loaded {total} row(s) (entities) from metadata.db")
+        print(f"  distinct fields: {len(coverage.fields)}")
+        print(f"  field coverage (entities with a value / total {total}):")
+        for name, count in coverage.fields.items():
+            print(f"    - {name}: {count}/{total}")
 
     def print_no_db(self, db_path: Path) -> None:
         """Print the message when the cache file is missing."""

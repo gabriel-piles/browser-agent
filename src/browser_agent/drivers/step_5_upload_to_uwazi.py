@@ -31,7 +31,7 @@ from browser_agent.drivers.mapping.mapping_loader import MappingLoader
 from browser_agent.drivers.paths.run_paths import RunPaths
 from browser_agent.drivers.clients.uwazi_client_factory import UwaziClientFactory
 
-MAX_ENTITIES_TO_UPLOAD = 30
+MAX_ENTITIES_TO_UPLOAD = 300000
 
 
 class ApplyDriver:

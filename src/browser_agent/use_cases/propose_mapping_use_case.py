@@ -24,6 +24,7 @@ from pydantic_ai.models import Model
 
 from browser_agent.configuration import MAX_LLM_CALLS
 from browser_agent.domain.llm_mapping_draft import LlmMappingDraft
+from browser_agent.domain.metadata_coverage import MetadataCoverage
 from browser_agent.domain.metadata_field_catalog import MetadataFieldCatalog
 from browser_agent.domain.thesauri_snapshot import ThesauriSnapshot
 from browser_agent.domain.uwazi_mapping import UwaziMapping
@@ -55,6 +56,7 @@ class ProposeMappingUseCase:
         scraper_date_property: str | None = None,
         scraper_document_relationship: str | None = None,
         scraper_document_hash: str | None = None,
+        metadata_stats: MetadataCoverage | None = None,
     ) -> UwaziMapping:
         """Run the LLM and persist the resulting draft mapping to ``output_path``."""
         self._validate_registry_keys(
@@ -83,6 +85,8 @@ class ProposeMappingUseCase:
             scraper_document_hash=scraper_document_hash,
         )
         self._filler.apply(mapping, template, thesauri_by_id, registry_template=registry_template)
+        if metadata_stats is not None:
+            mapping = mapping.model_copy(update={"metadata_stats": metadata_stats})
         self._write_yaml(mapping, output_path)
         return mapping
 

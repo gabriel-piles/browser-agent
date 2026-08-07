@@ -85,8 +85,18 @@ def _delete_all_entities(client: UwaziClient) -> None:
         print("Done.")
 
 
+def _guard_against_production_url() -> None:
+    """Abort unless UWAZI_URL points at a localhost instance."""
+    if "localhost" not in UWAZI_URL:
+        raise SystemExit(
+            f"Refusing to run against non-local instance {UWAZI_URL!r}. "
+            "Revise UWAZI_URL in your .env to point at a localhost development instance."
+        )
+
+
 def main() -> None:
     """Module entry: print thesauri, then optionally delete entities."""
+    _guard_against_production_url()
     client = UwaziClient(url=UWAZI_URL, user=UWAZI_USER, password=UWAZI_PASSWORD)
     _print_thesauri(client)
     if DELETE_ENTITIES:

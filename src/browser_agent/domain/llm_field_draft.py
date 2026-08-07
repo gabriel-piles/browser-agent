@@ -13,7 +13,6 @@ class LlmFieldDraft(BaseModel):
     source: str | None = None
     target: str
     type: str
-    thesaurus: str | None = None
     required: bool = False
     notes: str | None = None
     default_value: str | None = None

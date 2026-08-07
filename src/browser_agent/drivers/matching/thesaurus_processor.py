@@ -1,9 +1,11 @@
-"""Resolve one thesaurus: exact matches, then LLM, then write YAML, then report.
+"""Resolve one property: exact matches, then LLM, then write YAML, then report.
 
-Hides the four-step pipeline per thesaurus
+Hides the four-step pipeline per Uwazi property
 (exact-match partition, LLM call, YAML write, summary +
 missing report) behind one object. The match driver calls
-:meth:`process` once per thesaurus in the mapping.
+:meth:`process` once per select/multiselect/relationship
+property in the mapping, so two properties sharing a thesaurus
+produce two separate YAML files.
 """
 
 from __future__ import annotations
@@ -38,13 +40,14 @@ class ThesaurusProcessor:
     async def process(
         self,
         *,
+        property_name: str,
         thesaurus_name: str,
         groups: list[dict],
         llm: LlmPort,
         mapping_default_language: str,
         out_path,
     ) -> None:
-        """Resolve one thesaurus: exact, LLM, write, summarise, report missing."""
+        """Resolve one property: exact, LLM, write, summarise, report missing."""
         thesaurus, thesaurus_values, exact_entries, remaining_map = self._resolve_groups(groups)
         self._reporter.print_header(
             thesaurus_name,
@@ -53,6 +56,7 @@ class ThesaurusProcessor:
         )
         llm_entries = await self._llm_caller.call(llm, thesaurus, thesaurus_values, remaining_map)
         mapping_obj = self._yaml_writer.write(
+            property_name,
             thesaurus_name,
             thesaurus,
             mapping_default_language,

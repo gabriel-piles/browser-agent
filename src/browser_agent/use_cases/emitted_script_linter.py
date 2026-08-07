@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import re
+from pathlib import Path
 
 from browser_agent.domain.lint_finding import LintFinding
 
@@ -705,3 +706,26 @@ class EmittedScriptLinter:
     def describe_zendriver_finding(finding: LintFinding) -> str:
         """Return a human-readable description of the zendriver concept the agent got wrong."""
         return _ZENDRIVER_RULE_NAMES.get(finding.rule, finding.message)
+
+    @staticmethod
+    def format_zendriver_summary(findings: list[LintFinding], path: Path | None = None) -> str:
+        """Format zendriver findings as a multi-line warning block (or "" when none)."""
+        zd = EmittedScriptLinter.zendriver_findings(findings)
+        if not zd:
+            return ""
+        prefix = f"[EMIT ZD-ERROR] {path}: " if path is not None else "[ZD-ERROR] "
+        lines: list[str] = []
+        for f in zd:
+            loc = f" line {f.line}" if f.line is not None else ""
+            concept = EmittedScriptLinter.describe_zendriver_finding(f)
+            lines.append(f"{prefix}rule={f.rule}{loc} — {concept}: {f.message}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def format_zendriver_gaps(findings: list[LintFinding]) -> str:
+        """Format the zendriver knowledge-gaps summary line (or "" when none)."""
+        zd = EmittedScriptLinter.zendriver_findings(findings)
+        if not zd:
+            return ""
+        gaps = "; ".join(sorted({EmittedScriptLinter.describe_zendriver_finding(f) for f in zd}))
+        return f"zendriver knowledge gaps: {len(zd)} rule violation(s) — agent does not understand: {gaps}"

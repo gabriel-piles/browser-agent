@@ -42,3 +42,17 @@ def parse_row_data(raw: str | None) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+def normalize_record(record: dict) -> dict:
+    """Copy legacy field names to their canonical form (in place + returned).
+
+    Old scraper scripts stored the download URL under ``pdf_url``; the
+    apply pipeline and linter-enforced convention is ``file_url``. When
+    ``file_url`` is absent but ``pdf_url`` is present, set ``file_url``
+    to the ``pdf_url`` value. ``pdf_url`` is kept so mapping entries
+    that read it still resolve.
+    """
+    if not record.get("file_url") and record.get("pdf_url"):
+        record["file_url"] = record["pdf_url"]
+    return record

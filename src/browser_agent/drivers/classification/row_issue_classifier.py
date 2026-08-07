@@ -18,6 +18,7 @@ from browser_agent.drivers.classification.existing_entities_fetcher import Exist
 from browser_agent.drivers.classification.row_issue_detector import RowIssueDetector
 from browser_agent.domain.uwazi_mapping import UwaziMapping
 from browser_agent.domain.uwazi_template import UwaziTemplate
+from browser_agent.use_cases.source_value_resolver import resolve_source_value
 from browser_agent.use_cases.sync_plan_builder import resolve_key_value, resolve_pdf_filename
 from pathlib import Path
 
@@ -40,17 +41,20 @@ class RowIssueClassifier:
         records,
         mapping: UwaziMapping,
         template: UwaziTemplate,
-        thesaurus_lookup: dict,
+        thesaurus_lookup_by_property: dict,
+        registry_template: UwaziTemplate | None = None,
     ) -> tuple[dict[str, int], list[tuple[str, str, list[str]]]]:
         """Return ``(action counts, [(source_url, title, issues), ...])`` for the rows."""
         entities_by_key = self._index_for(mapping)
-        return self._classify_rows(records, mapping, template, thesaurus_lookup, entities_by_key)
+        return self._classify_rows(
+            records, mapping, template, thesaurus_lookup_by_property, entities_by_key, registry_template
+        )
 
     def row_title(self, record: dict, mapping: UwaziMapping) -> str:
         """Return the entity title for one record, falling back to the empty string."""
         title_prop = mapping.title_property()
         if title_prop is not None and title_prop.source:
-            value = record.get(title_prop.source)
+            value = resolve_source_value(record, title_prop.source)
             if value:
                 return str(value)
         return ""
@@ -61,15 +65,18 @@ class RowIssueClassifier:
         source_url: str,
         mapping: UwaziMapping,
         template: UwaziTemplate,
-        thesaurus_lookup: dict,
+        thesaurus_lookup_by_property: dict,
         entities_by_key: dict[str, str],
+        registry_template: UwaziTemplate | None = None,
     ) -> tuple[str, list[str]]:
         """Return ``(action, issues)`` for one parsed metadata row."""
         key_value = resolve_key_value(record, source_url, mapping.identity, mapping)
         shared_id = self._entities_fetcher.find_existing_shared_id(mapping, key_value, entities_by_key)
         action = "update" if shared_id else "create"
         issues = (
-            self._issue_detector.detect(record, source_url, mapping, template, thesaurus_lookup)
+            self._issue_detector.detect(
+                record, source_url, mapping, template, thesaurus_lookup_by_property, registry_template
+            )
             if action == "create"
             else []
         )
@@ -94,8 +101,9 @@ class RowIssueClassifier:
         records,
         mapping: UwaziMapping,
         template: UwaziTemplate,
-        thesaurus_lookup: dict,
+        thesaurus_lookup_by_property: dict,
         entities_by_key: dict[str, str],
+        registry_template: UwaziTemplate | None = None,
     ) -> tuple[dict[str, int], list[tuple[str, str, list[str]]]]:
         """Return ``(action counts, [(source_url, title, issues), ...])`` for the rows."""
         counts: dict[str, int] = {"create": 0, "update": 0, "skip": 0}
@@ -103,7 +111,9 @@ class RowIssueClassifier:
         for source_url, _task_slug, raw_data in records:
             record = self._parse_record(raw_data)
             record.setdefault("pdf_filename", resolve_pdf_filename(record, source_url, self._downloads_dir))
-            action, row_issues = self.classify_one(record, source_url, mapping, template, thesaurus_lookup, entities_by_key)
+            action, row_issues = self.classify_one(
+                record, source_url, mapping, template, thesaurus_lookup_by_property, entities_by_key, registry_template
+            )
             counts[action] = counts.get(action, 0) + 1
             if action == "create" and row_issues:
                 issues.append((source_url, self.row_title(record, mapping), row_issues))

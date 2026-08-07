@@ -40,10 +40,12 @@ import asyncio
 import os
 import signal
 import sys
-from dataclasses import dataclass
+
 from pathlib import Path
 
 from loguru import logger
+
+from browser_agent.domain.smoke_test_result import SmokeTestResult
 
 from browser_agent.use_cases.zendriver_error_patterns import ZD_RUNTIME_ERROR_PATTERNS
 
@@ -52,15 +54,6 @@ from browser_agent.use_cases.zendriver_error_patterns import ZD_RUNTIME_ERROR_PA
 # real scrape takes minutes; we don't wait for that. If the script is
 # still running at the timeout, it passed the smoke test.
 SMOKE_TEST_TIMEOUT_S = 60.0
-
-
-@dataclass
-class SmokeTestResult:
-    """Outcome of running the emitted script as a subprocess."""
-
-    success: bool
-    output: str
-    timed_out: bool
 
 
 def _use_smoke_profile(script_path: Path, scratch_dir: Path) -> tuple[Path | None, str | None]:

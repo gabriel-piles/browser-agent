@@ -19,6 +19,7 @@ from browser_agent import configuration
 from browser_agent.use_cases.push_progress import PushProgress
 
 from uwazi_api.domain.FileType import FileType
+from uwazi_api.domain.entity_file_upload import EntityFileUpload
 
 # Uwazi's originalname field is limited to 255 characters.
 # Entity titles can be longer, so we truncate for file uploads.
@@ -168,7 +169,6 @@ class UwaziPusher:
 
     def _build_entity_files(self, row, mapping: UwaziMapping) -> list[EntityFileUpload]:
         """Build the primary + supporting file uploads for one entity."""
-        from uwazi_api.domain.entity_file_upload import EntityFileUpload
         from uwazi_api.domain.file_fieldname import FileFieldname
 
         files: list[EntityFileUpload] = []
@@ -189,8 +189,6 @@ class UwaziPusher:
 
     def _file_upload(self, fieldname, filename: str, file_type, path: str) -> EntityFileUpload:
         """Read ``path`` and wrap it as one :class:`EntityFileUpload` for the entity call."""
-        from uwazi_api.domain.entity_file_upload import EntityFileUpload
-
         return EntityFileUpload(
             fieldname=fieldname,
             filename=filename[:_UPLOAD_TITLE_MAX_LENGTH],

@@ -17,13 +17,12 @@ from browser_agent.domain.sync_plan import SyncAction, SyncPlan, SyncPlanRow
 from browser_agent.domain.uwazi_mapping import UwaziMapping
 from browser_agent.domain.uwazi_template import UwaziTemplate
 from browser_agent.drivers.classification.existing_entities_fetcher import ExistingEntitiesFetcher
-from browser_agent.use_cases.metadata_db import parse_row_data, query_rows
+from browser_agent.use_cases.metadata_db import normalize_record, parse_row_data, query_rows
 from browser_agent.use_cases.metadata_value_transformer import (
-    MetadataValueTransformer,
     build_thesaurus_parents,
-    load_thesauri_mappings,
-    load_thesauri_mappings_by_id,
+    load_thesauri_mappings_by_property,
 )
+from browser_agent.use_cases.source_value_resolver import resolve_source_value
 from browser_agent.use_cases.uwazi_mappers import to_template
 
 from uwazi_api.client import UwaziClient
@@ -101,7 +100,7 @@ def _title_of_record(record: dict, source_url: str, mapping: UwaziMapping) -> st
     """Return the entity title for one record, falling back to the source URL."""
     title_prop = mapping.title_property()
     if title_prop is not None and title_prop.source:
-        title = record.get(title_prop.source)
+        title = resolve_source_value(record, title_prop.source)
         if title:
             return str(title)
     return source_url
@@ -240,11 +239,10 @@ def _build_plan_row(
     mapping,
     entities_by_key,
     transformer,
-    thesaurus_lookup,
     thesaurus_parents,
     downloads_dir,
     relationship_title_to_id,
-    thesaurus_lookup_by_id=None,
+    thesaurus_lookup_by_property=None,
     registry_entities_by_key=None,
     primary_entities_by_key=None,
     registry_transformer=None,
@@ -271,10 +269,9 @@ def _build_plan_row(
             record,
             source_url,
             mapping,
-            thesaurus_lookup,
+            thesaurus_lookup_by_property,
             thesaurus_parents,
             relationship_title_to_id,
-            thesaurus_lookup_by_id,
         )
     if action is SyncAction.CREATE_REGISTRY_ONLY and primary_entities_by_key is not None:
         primary_shared_id = primary_entities_by_key.get(str(key_value).strip()) if key_value else None
@@ -287,10 +284,9 @@ def _build_plan_row(
             record,
             source_url,
             mapping,
-            thesaurus_lookup,
+            thesaurus_lookup_by_property,
             thesaurus_parents,
             relationship_title_to_id,
-            thesaurus_lookup_by_id,
         ),
         pdf_path=pdf_path,
         html_path=html_path,
@@ -303,7 +299,7 @@ def _build_plan_row(
     )
 
 
-def _plan_rows(records, mapping, client, thesaurus_lookup, thesaurus_lookup_by_id, downloads_dir) -> tuple[SyncPlanRow, ...]:
+def _plan_rows(records, mapping, client, thesaurus_lookup_by_property, downloads_dir) -> tuple[SyncPlanRow, ...]:
     """Transform every metadata row into one :class:`SyncPlanRow`."""
     template_raw = client.templates.get_by_name(mapping.template)
     if template_raw is None:
@@ -337,16 +333,15 @@ def _plan_rows(records, mapping, client, thesaurus_lookup, thesaurus_lookup_by_i
     relationship_title_to_id = _fetch_relationship_entity_mapping(client, mapping, template)
     return tuple(
         _build_plan_row(
-            parse_row_data(raw_data),
+            normalize_record(parse_row_data(raw_data)),
             source_url,
             mapping,
             entities_by_key,
             transformer,
-            thesaurus_lookup,
             thesaurus_parents,
             downloads_dir,
             relationship_title_to_id,
-            thesaurus_lookup_by_id,
+            thesaurus_lookup_by_property,
             registry_entities_by_key=registry_entities_by_key,
             primary_entities_by_key=primary_entities_by_key,
             registry_transformer=registry_transformer,
@@ -364,9 +359,6 @@ def execute(
     run: str | None = None,
     downloads_dir: Path | None = None,
 ) -> SyncPlan:
-    thesaurus_lookup = load_thesauri_mappings(thesauri_mappings_dir)
-    thesaurus_lookup_by_id = load_thesauri_mappings_by_id(thesauri_mappings_dir)
+    thesaurus_lookup_by_property = load_thesauri_mappings_by_property(thesauri_mappings_dir)
     rows = query_rows(metadata_db_path, run)
-    return SyncPlan(
-        mapping=mapping, rows=_plan_rows(rows, mapping, client, thesaurus_lookup, thesaurus_lookup_by_id, downloads_dir)
-    )
+    return SyncPlan(mapping=mapping, rows=_plan_rows(rows, mapping, client, thesaurus_lookup_by_property, downloads_dir))

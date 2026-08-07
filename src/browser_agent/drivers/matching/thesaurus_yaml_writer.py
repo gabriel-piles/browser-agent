@@ -1,10 +1,11 @@
-"""Build and write the per-thesaurus :class:`ThesaurusMapping` YAML.
+"""Build and write the per-property :class:`ThesaurusMapping` YAML.
 
 Hides the pydantic-object construction + the YAML serialisation
-behind one object. The match driver calls :meth:`write` once
-per thesaurus and the writer handles sorting the entries by
-``crawl_value`` and dumping with the project's standard YAML
-format (no flow style, sort_keys=False, allow_unicode=True).
+behind one object. The match driver calls :meth:`write` once per
+Uwazi property (one file per property, named after it) and the
+writer handles sorting the entries by ``crawl_value`` and dumping
+with the project's standard YAML format (no flow style,
+sort_keys=False, allow_unicode=True).
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ class ThesaurusYamlWriter:
 
     def write(
         self,
+        property_name: str,
         thesaurus_name: str,
         thesaurus: ThesauriSnapshot,
         mapping_default_language: str,
@@ -33,6 +35,7 @@ class ThesaurusYamlWriter:
     ) -> ThesaurusMapping:
         """Build, sort, and dump the :class:`ThesaurusMapping` YAML; return the object."""
         mapping_obj = self._build_payload(
+            property_name,
             thesaurus_name,
             thesaurus,
             mapping_default_language,
@@ -45,6 +48,7 @@ class ThesaurusYamlWriter:
 
     def _build_payload(
         self,
+        property_name: str,
         thesaurus_name: str,
         thesaurus: ThesauriSnapshot,
         mapping_default_language: str,
@@ -54,6 +58,7 @@ class ThesaurusYamlWriter:
     ) -> ThesaurusMapping:
         """Build the final :class:`ThesaurusMapping` pydantic object."""
         return ThesaurusMapping(
+            property_name=property_name,
             thesaurus=thesaurus_name,
             thesaurus_id=thesaurus.thesaurus_id,
             uwazi_name=thesaurus.name,

@@ -58,7 +58,12 @@ class RunPaths:
         """Return the active run's ``downloads/`` directory, created on disk."""
         return self._ensure(self._root / "downloads")
 
-    def default_thesaurus_path(self, thesaurus_name: str) -> Path:
-        """Return the canonical ``thesauri_mappings/<name>.yaml`` path."""
-        safe = "".join(c if (c.isalnum() or c in ("_", "-")) else "_" for c in thesaurus_name)
+    def default_thesaurus_path(self, name: str) -> Path:
+        """Return the canonical ``thesauri_mappings/<property_name>.yaml`` path.
+
+        ``name`` is the Uwazi property name; step 4 writes one mapping
+        file per property so two properties sharing a thesaurus get two
+        files.
+        """
+        safe = "".join(c if (c.isalnum() or c in ("_", "-")) else "_" for c in name)
         return self.thesauri_mappings_dir() / f"{safe}.yaml"
