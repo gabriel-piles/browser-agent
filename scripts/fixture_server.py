@@ -92,18 +92,16 @@ class FixtureHandler(BaseHTTPRequestHandler):
             self._send_404(f"scenario '{scenario}' not found")
             return
         try:
-            body, mime, status = self._route_with_status(scenario_dir, path, query)
+            body, mime, status, headers = self._route_with_status(scenario_dir, path, query)
         except FileNotFoundError as exc:
             self._send_404(str(exc))
             return
-        if status == 200:
-            self._send_ok(mime, body)
-        elif status == 403:
-            self._send_status(403, mime, body)
-        elif status == 503:
-            self._send_status(503, mime, body)
-        else:
-            self._send_ok(mime, body)
+        if status == 999:
+            self._reset_connection()
+            return
+        if status == 998:
+            return
+        self._send_status(status, mime, body, headers)
 
     def _serve_root(self) -> None:
         """Serve a simple index listing available scenarios."""
@@ -116,29 +114,41 @@ class FixtureHandler(BaseHTTPRequestHandler):
         html += "</ul></body></html>"
         self._send_ok("text/html; charset=utf-8", html.encode())
 
-    def _route_with_status(self, scenario_dir: Path, path: str, query: dict[str, list[str]]) -> tuple[bytes, str, int]:
-        """Dispatch by path; return (body, mime, status_code)."""
+    def _route_with_status(
+        self, scenario_dir: Path, path: str, query: dict[str, list[str]]
+    ) -> tuple[bytes, str, int, dict[str, str]]:
+        """Dispatch by path; return (body, mime, status_code, headers)."""
         dynamic = scenario_dir / "_dynamic.py"
         if dynamic.is_file() and _has_custom_route(scenario_dir):
             result = _call_custom_route(scenario_dir, path, query)
             if result is not None:
-                body, mime, status = result
-                return body, mime, status
+                return result
         if path == "/" or path == "/index.html":
             body, mime = self._serve_index(scenario_dir, query)
-            return body, mime, 200
+            return body, mime, 200, {}
+        if path.endswith(".html") and dynamic.is_file():
+            page_match = path.rsplit("/", 1)[-1]
+            if page_match.startswith("page") and page_match.endswith(".html"):
+                page_num = page_match[4:-5]
+                if page_num.isdigit():
+                    query = {**query, "page": [page_num]}
+            body, mime = self._serve_index(scenario_dir, query)
+            return body, mime, 200, {}
+        if path.startswith("/fragment"):
+            body, mime = self._serve_fragment(scenario_dir, path, query)
+            return body, mime, 200, {}
         if path.startswith("/file/"):
             body, mime = self._serve_file(scenario_dir, path)
-            return body, mime, 200
+            return body, mime, 200, {}
         if path.startswith("/pdf/"):
             body, mime = self._serve_pdf(scenario_dir, path)
-            return body, mime, 200
+            return body, mime, 200, {}
         body, mime = self._serve_static(scenario_dir, path)
-        return body, mime, 200
+        return body, mime, 200, {}
 
     def _route(self, scenario_dir: Path, path: str, query: dict[str, list[str]]) -> tuple[bytes, str]:
         """Dispatch by path: static file, dynamic page, or PDF route."""
-        body, mime, _ = self._route_with_status(scenario_dir, path, query)
+        body, mime, _, _ = self._route_with_status(scenario_dir, path, query)
         return body, mime
 
     def _serve_index(self, scenario_dir: Path, query: dict[str, list[str]]) -> tuple[bytes, str]:
@@ -187,17 +197,15 @@ class FixtureHandler(BaseHTTPRequestHandler):
 
     def _send_ok(self, mime: str, body: bytes) -> None:
         """Send a 200 response with the given MIME type and body."""
-        self.send_response(200)
-        self.send_header("Content-Type", mime)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self._send_status(200, mime, body, {})
 
-    def _send_status(self, status: int, mime: str, body: bytes) -> None:
-        """Send a response with a custom status code."""
+    def _send_status(self, status: int, mime: str, body: bytes, headers: dict[str, str]) -> None:
+        """Send a response with a custom status code and optional extra headers."""
         self.send_response(status)
         self.send_header("Content-Type", mime)
         self.send_header("Content-Length", str(len(body)))
+        for key, value in headers.items():
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -209,6 +217,15 @@ class FixtureHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _reset_connection(self) -> None:
+        """Close the socket mid-response to simulate a connection reset."""
+        self.send_response(500)
+        self.end_headers()
+        try:
+            self._close_connection()
+        except Exception:
+            pass
 
     def log_message(self, format: str, *args) -> None:
         """Suppress default logging to keep stdout clean."""
@@ -252,8 +269,15 @@ def _has_custom_route(scenario_dir: Path) -> bool:
     return hasattr(mod, "custom_route")
 
 
-def _call_custom_route(scenario_dir: Path, path: str, query: dict[str, list[str]]) -> tuple[bytes, str, int] | None:
-    """Call the scenario's ``custom_route(path, query)`` if it exists."""
+def _call_custom_route(
+    scenario_dir: Path, path: str, query: dict[str, list[str]]
+) -> tuple[bytes, str, int, dict[str, str]] | None:
+    """Call the scenario's ``custom_route(path, query)`` if it exists.
+
+    The route may return a 3-tuple ``(body, mime, status)`` or a
+    4-tuple ``(body, mime, status, headers)`` where ``headers`` is a
+    ``{name: value}`` dict of extra HTTP headers to send.
+    """
     try:
         mod = _load_dynamic(scenario_dir)
     except FileNotFoundError:
@@ -264,10 +288,14 @@ def _call_custom_route(scenario_dir: Path, path: str, query: dict[str, list[str]
     result = fn(path, query)
     if result is None:
         return None
-    body, mime, status = result
+    if len(result) == 4:
+        body, mime, status, headers = result
+    else:
+        body, mime, status = result
+        headers = {}
     if isinstance(body, str):
         body = body.encode("utf-8")
-    return body, mime, status
+    return body, mime, status, headers
 
 
 def start_server(port: int | None = None) -> HTTPServer:

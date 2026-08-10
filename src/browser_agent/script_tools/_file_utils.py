@@ -84,7 +84,9 @@ def _canonical_url(url):
     if not isinstance(url, str) or not url:
         return url
     parts = urlsplit(url.strip())
-    scheme = "https" if parts.scheme.lower() in {"http", "https"} else parts.scheme.lower()
+    scheme = parts.scheme.lower()
+    if scheme in {"http", "https"} and parts.hostname not in ("127.0.0.1", "localhost", "0.0.0.0", "::1"):
+        scheme = "https"
     netloc = parts.netloc.lower()
     path = quote(unquote(parts.path), safe="/%@") if parts.path else ""
     return urlunsplit((scheme, netloc, path, parts.query, ""))

@@ -24,7 +24,7 @@ setTimeout(function() {
   items.forEach(function(item) {
     var div = document.createElement("div");
     div.className = "item";
-    div.innerHTML = '<h3><a href="/doc/' + item.id + '">' + item.title + '</a></h3>'
+    div.innerHTML = '<h3><a href="/doc/' + item.id + '?scenario=spa_dynamic">' + item.title + '</a></h3>'
                   + '<span class="date">' + item.date + '</span>';
     app.appendChild(div);
   });

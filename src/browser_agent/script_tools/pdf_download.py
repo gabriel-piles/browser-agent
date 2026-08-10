@@ -68,6 +68,24 @@ def _resolve_url(url, tab=None):
     return urljoin(base, url)
 
 
+def _is_localhost(url: str) -> bool:
+    """True when ``url`` points at localhost/127.0.0.1/0.0.0.0."""
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    return host in ("127.0.0.1", "localhost", "0.0.0.0", "::1")
+
+
+def _upgrade_to_https(url: str) -> str:
+    """Upgrade ``http://`` to ``https://`` for non-localhost URLs.
+
+    Real sites need HTTPS to avoid mixed-content blocking; local fixture
+    servers serve HTTP only and must not be upgraded.
+    """
+    if url.startswith("http://") and not _is_localhost(url):
+        return "https://" + url[7:]
+    return url
+
+
 def _is_http_403(exc):
     """True when ``exc``'s message carries an HTTP 403 status."""
     return "HTTP 403" in str(exc)
@@ -446,9 +464,7 @@ async def download_pdf_browser(tab, url, save_path):
     Raises ``SystemExit`` when 5 consecutive downloads are blocked with
     HTTP 403 (Cloudflare rate-limit); re-running resumes via skip-existing.
     """
-    url = _resolve_url(url, tab)
-    if url.startswith("http://"):
-        url = "https://" + url[7:]
+    url = _upgrade_to_https(_resolve_url(url, tab))
     save_dir = _resolve_download_dir(save_path)
     save_path = save_dir / _pdf_filename_for(url)
     existing = _existing_size(save_path)
@@ -466,9 +482,7 @@ async def download_file_browser(tab, url, save_path):
     (``file_filename_for``) and the body is NOT validated as PDF
     (a supporting document must never trip the magic check).
     """
-    url = _resolve_url(url, tab)
-    if url.startswith("http://"):
-        url = "https://" + url[7:]
+    url = _upgrade_to_https(_resolve_url(url, tab))
     save_dir = _resolve_download_dir(save_path)
     save_path = save_dir / file_filename_for(url)
     existing = _existing_size(save_path)
