@@ -1,0 +1,14 @@
+{
+  "name": "multi_page_pagination",
+  "difficulty": 2,
+  "pattern": "multi_page_pagination_next_button",
+  "prompt": "Navigate to http://127.0.0.1:8765/?scenario=multi_page_pagination and extract the title and date for every document item across all pages. Use the Next button to paginate. Save each item to save_record with the source URL.",
+  "fixture_dir": "scripts/fixtures/multi_page_pagination",
+  "expected": {
+    "min_records": 50,
+    "required_fields": ["title", "date"],
+    "pdf_count": 0,
+    "description": "50 records across 5 pages, each with title and date non-null."
+  },
+  "description": "5 pages with 10 items each. Next button links to ?page=N+1. Last page has no Next button."
+}

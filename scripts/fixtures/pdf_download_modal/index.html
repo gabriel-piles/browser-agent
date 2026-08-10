@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>PDF Download Modal</title></head>
+<body>
+<div class="container">
+<h1>PDF Document Archive</h1>
+<div class="item-list">
+<div class="item">
+<h3><a href="/doc/1">Human Rights Report 2024</a></h3>
+<button class="download-btn" data-pdf="/pdf/doc1.pdf">Download</button>
+</div>
+<div class="item">
+<h3><a href="/doc/2">Annual Review 2023</a></h3>
+<button class="download-btn" data-pdf="/pdf/doc2.pdf">Download</button>
+</div>
+<div class="item">
+<h3><a href="/doc/3">Thematic Study</a></h3>
+<button class="download-btn" data-pdf="/pdf/doc3.pdf">Download</button>
+</div>
+<div class="item">
+<h3><a href="/doc/4">Country Report</a></h3>
+<button class="download-btn" data-pdf="/pdf/doc4.pdf">Download</button>
+</div>
+<div class="item">
+<h3><a href="/doc/5">Decision Summary</a></h3>
+<button class="download-btn" data-pdf="/pdf/doc5.pdf">Download</button>
+</div>
+</div>
+</div>
+<div id="download-modal" style="display:none">
+<div class="modal-content">
+<h2>Download Document</h2>
+<a id="pdf-link" href="#">Click here to download the PDF</a>
+<button id="close-modal">Close</button>
+</div>
+</div>
+<script>
+document.querySelectorAll('.download-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    var modal = document.getElementById('download-modal');
+    var link = document.getElementById('pdf-link');
+    link.href = btn.dataset.pdf;
+    modal.style.display = 'block';
+  });
+});
+document.getElementById('close-modal').addEventListener('click', function() {
+  document.getElementById('download-modal').style.display = 'none';
+});
+</script>
+</body>
+</html>

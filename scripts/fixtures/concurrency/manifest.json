@@ -1,0 +1,14 @@
+{
+  "name": "concurrency",
+  "difficulty": 8,
+  "pattern": "parallel_processing_concurrency",
+  "prompt": "Navigate to http://127.0.0.1:8765/?scenario=concurrency and extract the title and date for all 50 document items. Process the detail pages in parallel using 4 concurrent browser tabs. Save each item to save_record with the source URL.",
+  "fixture_dir": "scripts/fixtures/concurrency",
+  "expected": {
+    "min_records": 50,
+    "required_fields": ["title", "date"],
+    "pdf_count": 0,
+    "description": "50 records processed in parallel, each with title and date non-null."
+  },
+  "description": "50+ items requiring parallel processing. Run config sets parallel_runners: 4. Tests asyncio.Queue, gate_lock, per-tab workers."
+}

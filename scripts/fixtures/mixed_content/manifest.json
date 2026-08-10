@@ -1,0 +1,14 @@
+{
+  "name": "mixed_content",
+  "difficulty": 7,
+  "pattern": "mixed_content_pdfs_and_html",
+  "prompt": "Navigate to http://127.0.0.1:8765/?scenario=mixed_content and extract the title and document type for every item. Some items link to PDFs, others to HTML pages. Download the PDFs. Save each item to save_record with the source URL and document type.",
+  "fixture_dir": "scripts/fixtures/mixed_content",
+  "expected": {
+    "min_records": 10,
+    "required_fields": ["title", "doc_type"],
+    "pdf_count": 5,
+    "description": "10 records with title and doc_type non-null, and 5 PDFs downloaded (the PDF links)."
+  },
+  "description": "Items with both PDF and HTML links. Tests file_ext_for and document type classification."
+}

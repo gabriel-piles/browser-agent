@@ -1,0 +1,14 @@
+{
+  "name": "single_page_list",
+  "difficulty": 1,
+  "pattern": "single_page_static_list",
+  "prompt": "Navigate to http://127.0.0.1:8765/?scenario=single_page_list and extract the title, date, and author for every document item on the page. Save each item to save_record with the source URL.",
+  "fixture_dir": "scripts/fixtures/single_page_list",
+  "expected": {
+    "min_records": 10,
+    "required_fields": ["title", "date"],
+    "pdf_count": 0,
+    "description": "10 records, each with title and date non-null."
+  },
+  "description": "Single page with 10 static items. Tests basic extraction, save_record, and CSS selectors."
+}

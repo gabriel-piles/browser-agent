@@ -556,7 +556,7 @@ def _check_skeleton(python_code: str) -> list[LintFinding]:
             LintFinding(
                 rule="1",
                 severity="error",
-                message="first statement of main() MUST be browser = await start_browser(headless=False)",
+                message="first statement of main() MUST be browser = await start_browser()",
                 line=main_fn.lineno,
             )
         )
@@ -574,7 +574,7 @@ def _check_skeleton(python_code: str) -> list[LintFinding]:
                 LintFinding(
                     rule="1",
                     severity="error",
-                    message="first statement of main() MUST be browser = await start_browser(headless=False)",
+                    message="first statement of main() MUST be browser = await start_browser()",
                     line=first.lineno if hasattr(first, "lineno") else main_fn.lineno,
                 )
             )

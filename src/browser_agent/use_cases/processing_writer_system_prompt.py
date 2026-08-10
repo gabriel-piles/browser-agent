@@ -119,7 +119,7 @@ does inline extraction only (no ``load_discovered_links()`` call).
       # ... import only the helpers you use, per rule 0 ...
 
       async def main():
-          browser = await start_browser(headless=False)
+          browser = await start_browser()
           try:
               tab = browser.main_tab
               await prepare_page_wait(tab)
@@ -293,12 +293,16 @@ does inline extraction only (no ``load_discovered_links()`` call).
 11. Metadata persistence — call ``save_record`` per entity AS IT IS
     SCRAPED (crash-resilient: a killed run at page 3000 keeps the first
     2999 rows; it is sync, lint-enforced never-await). ``source_url`` is
-    the PRIMARY KEY (upsert, not duplicate): for a page-scrape use the
-    page URL; for a per-PDF download use ``f"{page_url}/pdf/{pdf_id}"``
-    with ``pdf_id = pdf_id_for(file_url)`` (rule 13), never a position
-    index. Multi-value fields MUST be a Python list of strings, never a
-    comma-joined string (downstream thesaurus matching expands lists
-    element-by-element; a joined string is one unmatchable label).
+    the PRIMARY KEY (upsert, not duplicate): for a single-page listing
+    where each item has its own link, use the ITEM's link URL (e.g.
+    ``urljoin(page_url, href)``) as ``source_url`` — NEVER the listing
+    page URL for all items, or upsert collapses N items into 1 row; for
+    a multi-page page-scrape use the page URL; for a per-PDF download
+    use ``f"{page_url}/pdf/{pdf_id}"`` with ``pdf_id = pdf_id_for(file_url)``
+    (rule 13), never a position index. Multi-value fields MUST be a
+    Python list of strings, never a comma-joined string (downstream
+    thesaurus matching expands lists element-by-element; a joined string
+    is one unmatchable label).
 
 12. Output paths — compute paths relative to ``__file__`` so they
     resolve to the run directory, not inside ``scripts/" (lint-enforced:

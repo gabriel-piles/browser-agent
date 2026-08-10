@@ -1,0 +1,14 @@
+{
+  "name": "infinite_scroll",
+  "difficulty": 4,
+  "pattern": "infinite_scroll_lazy_loading",
+  "prompt": "Navigate to http://127.0.0.1:8765/?scenario=infinite_scroll and extract the title and date for every document item. Scroll down to load more items until all are loaded. A Load more button may appear as fallback. Save each item to save_record with the source URL.",
+  "fixture_dir": "scripts/fixtures/infinite_scroll",
+  "expected": {
+    "min_records": 30,
+    "required_fields": ["title", "date"],
+    "pdf_count": 0,
+    "description": "30 records loaded via scroll + load-more, each with title and date non-null."
+  },
+  "description": "One page that loads more items via AJAX when scrolling. Server serves ?page=N fragments. A Load more button as fallback."
+}

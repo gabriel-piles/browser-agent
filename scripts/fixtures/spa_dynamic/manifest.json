@@ -1,0 +1,14 @@
+{
+  "name": "spa_dynamic",
+  "difficulty": 5,
+  "pattern": "spa_js_rendered_content",
+  "prompt": "Navigate to http://127.0.0.1:8765/?scenario=spa_dynamic and extract the title and date for every document item. The page content is rendered by JavaScript after load — wait for the items to appear before extracting. Save each item to save_record with the source URL.",
+  "fixture_dir": "scripts/fixtures/spa_dynamic",
+  "expected": {
+    "min_records": 10,
+    "required_fields": ["title", "date"],
+    "pdf_count": 0,
+    "description": "10 records from JS-rendered content, each with title and date non-null."
+  },
+  "description": "Content rendered by JavaScript (server sends empty div, JS fills it). Tests wait_for_page_ready + wait_for_anchors."
+}

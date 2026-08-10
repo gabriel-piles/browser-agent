@@ -1,0 +1,14 @@
+{
+  "name": "dropdown_filter",
+  "difficulty": 3,
+  "pattern": "dropdown_filter_select",
+  "prompt": "Navigate to http://127.0.0.1:8765/?scenario=dropdown_filter and extract the title and category for every document item. Use the category dropdown filter to iterate through all 4 categories. Save each item to save_record with the source URL. Deduplicate by URL.",
+  "fixture_dir": "scripts/fixtures/dropdown_filter",
+  "expected": {
+    "min_records": 20,
+    "required_fields": ["title", "category"],
+    "pdf_count": 0,
+    "description": "20 unique records across 4 filter categories, each with title and category non-null."
+  },
+  "description": "A select dropdown with 4 options. Each option changes the item list. Tests select_filter_value, filter iteration, and dedup."
+}

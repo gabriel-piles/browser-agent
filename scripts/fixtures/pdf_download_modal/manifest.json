@@ -1,0 +1,14 @@
+{
+  "name": "pdf_download_modal",
+  "difficulty": 6,
+  "pattern": "pdf_download_from_detail_modal",
+  "prompt": "Navigate to http://127.0.0.1:8765/?scenario=pdf_download_modal and extract the title for every document item. For each item, click the Download button to reveal the PDF link, then download the PDF. Save each item to save_record with the source URL and download the PDFs.",
+  "fixture_dir": "scripts/fixtures/pdf_download_modal",
+  "expected": {
+    "min_records": 5,
+    "required_fields": ["title"],
+    "pdf_count": 5,
+    "description": "5 records with title non-null, and 5 PDF files downloaded."
+  },
+  "description": "Item pages with a Download button that reveals PDF links. Tests PDF download + classification."
+}
