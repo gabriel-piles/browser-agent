@@ -32,6 +32,7 @@ from script_tools._file_utils import (
 _PDF_DOWNLOAD_TIMEOUT_S = 90.0
 _PDF_DOWNLOAD_RETRIES = 3
 _PDF_DOWNLOAD_RETRY_DELAY_S = 1.5
+_CDP_READ_TIMEOUT_S = 30.0
 
 _BLOCK_STREAK_LIMIT = 8
 _DOWNLOAD_DELAY_MIN_S = 2.0
@@ -247,16 +248,21 @@ async def _fetch_pdf_via_cdp_navigation(tab, url):
     except Exception:
         frame_id = None
     try:
-        res = await tab.send(
-            _net.load_network_resource(
-                url=url,
-                options=_net.LoadNetworkResourceOptions(
-                    disable_cache=True,
-                    include_credentials=True,
-                ),
-                frame_id=frame_id,
-            )
+        res = await asyncio.wait_for(
+            tab.send(
+                _net.load_network_resource(
+                    url=url,
+                    options=_net.LoadNetworkResourceOptions(
+                        disable_cache=True,
+                        include_credentials=True,
+                    ),
+                    frame_id=frame_id,
+                )
+            ),
+            timeout=_PDF_DOWNLOAD_TIMEOUT_S,
         )
+    except asyncio.TimeoutError:
+        raise RuntimeError(f"CDP load_network_resource timed out for {url}")
     except Exception as exc:
         raise RuntimeError(f"CDP load_network_resource failed for {url}: {exc}") from exc
     if not res.success:
@@ -269,7 +275,13 @@ async def _fetch_pdf_via_cdp_navigation(tab, url):
     chunks = []
     offset = None
     while True:
-        b64, data, eof = await tab.send(_io.read(handle, offset=offset, size=None))
+        try:
+            b64, data, eof = await asyncio.wait_for(
+                tab.send(_io.read(handle, offset=offset, size=None)),
+                timeout=_CDP_READ_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            raise RuntimeError(f"CDP stream read timed out for {url}")
         if data:
             chunks.append(base64.b64decode(data) if b64 else data.encode())
         if eof:
