@@ -13,7 +13,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from pydantic_ai import Agent, UsageLimits
+from pydantic_ai import Agent, Tool, UsageLimits
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.models import Model
 from pydantic_ai.usage import UsageLimitExceeded
@@ -42,7 +42,7 @@ class ExploreSiteUseCase:
             system_prompt=EXPLORER_SYSTEM_PROMPT,
             deps_type=AgentDeps,
             output_type=TaskSplit,
-            tools=[explore_page, download_pdf],
+            tools=[Tool(explore_page, max_retries=3), Tool(download_pdf, max_retries=3)],
             capabilities=[ToolReturnCompactor()],
             model_settings={"max_tokens": MAX_OUTPUT_TOKENS},
         )
