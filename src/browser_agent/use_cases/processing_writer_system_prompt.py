@@ -83,6 +83,9 @@ does inline extraction only (no ``load_discovered_links()`` call).
       from script_tools.form_helpers import select_filter_value
       from script_tools.discovered_links_store import load_discovered_links, mark_link_processed
       from script_tools._file_utils import pdf_id_for, doc_id_for
+   NEVER write ``from script_tools import X`` — ``script_tools`` is a
+   package of modules, not an ``__init__`` that re-exports names. Always
+   import from the submodule: ``from script_tools.start_browser import start_browser``.
 
    Signatures::
 
@@ -332,10 +335,11 @@ does inline extraction only (no ``load_discovered_links()`` call).
     ``download_status="failed"``, ``download_error``. Skip links that
     are neither PDF nor in the supported document-extension set.
     ``file_url`` MUST be a percent-encoded absolute URL with no raw
-    spaces — build it with ``urljoin(base, quote(href, safe="/%"))``
+    spaces — build it with ``urljoin(base, quote(href, safe="/%?=&"))``
     (``from urllib.parse import urljoin, quote`` — ``urllib.parse`` is
-    the ONLY ``urllib`` submodule the linter permits), never
-    bare-concatenate a host onto an href. The validation script MUST
+    the ONLY ``urllib`` submodule the linter permits; the ``safe`` set
+    includes ``?`` and ``=`` so query strings are not double-encoded),
+    never bare-concatenate a host onto an href. The validation script MUST
     download at least 2 PDFs and print their final paths.
 
 14. HTML capture — when the task downloads PDFs, also save the HTML of

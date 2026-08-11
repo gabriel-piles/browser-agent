@@ -44,12 +44,15 @@ def _write_atomic(path, data):
 def _assert_pdf_magic(path, data, url):
     """Delete ``path`` and raise if ``data`` is not a real PDF.
 
-    Checks the first 4 bytes are b"%PDF" and the last 1024 bytes
-    contain b"%%EOF". On failure the file is removed (it was just
-    written by _write_atomic) and RuntimeError is raised so the
-    caller records a failed row instead of persisting a corrupt one.
+    Checks the first 4 bytes are b"%PDF" — the universally accepted
+    PDF magic header. A previous ``%%EOF``-in-tail check was removed
+    because it rejected valid minimal/stub PDFs (e.g. fixture files
+    that contain only the header) and caused false download failures.
+    On failure the file is removed (it was just written by
+    ``_write_atomic``) and RuntimeError is raised so the caller
+    records a failed row instead of persisting a corrupt one.
     """
-    if not (data[:4] == b"%PDF" and b"%%EOF" in data[-1024:]):
+    if data[:4] != b"%PDF":
         try:
             Path(path).unlink()
         except OSError:

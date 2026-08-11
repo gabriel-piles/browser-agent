@@ -12,6 +12,11 @@ _HTTP_MSG = "no HTTP libraries; use tab.get() and script_tools download helpers"
 _SELF_MSG = (
     "script imports must be stdlib, zendriver, or script_tools.* (real modules copied beside the script at emit time)"
 )
+_SCRIPT_TOOLS_PKG_MSG = (
+    "never 'from script_tools import X' — script_tools is a package of modules, "
+    "not an __init__ that re-exports names. Use 'from script_tools.start_browser import start_browser', "
+    "'from script_tools.save_record import save_record', etc."
+)
 _EVAL_IIFE_TAIL = re.compile(r"\)\s*\(\s*\)")
 
 
@@ -39,6 +44,20 @@ def _check_save_record(python_code: str) -> list[LintFinding]:
             )
         )
     return out
+
+
+_DISCOVERY_NO_SAVE_MSG = (
+    "discovery script MUST call save_discovered_link(url, label) for every "
+    "discovered link — printing to stdout is not enough; the processing "
+    "script reads links from load_discovered_links() which reads the DB"
+)
+
+
+def _check_discovery_save_link(python_code: str) -> list[LintFinding]:
+    """Flag discovery scripts that never call ``save_discovered_link``."""
+    if "save_discovered_link" not in python_code:
+        return [LintFinding(rule="2b", severity="error", message=_DISCOVERY_NO_SAVE_MSG, line=1)]
+    return []
 
 
 def _call_args(python_code: str, open_paren: int) -> str:
@@ -438,7 +457,7 @@ def _check_bare_paths(python_code: str) -> list[LintFinding]:
 
 _BARE_HOST_CONCAT_MSG = (
     "never bare-concatenate a host onto an href (rule 13): build file_url "
-    'with urljoin(base, quote(href, safe="/%")) so leading whitespace and '
+    'with urljoin(base, quote(href, safe="/%?=&")) so leading whitespace and '
     "unsafe chars are percent-encoded, not embedded as raw spaces"
 )
 
@@ -481,6 +500,19 @@ def _check_self_contained(python_code: str) -> list[LintFinding]:
             continue
         if any(_bad_self_root(root) for root in _import_roots(node)):
             out.append(LintFinding(rule="5", severity="error", message=_SELF_MSG, line=node.lineno))
+    return out
+
+
+def _check_script_tools_package_import(python_code: str) -> list[LintFinding]:
+    """Flag ``from script_tools import X`` — should be ``from script_tools.X import Y``."""
+    out: list[LintFinding] = []
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return out
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "script_tools":
+            out.append(LintFinding(rule="5b", severity="error", message=_SCRIPT_TOOLS_PKG_MSG, line=node.lineno))
     return out
 
 
@@ -805,11 +837,12 @@ class EmittedScriptLinter:
             _check_http_imports,
             _check_playwright_selectors,
             _check_el_text_content,
+            _check_script_tools_package_import,
             _check_evaluate_iife,
             _check_evaluate_args,
             _check_evaluate_slice,
+            _check_discovery_save_link,
             _check_bare_paths,
-            _check_bare_host_concat,
             _check_self_contained,
             _check_zd_start,
             _check_handwritten_discovery,
@@ -833,7 +866,7 @@ class EmittedScriptLinter:
             _check_bare_paths,
             _check_bare_host_concat,
             _check_self_contained,
-            _check_retry_phase,
+            _check_script_tools_package_import,
             _check_fanout,
             _check_gate_lock,
             _check_handwritten_discovery,

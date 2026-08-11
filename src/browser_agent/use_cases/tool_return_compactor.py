@@ -231,8 +231,15 @@ def _add_part_bucket(
         others.add(idx)
 
 
-def _trim_bucket(part: ToolReturnPart) -> str | None:
-    """Return the tool name if the part's content is large enough to trim."""
+def _trim_bucket(part) -> str | None:
+    """Return the tool name if the part is a large ``ToolReturnPart``.
+
+    Non-``ToolReturnPart`` parts (``SystemPromptPart``, ``UserPromptPart``,
+    ``ToolReturnPart`` with non-string content, etc.) are never trimmed by
+    the bucket strategy and return ``None``.
+    """
+    if not isinstance(part, ToolReturnPart):
+        return None
     if not isinstance(part.content, str):
         return None
     if len(part.content) < COMPACT_MIN_TRIM_CHARS:

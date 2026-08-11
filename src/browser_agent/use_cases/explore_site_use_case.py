@@ -24,9 +24,10 @@ from browser_agent.domain.code_generation_request import CodeGenerationRequest
 from browser_agent.domain.task_split import TaskSplit
 from browser_agent.use_cases.agent_deps import AgentDeps
 from browser_agent.use_cases.download_pdf_tool import download_pdf
-from browser_agent.use_cases.explorer_system_prompt import EXPLORER_SYSTEM_PROMPT
 from browser_agent.use_cases.explore_page_tool import explore_page
+from browser_agent.use_cases.explorer_system_prompt import EXPLORER_SYSTEM_PROMPT
 from browser_agent.use_cases.tool_return_compactor import ToolReturnCompactor
+from browser_agent.use_cases.agent_run_with_overflow_recovery import run_agent_with_recovery
 
 
 class ExploreSiteUseCase:
@@ -74,32 +75,10 @@ class ExploreSiteUseCase:
 
     async def _run_agent_inner(self, agent: Agent, prompt: str, message_history: list | None) -> Any:
         try:
-            return await agent.run(
-                prompt,
-                deps=self._deps,
-                usage_limits=_usage_limits(),
-                message_history=message_history,
-            )
+            return await run_agent_with_recovery(agent, prompt, self._deps, _usage_limits(), message_history)
         except (UnexpectedModelBehavior, UsageLimitExceeded) as exc:
-            return await self._retry_overflow(agent, prompt, message_history, exc)
-
-    async def _retry_overflow(self, agent: Agent, prompt: str, message_history: list | None, exc: Exception) -> Any:
-        directive = "\n\nIMPORTANT: your exploration context is full. Emit your final structured result now without further tool calls."
-        if message_history is not None:
-            agent_logger.warning("Context overflow, retrying with truncated history + finalize: {exc}", exc=exc)
-            truncated = list(message_history[-6:])
-            return await agent.run(
-                prompt + directive,
-                deps=self._deps,
-                usage_limits=_usage_limits(),
-                message_history=truncated,
-            )
-        agent_logger.warning("Context overflow on fresh run, retrying with finalize directive: {exc}", exc=exc)
-        return await agent.run(
-            prompt + directive,
-            deps=self._deps,
-            usage_limits=_usage_limits(),
-        )
+            agent_logger.warning("Context overflow after recovery retry: {exc}", exc=exc)
+            raise
 
     @staticmethod
     def _coerce_result(run: Any) -> TaskSplit:

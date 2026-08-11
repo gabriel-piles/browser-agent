@@ -81,7 +81,7 @@ async def _absolutize(tab, hrefs: list[str], base_url: str) -> list[str]:
     for href in hrefs:
         if not href:
             continue
-        abs_url = urljoin(base, quote(href.strip(), safe="/%"))
+        abs_url = urljoin(base, quote(href.strip(), safe="/%?=&"))
         if abs_url not in seen:
             seen.add(abs_url)
             out.append(abs_url)

@@ -31,7 +31,7 @@ from browser_agent.configuration import PROMPTS_PATH, RUNS_FILE, RUNS_PATH
 FIXTURE_HOST = "127.0.0.1"
 FIXTURE_PORT_BASE = 8765
 FIXTURES_ROOT = Path(__file__).resolve().parent.parent / "scripts" / "fixtures"
-EMITTED_SCRIPT_TIMEOUT_S = 300.0
+EMITTED_SCRIPT_TIMEOUT_S = 600.0
 
 # --- Session-scoped fixture server ---
 
@@ -118,8 +118,12 @@ def run_generation_pipeline(scenario_name: str, prompt: str, fixture_port: int, 
     except Exception:
         exit_code = 2
 
-    # Find and run the emitted script
-    script_path, smoke_output = _run_emitted_script(run_path)
+    # Find and run the emitted scripts: discovery first (populates
+    # discovered_links), then processing (reads links, saves records).
+    discovery_path, discovery_output = _run_emitted_script(run_path, prefer_discovery=True)
+    script_path, smoke_output = _run_emitted_script(run_path, prefer_discovery=False)
+    if discovery_output:
+        smoke_output = f"[discovery]\n{discovery_output}\n\n[processing]\n{smoke_output}"
 
     # Verify output
     db_path = run_path / "metadata.db"
@@ -138,15 +142,24 @@ def run_generation_pipeline(scenario_name: str, prompt: str, fixture_port: int, 
     }
 
 
-def _run_emitted_script(run_path: Path) -> tuple[Path | None, str]:
-    """Run the most recent processing .py script under run_path/scripts/."""
+def _run_emitted_script(run_path: Path, prefer_discovery: bool = False) -> tuple[Path | None, str]:
+    """Run an emitted .py script under run_path/scripts/.
+
+    When ``prefer_discovery`` is True, pick the discovery script; otherwise
+    pick the processing script. Both run against the same ``metadata.db`` so
+    the processing script can read links saved by the discovery script.
+    """
     scripts_dir = run_path / "scripts"
     if not scripts_dir.is_dir():
         return None, "[no scripts/ directory]"
     candidates = sorted(scripts_dir.glob("*.py"), key=lambda p: p.stat().st_mtime, reverse=True)
     script_path = None
     for p in candidates:
-        if "discover" not in p.name:
+        is_discovery = "discover" in p.name
+        if prefer_discovery and is_discovery:
+            script_path = p
+            break
+        if not prefer_discovery and not is_discovery:
             script_path = p
             break
     if script_path is None and candidates:

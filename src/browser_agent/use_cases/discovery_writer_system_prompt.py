@@ -71,6 +71,9 @@ Your script's ONLY output is rows in the ``discovered_links`` table via
       from script_tools.form_helpers import select_filter_value
       from script_tools.discover_links import discover_links
       from script_tools.discovered_links_store import save_discovered_link, load_discovered_links, mark_link_processed
+   NEVER write ``from script_tools import X`` — ``script_tools`` is a
+   package of modules, not an ``__init__`` that re-exports names. Always
+   import from the submodule: ``from script_tools.start_browser import start_browser``.
 
    Signatures::
 

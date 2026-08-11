@@ -20,10 +20,13 @@ WRITER_MAX_LLM_CALLS = 40
 # Output token budget sent to the provider on every LLM request. Without an
 # explicit `max_tokens`, reasoning models (deepseek-v4-flash) can spend the
 # provider's default budget entirely on thinking and return `finish_reason='length'`
-# with no actionable output, which pydantic-ai treats as a fatal error. 32k
-# leaves room for a reasoning pass plus a full structured result; 16k let the
-# model think over a huge context and never emit.
-MAX_OUTPUT_TOKENS = 128_000
+# with no actionable output, which pydantic-ai treats as a fatal error. 96k
+# gives the reasoning model enough room for a long thinking pass plus a
+# structured result on the most complex scenarios (discovery with
+# expand-button repair, multi-filter iteration); the model's 128k context
+# leaves 32k for input (system prompt + compacted tool returns), which is
+# ample since the compactor bounds prompt size to COMPACT_INPUT_TOKEN_BUDGET.
+MAX_OUTPUT_TOKENS = 96_000
 VERIFICATION_MODEL = "deepseek-v4-flash:0731-cloud"
 VERIFICATION_PDF_COUNT = 10
 
@@ -62,14 +65,13 @@ UWAZI_PASSWORD = os.environ.get("UWAZI_PASSWORD", "admin")
 UWAZI_DEFAULT_LANGUAGE = os.environ.get("UWAZI_DEFAULT_LANGUAGE", "en")
 # Max worker threads for concurrent Uwazi entity push.
 UWAZI_PUSH_MAX_WORKERS = 1
-
-
 # Target max prompt tokens sent to the model by the compactor. The
-# model (deepseek-v4-flash:0731-cloud) has a 1M-token context window;
-# 300k leaves ~700k for reasoning + output (MAX_OUTPUT_TOKENS=32k plus
-# thinking). Large enough that a normal 6-10 tool-call run is never
-# trimmed; the compactor only acts on genuinely long explorations.
-COMPACT_INPUT_TOKEN_BUDGET = 300_000
+# model (deepseek-v4-flash:0731-cloud) has a 128k-token context window;
+# MAX_OUTPUT_TOKENS is 96k, leaving 32k for input. The compactor budget
+# is set to 28k (4k safety margin) so input + output never exceeds 128k.
+# The compactor trims aggressively when this budget is exceeded, keeping
+# recent tool returns and dropping old ones.
+COMPACT_INPUT_TOKEN_BUDGET = 28_000
 # Cumulative input-token ceiling on ``UsageLimits`` across the whole
 # run (pydantic-ai sums input tokens across every request, so this is
 # NOT a per-prompt cap — each prompt is bounded to COMPACT_INPUT_TOKEN_BUDGET
