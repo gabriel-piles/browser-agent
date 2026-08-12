@@ -49,10 +49,13 @@ def custom_route(path: str, query: dict[str, list[str]]) -> tuple[str, str, int]
     return None
 
 
-def _options_html(category: str) -> str:
-    """Render the visible select options (only 3 by default)."""
+def _options_html(category: str, show_hidden: bool = False) -> str:
+    """Render the select options — includes the hidden category when visible."""
+    all_cats = _CATEGORIES + [_HIDDEN_CATEGORY]
     options = ""
-    for cat in _CATEGORIES:
+    for cat in all_cats:
+        if cat == _HIDDEN_CATEGORY and not show_hidden:
+            continue
         selected = " selected" if cat == category else ""
         options += f"<option value='{cat}'{selected}>{cat.title()}</option>"
     return options
@@ -75,34 +78,26 @@ def index(query: dict[str, list[str]]) -> str:
     category = query.get("category", [_CATEGORIES[0]])[0]
     if category not in all_cats:
         category = _CATEGORIES[0]
+    more_clicked = query.get("more", ["0"])[0] == "1"
+    show_hidden = more_clicked or category == _HIDDEN_CATEGORY
     items = _items_for(category)
-    options = _options_html(category)
+    options = _options_html(category, show_hidden)
     rows = _rows_html(items)
-    selected_js = f"'{category}'" if category in all_cats else "null"
+    more_filters_display = "none" if show_hidden else "inline-block"
+    more_param = "&more=1" if more_clicked else ""
     return (
         "<!DOCTYPE html><html><head><meta charset='utf-8'>"
         "<title>Under-Collect Archive</title></head><body>"
         "<div class='container'><h1>Filtered Document List</h1>"
-        f"<select id='filter-category'>{options}</select>"
-        f"<button id='more-filters'>More filters</button>"
-        f"<div class='item-list'>{rows}</div></div>"
-        "<script>"
-        "document.getElementById('filter-category').addEventListener('change', function(e) {"
-        "  window.location.href = '?scenario=" + _SCENARIO + "&category=' + e.target.value;"
-        "});"
-        "document.getElementById('more-filters').addEventListener('click', function() {"
-        "  var sel = document.getElementById('filter-category');"
-        "  var opt = document.createElement('option');"
-        "  opt.value = 'decisions';"
-        "  opt.textContent = 'Decisions';"
-        "  sel.appendChild(opt);"
-        "  this.style.display = 'none';"
-        "});"
-        f"if ({selected_js} === 'decisions') {{"
-        "  document.getElementById('more-filters').click();"
-        "  document.getElementById('filter-category').value = 'decisions';"
-        "}}"
-        "</script></body></html>"
+        f"<select id='filter-category' onchange=\"window.location.href='?scenario={_SCENARIO}&category='+this.value+'{more_param}'\">{options}</select>"
+        f"<button id='more-filters' style='display:{more_filters_display}' onclick=\""
+        "var sel=document.getElementById('filter-category');"
+        "var opt=document.createElement('option');"
+        "opt.value='decisions';opt.textContent='Decisions';"
+        "sel.appendChild(opt);this.style.display='none';"
+        f"window.location.href='?scenario={_SCENARIO}&category='+sel.value+'&more=1';"
+        f'">More filters</button>'
+        f"<div class='item-list'>{rows}</div></div></body></html>"
     )
 
 

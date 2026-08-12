@@ -26,6 +26,40 @@ def _items_for(category: str, year: str) -> list[tuple[int, str, str, str]]:
     return items
 
 
+def _doc_detail(doc_id: int) -> str:
+    """Render a detail page with title, category, and year for ``doc_id``."""
+    category = _CATEGORIES[0]
+    year = _YEARS[0]
+    for ci, cat in enumerate(_CATEGORIES):
+        for yi, yr in enumerate(_YEARS):
+            base = (ci * len(_YEARS) + yi) * _ITEMS_PER_COMBO
+            if base < doc_id <= base + _ITEMS_PER_COMBO:
+                category = cat
+                year = yr
+                break
+    title = f"{category.title()} {year} Item #{doc_id}"
+    return (
+        '<!DOCTYPE html><html><head><meta charset="utf-8">'
+        f"<title>{title}</title></head><body>"
+        f'<div class="container">'
+        f'<h1 class="title">{title}</h1>'
+        f'<p class="category">{category}</p>'
+        f'<p class="year">{year}</p>'
+        "</div></body></html>"
+    )
+
+
+def custom_route(path: str, query: dict[str, list[str]]) -> tuple[str, str, int] | None:
+    """Handle /doc/N detail pages."""
+    if path.startswith("/doc/"):
+        try:
+            doc_id = int(path.split("/")[-1])
+        except ValueError:
+            return None
+        return _doc_detail(doc_id), "text/html; charset=utf-8", 200
+    return None
+
+
 def _options(values: list[str], selected: str) -> str:
     """Render <option> tags for a list of values."""
     opts = ""

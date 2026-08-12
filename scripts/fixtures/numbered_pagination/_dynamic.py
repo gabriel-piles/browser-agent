@@ -15,6 +15,31 @@ def _page_items(page: int) -> list[tuple[int, str, str]]:
     return items
 
 
+def _doc_detail(doc_id: int) -> str:
+    """Render a detail page with title and date for ``doc_id``."""
+    title = f"Document Report #{doc_id}"
+    date = f"2024-{(doc_id % 12) + 1:02d}-{(doc_id % 28) + 1:02d}"
+    return (
+        '<!DOCTYPE html><html><head><meta charset="utf-8">'
+        f"<title>{title}</title></head><body>"
+        f'<div class="container">'
+        f'<h1 class="title">{title}</h1>'
+        f'<p class="date">{date}</p>'
+        "</div></body></html>"
+    )
+
+
+def custom_route(path: str, query: dict[str, list[str]]) -> tuple[str, str, int] | None:
+    """Handle /doc/N detail pages."""
+    if path.startswith("/doc/"):
+        try:
+            doc_id = int(path.split("/")[-1])
+        except ValueError:
+            return None
+        return _doc_detail(doc_id), "text/html; charset=utf-8", 200
+    return None
+
+
 def _numbered_nav(scenario: str, page: int) -> str:
     """Build numbered page links plus prev/next."""
     links = ""

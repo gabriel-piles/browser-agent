@@ -54,6 +54,7 @@ async def select_filter_value(tab, selector: str, value) -> bool:
             return False
         if not await _do_select(tab, selector, json.dumps(value_str)):
             return False
+        await tab.sleep(0.5)
         await wait_for_page_ready(tab)
         await tab.sleep(0.3)
         return await _confirm_value(tab, selector, value_str)

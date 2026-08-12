@@ -179,6 +179,21 @@ def _check_zd_start(python_code: str) -> list[LintFinding]:
     return out
 
 
+def _check_tab_select_misuse(python_code: str) -> list[LintFinding]:
+    """Flag ``tab.select(selector, value)`` — zendriver's select is query-only, not a dropdown setter."""
+    out: list[LintFinding] = []
+    for match in re.finditer(r"\btab\.select\s*\([^)]*,", python_code):
+        out.append(
+            LintFinding(
+                rule="14",
+                severity="error",
+                message="tab.select(selector, value) does NOT set a dropdown — zendriver's select is query_selector only; use select_filter_value(tab, selector, value) or direct tab.get(url)",
+                line=_line_of(python_code, match.start()),
+            )
+        )
+    return out
+
+
 def _check_el_text_content(python_code: str) -> list[LintFinding]:
     out: list[LintFinding] = []
     for match in re.finditer(r"\.text_content\s*\(", python_code):
@@ -531,6 +546,7 @@ _ZENDRIVER_RULES: frozenset[str] = frozenset(
         "11",  # await save_record (sync)
         "13",  # file_size vs size key
         "9",  # tab.evaluate returns a dict/list, not a slicable string
+        "14",  # tab.select(selector, value) — query_selector, not dropdown setter
     }
 )
 
@@ -547,7 +563,7 @@ _ZENDRIVER_RULE_NAMES: dict[str, str] = {
     "2": "discovery loop — hand-written scroll/load-more loop instead of discover_links helper",
     "11": "save_record — awaited a synchronous helper (TypeError at runtime)",
     "13": "result shape — uses file_size key instead of size",
-    "9": "tab.evaluate — returns a Python dict/list, not a string (slicing it raises)",
+    "14": "dropdown select — tab.select(selector, value) is query_selector, not a dropdown setter; use select_filter_value or tab.get(url)",
 }
 
 
@@ -844,7 +860,7 @@ class EmittedScriptLinter:
             _check_discovery_save_link,
             _check_bare_paths,
             _check_self_contained,
-            _check_zd_start,
+            _check_tab_select_misuse,
             _check_handwritten_discovery,
             _check_unscoped_compound_selector,
             _check_case_sensitive_extension_selector,
@@ -854,7 +870,7 @@ class EmittedScriptLinter:
             _check_skeleton,
             _check_ready_selector,
             _check_save_record,
-            _check_zd_start,
+            _check_tab_select_misuse,
             _check_download_status,
             _check_supporting_status,
             _check_http_imports,

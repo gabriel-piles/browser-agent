@@ -28,6 +28,31 @@ def index(query: dict[str, list[str]]) -> str:
     )
 
 
+def _doc_detail(doc_id: int) -> str:
+    """Render a detail page with title and date for document ``doc_id``."""
+    title = f"Concurrent Document #{doc_id}"
+    date = f"2024-{(doc_id % 12) + 1:02d}-{(doc_id % 28) + 1:02d}"
+    return (
+        '<!DOCTYPE html><html><head><meta charset="utf-8">'
+        f"<title>{title}</title></head><body>"
+        f'<div class="container">'
+        f'<h1 class="title">{title}</h1>'
+        f'<p class="date">{date}</p>'
+        "</div></body></html>"
+    )
+
+
+def custom_route(path: str, query: dict[str, list[str]]) -> tuple[str, str, int] | None:
+    """Handle /doc/N detail pages."""
+    if path.startswith("/doc/"):
+        try:
+            doc_id = int(path.split("/")[-1])
+        except ValueError:
+            return None
+        return _doc_detail(doc_id), "text/html; charset=utf-8", 200
+    return None
+
+
 def fragment(query: dict[str, list[str]]) -> str:
     """Not used for this scenario."""
     return ""
