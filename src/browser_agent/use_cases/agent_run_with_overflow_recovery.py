@@ -17,11 +17,13 @@ from __future__ import annotations
 from typing import Any
 
 from pydantic_ai import Agent
-from pydantic_ai.exceptions import UnexpectedModelBehavior
+from pydantic_ai.exceptions import UnexpectedModelBehavior, UserError as _UserError
 from pydantic_ai.usage import UsageLimitExceeded
 
 _FINALIZE_DIRECTIVE = (
-    "\n\nIMPORTANT: your context is full. Emit your final structured result now without further tool calls."
+    "\n\nIMPORTANT: your context is full. Emit your final structured result now without further tool calls. "
+    "Return ONLY a valid JSON object — no XML tags, no markdown fences, no prose before or after. "
+    "The JSON must match the output schema exactly."
 )
 _TRUNCATED_HISTORY_WINDOW = 6
 
@@ -66,18 +68,51 @@ async def _retry(
     message_history: list[Any] | None,
     partial_messages: list[Any],
 ) -> Any:
-    """Retry with a finalize directive using the best available history."""
+    """Retry with a finalize directive using the best available history.
+
+    The partial messages captured from a failed ``agent.iter()`` run may
+    contain ``ModelResponse`` entries with unprocessed tool calls (the
+    agent was interrupted mid-tool-call). Passing those to ``agent.run()``
+    raises ``UserError: Cannot provide a new user prompt when the message
+    history contains unprocessed tool calls.`` We strip any trailing
+    ``ModelResponse`` that contains a ``ToolCallPart`` so the retry starts
+    from a clean, balanced message history.
+    """
     source: list[Any] = partial_messages if partial_messages else (message_history or [])
     if source:
-        truncated: list[Any] = list(source[-_TRUNCATED_HISTORY_WINDOW:])
-        return await agent.run(
-            prompt + _FINALIZE_DIRECTIVE,
-            deps=deps,
-            usage_limits=usage_limits,
-            message_history=truncated,
-        )
+        truncated: list[Any] = _strip_unprocessed_tool_calls(list(source[-_TRUNCATED_HISTORY_WINDOW:]))
+        if truncated:
+            try:
+                return await agent.run(
+                    prompt + _FINALIZE_DIRECTIVE,
+                    deps=deps,
+                    usage_limits=usage_limits,
+                    message_history=truncated,
+                )
+            except _UserError:
+                pass
     return await agent.run(
         prompt + _FINALIZE_DIRECTIVE,
         deps=deps,
         usage_limits=usage_limits,
     )
+
+
+def _strip_unprocessed_tool_calls(messages: list[Any]) -> list[Any]:
+    """Remove trailing ``ModelResponse`` entries that contain unprocessed tool calls.
+
+    A ``ModelResponse`` with ``ToolCallPart`` entries requires matching
+    ``ToolReturnPart`` messages in the history. When the agent was
+    interrupted mid-run, those returns are absent. We scan backwards and
+    drop any trailing ``ModelResponse`` whose last part is a tool call,
+    so the remaining history is balanced and ``agent.run()`` accepts it.
+    """
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+
+    while messages:
+        last = messages[-1]
+        if isinstance(last, ModelResponse) and any(isinstance(p, ToolCallPart) for p in last.parts):
+            messages.pop()
+            continue
+        break
+    return messages

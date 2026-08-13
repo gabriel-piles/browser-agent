@@ -97,4 +97,9 @@ ZD_RUNTIME_ERROR_PATTERNS: list[tuple[str, str, str]] = [
         "asyncio.run error",
         "asyncio.run() inside a running loop. Fix: the script's top-level is asyncio.run(main()) — never call asyncio.run() from inside an async function.",
     ),
+    (
+        "unhashable type: 'Tab'",
+        "download arg order",
+        "download_pdf_curl_cffi / download_file_curl_cffi called with a Tab as the first argument — the curl_cffi helpers take (url, save_path, tab), NOT (tab, url, save_path). Fix: pass the URL first, e.g. download_pdf_curl_cffi(file_url, out_dir, wtab).",
+    ),
 ]

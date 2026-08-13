@@ -500,6 +500,50 @@ def _check_bare_host_concat(python_code: str) -> list[LintFinding]:
     return out
 
 
+_CURL_CFFI_FUNCS = frozenset({"download_pdf_curl_cffi", "download_file_curl_cffi"})
+
+_DOWNLOAD_ARG_ORDER_MSG = (
+    "download_pdf_curl_cffi / download_file_curl_cffi take (url, save_path, tab) "
+    "NOT (tab, url, save_path) — the browser variants download_pdf_browser / "
+    "download_file_browser take (tab, url, save_path). Passing a tab as the first "
+    "arg raises 'unhashable type: Tab' at runtime because the helper hashes the URL."
+)
+
+
+def _is_tab_like_arg(node: ast.AST) -> bool:
+    """True when ``node`` is a variable named like a browser tab."""
+    if isinstance(node, ast.Name):
+        return "tab" in node.id.lower()
+    if isinstance(node, ast.Attribute) and node.attr == "main_tab":
+        return True
+    return False
+
+
+def _check_download_curl_cffi_args(python_code: str) -> list[LintFinding]:
+    """Flag ``download_*_curl_cffi(tab, url, ...)`` — wrong argument order (tab first)."""
+    out: list[LintFinding] = []
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return out
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Name) or func.id not in _CURL_CFFI_FUNCS:
+            continue
+        if node.args and _is_tab_like_arg(node.args[0]):
+            out.append(
+                LintFinding(
+                    rule="8c",
+                    severity="error",
+                    message=_DOWNLOAD_ARG_ORDER_MSG,
+                    line=node.lineno,
+                )
+            )
+    return out
+
+
 def _bad_self_root(root: str) -> bool:
     return root == "browser_agent" or root.startswith("browser_agent.")
 
@@ -546,7 +590,7 @@ _ZENDRIVER_RULES: frozenset[str] = frozenset(
         "11",  # await save_record (sync)
         "13",  # file_size vs size key
         "9",  # tab.evaluate returns a dict/list, not a slicable string
-        "14",  # tab.select(selector, value) — query_selector, not dropdown setter
+        "8c",  # download_*_curl_cffi called with tab as first arg (wrong order)
     }
 )
 
@@ -563,7 +607,7 @@ _ZENDRIVER_RULE_NAMES: dict[str, str] = {
     "2": "discovery loop — hand-written scroll/load-more loop instead of discover_links helper",
     "11": "save_record — awaited a synchronous helper (TypeError at runtime)",
     "13": "result shape — uses file_size key instead of size",
-    "14": "dropdown select — tab.select(selector, value) is query_selector, not a dropdown setter; use select_filter_value or tab.get(url)",
+    "8c": "download helper args — called download_pdf_curl_cffi/download_file_curl_cffi with tab first; curl_cffi variants take (url, save_path, tab), browser variants take (tab, url, save_path)",
 }
 
 
@@ -881,6 +925,7 @@ class EmittedScriptLinter:
             _check_evaluate_slice,
             _check_bare_paths,
             _check_bare_host_concat,
+            _check_download_curl_cffi_args,
             _check_self_contained,
             _check_script_tools_package_import,
             _check_fanout,

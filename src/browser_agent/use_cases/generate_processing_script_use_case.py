@@ -53,6 +53,7 @@ class GenerateProcessingScriptUseCase:
             ],
             capabilities=[ToolReturnCompactor()],
             model_settings={"max_tokens": MAX_OUTPUT_TOKENS},
+            retries={"output": 3},
         )
 
     async def execute(self, task_split: TaskSplit, concurrency: str = "") -> GeneratedScript:

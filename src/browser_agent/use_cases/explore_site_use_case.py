@@ -46,6 +46,7 @@ class ExploreSiteUseCase:
             tools=[Tool(explore_page, max_retries=3), Tool(download_pdf, max_retries=3)],
             capabilities=[ToolReturnCompactor()],
             model_settings={"max_tokens": MAX_OUTPUT_TOKENS},
+            retries={"output": 3},
         )
 
     async def execute(self, request: CodeGenerationRequest) -> TaskSplit:

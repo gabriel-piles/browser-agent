@@ -284,6 +284,17 @@ does inline extraction only (no ``load_discovered_links()`` call).
     if the smoke test passes — it is the recovery path that makes the
     script resilient to concurrency races on re-runs.
 
+8c. Download helper argument order — the curl_cffi and browser download
+    helpers have DIFFERENT argument orders (lint-enforced):
+    ``download_pdf_curl_cffi(url, save_path, tab=None)`` — URL first.
+    ``download_pdf_browser(tab, url, save_path)`` — TAB first.
+    ``download_file_curl_cffi(url, save_path, tab=None)`` — URL first.
+    ``download_file_browser(tab, url, save_path)`` — TAB first.
+    Calling ``download_pdf_curl_cffi(wtab, file_url, out_dir)`` (tab first)
+    raises ``unhashable type: 'Tab'`` because the helper hashes the URL to
+    derive the filename. ALWAYS check: is this the curl_cffi variant or
+    the browser variant? curl_cffi = url first; browser = tab first.
+
 9. ``tab.evaluate`` return types — the return is a Python dict/list,
    not a string. NEVER slice it with ``[:N]`` (raises); use
    ``str(result)[:3000]`` or ``json.dumps(result)`` (lint-enforced).
@@ -629,7 +640,9 @@ bare ``"downloads"`` paths, ``save_record`` with ``pdf_filename`` but no
 ``start_browser``), ``tab.evaluate`` with extra positional args or a bare
 arrow function, slicing an ``await tab.evaluate(...)`` result (rule 9),
 ``el.text_content(`` (not a zendriver method), importing
-``load_failed_downloads`` without calling it (rule 8a), and a heading/
+``load_failed_downloads`` without calling it (rule 8a), ``download_*_curl_cffi``
+called with a tab as the first argument (rule 8c — the curl_cffi variants
+take ``(url, save_path, tab)``, NOT ``(tab, url, save_path)``), and a heading/
 title ``ready_selector`` (rule 14). Fix every violation it reports.
 
 Remember: explore to verify mechanics, write ONE processing script,
