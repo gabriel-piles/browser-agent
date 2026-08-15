@@ -38,12 +38,22 @@ _BLOCK_STREAK_LIMIT = 8
 _DOWNLOAD_DELAY_MIN_S = 2.0
 _DOWNLOAD_DELAY_MAX_S = 5.0
 _BLOCK_COOLDOWN_S = 30.0
-_BLOCK_MESSAGE = (
-    "Cloudflare is blocking PDF downloads: {n} consecutive downloads failed "
-    "with HTTP 403. The site is rate-limiting this IP/session, not rejecting "
-    "these URLs. Wait ~15 minutes and re-run the same script — downloads are "
-    "idempotent and already-saved PDFs are skipped, so the run resumes where "
-    "it stopped."
+
+# Interactive Cloudflare bypass: when the 403 streak hits the limit,
+# navigate the visible tab to the blocked URL so the operator can
+# manually click the Cloudflare checkbox. Poll until the challenge
+# clears, then reset the streak and let the caller retry.
+_CF_MAX_RETRIES = 3
+_CF_INTERACTIVE_TIMEOUT_S = 300.0
+_CF_POLL_INTERVAL_S = 2.0
+_CF_TITLES = ("just a moment", "attention required", "checking your browser")
+_CF_PROMPT = (
+    "\n" + "=" * 72 + "\n"
+    "CLOUDFLARE CHALLENGE DETECTED on {url}\n"
+    "The browser is paused. Please go to the visible Chromium window\n"
+    "and click the Cloudflare 'Verify you are human' checkbox.\n"
+    "The script will automatically resume once the challenge clears.\n"
+    "Timeout: {timeout:.0f}s\n" + "=" * 72 + "\n"
 )
 
 _consecutive_403 = 0
@@ -91,28 +101,83 @@ def _is_http_403(exc):
     return "HTTP 403" in str(exc)
 
 
-def _track_download_outcome(exc):
-    """Track consecutive 403 failures across download calls.
+def _is_cloudflare_title(title: str) -> bool:
+    """True when ``title`` matches a known Cloudflare challenge page."""
+    if not title:
+        return False
+    lower = title.lower()
+    return any(marker in lower for marker in _CF_TITLES)
+
+
+async def _wait_for_cloudflare_clear(tab, url):
+    """Navigate ``tab`` to ``url`` and pause for the operator to clear Cloudflare.
+
+    When a Cloudflare challenge blocks downloads, the HTTP 403 responses
+    come from Cloudflare's edge, not the origin server. The browser tab
+    itself may or may not show the challenge page (curl_cffi fetches
+    bypass the tab). This function navigates the visible browser tab to
+    the blocked URL so the Cloudflare challenge renders in the browser
+    window, then polls the page title until the operator manually clicks
+    the checkbox. Once the challenge clears, the streak is reset and the
+    caller retries the download.
+
+    If the tab is None or the page never shows a challenge (already
+    cleared, or the challenge doesn't render), the function returns
+    after a brief wait so the caller's retry gets fresh cookies.
+    """
+    global _consecutive_403
+    if tab is None:
+        print(_CF_PROMPT.format(url=url, timeout=_CF_INTERACTIVE_TIMEOUT_S))
+        await asyncio.sleep(_CF_INTERACTIVE_TIMEOUT_S)
+        _consecutive_403 = 0
+        return
+    try:
+        await tab.get(url)
+        await tab.sleep(1.0)
+        title = await tab.evaluate("document.title") or ""
+    except Exception:
+        title = ""
+    if not _is_cloudflare_title(title):
+        _consecutive_403 = 0
+        await asyncio.sleep(2.0)
+        return
+    print(_CF_PROMPT.format(url=url, timeout=_CF_INTERACTIVE_TIMEOUT_S))
+    deadline = asyncio.get_event_loop().time() + _CF_INTERACTIVE_TIMEOUT_S
+    while asyncio.get_event_loop().time() < deadline:
+        await tab.sleep(_CF_POLL_INTERVAL_S)
+        try:
+            title = await tab.evaluate("document.title") or ""
+        except Exception:
+            title = ""
+        if not _is_cloudflare_title(title):
+            print("Cloudflare challenge cleared. Resuming downloads...")
+            _consecutive_403 = 0
+            return
+    print("Cloudflare interactive wait timed out. Retrying with fresh session...")
+    _consecutive_403 = 0
+
+
+async def _track_download_outcome(exc, tab=None, url=None):
+    """Track consecutive 403 failures; return True when Cloudflare was cleared.
 
     ``exc=None`` (success) resets the streak; an HTTP 403 RuntimeError
-    increments it; any other error leaves it unchanged. Raises
-    ``SystemExit`` with a resume hint once the streak hits
-    ``_BLOCK_STREAK_LIMIT`` — SystemExit, not RuntimeError, because
-    generated scripts wrap each download in ``except Exception`` and
-    would otherwise keep grinding through the catalog while blocked.
-    SystemExit still runs ``finally: browser.stop()`` and, since step 1
-    executes scripts as a subprocess with stderr merged into streamed
-    stdout, the message reaches the operator live with exit code 1.
+    increments it; any other error leaves it unchanged. When the streak
+    hits ``_BLOCK_STREAK_LIMIT``, it pauses for the operator to
+    manually clear the Cloudflare challenge in the visible browser
+    (``_wait_for_cloudflare_clear``) and returns ``True`` so the caller
+    retries the download with fresh cookies. Returns ``False`` otherwise.
     """
     global _consecutive_403
     if exc is None:
         _consecutive_403 = 0
-        return
+        return False
     if not _is_http_403(exc):
-        return
+        return False
     _consecutive_403 += 1
     if _consecutive_403 >= _BLOCK_STREAK_LIMIT:
-        raise SystemExit(_BLOCK_MESSAGE.format(n=_consecutive_403))
+        await _wait_for_cloudflare_clear(tab, url or "")
+        return True
+    return False
 
 
 def _resolve_download_dir(save_path):
@@ -135,49 +200,59 @@ async def _download_curl(url, save_path, tab, check_magic):
     on final failure. When ``check_magic`` is true, the body must pass
     :func:`_assert_pdf_magic` (PDF path); when false (supporting
     documents) the body is written as-is.
+
+    When the 403 streak hits the limit, ``_track_download_outcome``
+    pauses for the operator to clear Cloudflare. After the challenge
+    clears, cookies are re-fetched from the tab and the download
+    retries with the fresh session.
     """
     from curl_cffi import AsyncSession
 
-    cookies = {}
-    if tab is not None:
+    async def _fetch_cookies():
+        if tab is None:
+            return {}
         try:
             from zendriver.cdp import network as _net
 
             cdp_cookies = await tab.send(_net.get_cookies([url]))
-            cookies = {c.name: c.value for c in cdp_cookies if getattr(c, "name", None) and getattr(c, "value", None)}
+            return {c.name: c.value for c in cdp_cookies if getattr(c, "name", None) and getattr(c, "value", None)}
         except Exception:
-            pass
+            return {}
 
     last_exc = None
-    for attempt in range(1, _PDF_DOWNLOAD_RETRIES + 1):
-        try:
-            async with AsyncSession() as s:
-                r = await s.get(url, impersonate="chrome", cookies=cookies, timeout=60.0)
-        except Exception as e:
-            last_exc = RuntimeError(f"curl_cffi request failed for {url}: {e}")
-            if attempt < _PDF_DOWNLOAD_RETRIES:
-                await asyncio.sleep(_PDF_DOWNLOAD_RETRY_DELAY_S * attempt)
-            continue
-        if r.status_code >= 400:
-            last_exc = RuntimeError(f"HTTP {r.status_code} for {url}")
-            if attempt < _PDF_DOWNLOAD_RETRIES:
-                delay = _PDF_DOWNLOAD_RETRY_DELAY_S * attempt * (3 if r.status_code == 403 else 1)
-                await asyncio.sleep(delay)
-            elif r.status_code == 403:
-                await asyncio.sleep(_BLOCK_COOLDOWN_S)
-            continue
-        body = r.content
-        if not body:
-            last_exc = RuntimeError(f"empty response for {url}")
-            if attempt < _PDF_DOWNLOAD_RETRIES:
-                await asyncio.sleep(_PDF_DOWNLOAD_RETRY_DELAY_S * attempt)
-            continue
-        _write_atomic(save_path, body)
-        if check_magic:
-            _assert_pdf_magic(save_path, body, url)
-        _track_download_outcome(None)
-        return {"size": len(body), "skipped": False, "reason": "downloaded", "saved_path": str(save_path)}
-    _track_download_outcome(last_exc)
+    for _cf_round in range(_CF_MAX_RETRIES + 1):
+        cookies = await _fetch_cookies()
+        for attempt in range(1, _PDF_DOWNLOAD_RETRIES + 1):
+            try:
+                async with AsyncSession() as s:
+                    r = await s.get(url, impersonate="chrome", cookies=cookies, timeout=60.0)
+            except Exception as e:
+                last_exc = RuntimeError(f"curl_cffi request failed for {url}: {e}")
+                if attempt < _PDF_DOWNLOAD_RETRIES:
+                    await asyncio.sleep(_PDF_DOWNLOAD_RETRY_DELAY_S * attempt)
+                continue
+            if r.status_code >= 400:
+                last_exc = RuntimeError(f"HTTP {r.status_code} for {url}")
+                if attempt < _PDF_DOWNLOAD_RETRIES:
+                    delay = _PDF_DOWNLOAD_RETRY_DELAY_S * attempt * (3 if r.status_code == 403 else 1)
+                    await asyncio.sleep(delay)
+                elif r.status_code == 403:
+                    await asyncio.sleep(_BLOCK_COOLDOWN_S)
+                continue
+            body = r.content
+            if not body:
+                last_exc = RuntimeError(f"empty response for {url}")
+                if attempt < _PDF_DOWNLOAD_RETRIES:
+                    await asyncio.sleep(_PDF_DOWNLOAD_RETRY_DELAY_S * attempt)
+                continue
+            _write_atomic(save_path, body)
+            if check_magic:
+                _assert_pdf_magic(save_path, body, url)
+            await _track_download_outcome(None, tab=tab, url=url)
+            return {"size": len(body), "skipped": False, "reason": "downloaded", "saved_path": str(save_path)}
+        cleared = await _track_download_outcome(last_exc, tab=tab, url=url)
+        if not cleared:
+            raise last_exc
     raise last_exc
 
 
@@ -211,8 +286,10 @@ async def download_pdf_curl_cffi(url, save_path, tab=None):
     body) up to ``_PDF_DOWNLOAD_RETRIES`` times with linear backoff
     before raising ``RuntimeError`` on final failure.
 
-    Raises ``SystemExit`` when 5 consecutive downloads are blocked with
-    HTTP 403 (Cloudflare rate-limit); re-running resumes via skip-existing.
+    When ``_BLOCK_STREAK_LIMIT`` consecutive downloads are blocked with
+    HTTP 403, the helper pauses for the operator to manually clear the
+    Cloudflare challenge in the visible browser, then retries with
+    fresh cookies. Re-running resumes via skip-existing.
     """
     save_dir = _resolve_download_dir(save_path)
     url = _resolve_url(url, tab)
@@ -406,19 +483,29 @@ async def _download_browser(tab, url, save_path, check_magic):
     Encapsulates the fallback order used by both the PDF and supporting
     document browser helpers. ``url`` is already HTTP->HTTPS upgraded by
     the caller. Returns the result dict of the winning strategy.
+
+    When the 403 streak hits the limit, ``_track_download_outcome``
+    pauses for the operator to clear Cloudflare. After the challenge
+    clears, the full fetch chain retries with the fresh session.
     """
-    try:
+    last_exc = None
+    for _cf_round in range(_CF_MAX_RETRIES + 1):
         try:
-            result = await _try_browser_fetch(tab, url, save_path, check_magic)
-        except RuntimeError:
-            result = await _try_curl_cffi(url, save_path, check_magic)
-    except RuntimeError as exc:
-        _track_download_outcome(exc)
-        if _is_http_403(exc) and _consecutive_403 < _BLOCK_STREAK_LIMIT:
-            await asyncio.sleep(_BLOCK_COOLDOWN_S)
-        raise
-    _track_download_outcome(None)
-    return result
+            try:
+                result = await _try_browser_fetch(tab, url, save_path, check_magic)
+            except RuntimeError:
+                result = await _try_curl_cffi(url, save_path, check_magic)
+        except RuntimeError as exc:
+            last_exc = exc
+            cleared = await _track_download_outcome(exc, tab=tab, url=url)
+            if not cleared:
+                if _is_http_403(exc) and _consecutive_403 < _BLOCK_STREAK_LIMIT:
+                    await asyncio.sleep(_BLOCK_COOLDOWN_S)
+                raise
+            continue
+        await _track_download_outcome(None, tab=tab, url=url)
+        return result
+    raise last_exc
 
 
 async def download_pdf_browser(tab, url, save_path):
@@ -461,8 +548,10 @@ async def download_pdf_browser(tab, url, save_path):
 
     Raises ``RuntimeError`` if all three strategies fail.
 
-    Raises ``SystemExit`` when 5 consecutive downloads are blocked with
-    HTTP 403 (Cloudflare rate-limit); re-running resumes via skip-existing.
+    When ``_BLOCK_STREAK_LIMIT`` consecutive downloads are blocked with
+    HTTP 403, the helper pauses for the operator to manually clear the
+    Cloudflare challenge in the visible browser, then retries with
+    fresh cookies. Re-running resumes via skip-existing.
     """
     url = _upgrade_to_https(_resolve_url(url, tab))
     save_dir = _resolve_download_dir(save_path)

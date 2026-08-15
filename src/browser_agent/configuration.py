@@ -78,7 +78,7 @@ COMPACT_INPUT_TOKEN_BUDGET = 28_000
 # by the compactor). Set far above 40 × 300k so it never trips a normal
 # exploration; it only guards against a runaway agent looping forever.
 # If it fires on a legitimate run, raise it further.
-AGENT_INPUT_TOKEN_LIMIT = 10_000_000
+AGENT_INPUT_TOKEN_LIMIT = 15_000_000
 
 SNAPSHOT_MAX_CHARS = 50_000
 COMPACT_KEEP_RECENT_VALIDATIONS = 1

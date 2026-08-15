@@ -222,8 +222,12 @@ does inline extraction only (no ``load_discovered_links()`` call).
     the Cloudflare challenge clears and clearance cookies are set.
     Only after the warm-up navigation succeeds (title is NOT "Just a
     moment") should you proceed to download files. If downloads start
-    returning 403 again mid-run, re-navigate to a listing page to
-    re-warm the session, then retry.
+    returning 403 again mid-run, the download helpers automatically
+    pause and navigate the visible tab to the blocked URL so the
+    operator can manually click the Cloudflare checkbox; once the
+    challenge clears, the helpers retry with fresh cookies. You do NOT
+    need to add re-warm logic — the helpers handle it. Just pass ``tab``
+    to every download call so the interactive bypass can navigate it.
 
 
 6. Visible browser — ALWAYS ``headless=False`` (lint-enforced as the
@@ -238,8 +242,12 @@ does inline extraction only (no ``load_discovered_links()`` call).
    success, ``download_pdf_browser`` on WAF failure; ``download_file_*``
    twins for non-PDF documents — the SAME strategy, no separate probe).
    Pass ``tab`` so cookies are shared. The helpers already throttle,
-   retry, and abort on Cloudflare 403 streaks — do NOT add your own
-   backoff/block logic; call them inside try/except. NEVER use
+   retry, and pause for interactive Cloudflare bypass on 403 streaks —
+   when ``_BLOCK_STREAK_LIMIT`` consecutive downloads return HTTP 403,
+   the helper navigates the visible browser tab to the blocked URL so
+   the operator can manually click the Cloudflare checkbox, polls until
+   the challenge clears, then retries with fresh cookies. Do NOT add
+   your own backoff/block logic; call them inside try/except. NEVER use
    ``tab.get`` to download a PDF (it renders a viewer, not a download).
    Every download attempt — success OR failure — MUST persist a
    ``save_record`` row (success: ``pdf_filename=Path(result["saved_path"]).name``,

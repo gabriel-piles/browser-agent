@@ -563,15 +563,73 @@ def _check_self_contained(python_code: str) -> list[LintFinding]:
 
 
 def _check_script_tools_package_import(python_code: str) -> list[LintFinding]:
-    """Flag ``from script_tools import X`` — should be ``from script_tools.X import Y``."""
+    """Flag ``from script_tools import X`` and non-existent ``script_tools.X`` modules."""
+    out: list[LintFinding] = []
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return out
+    valid_modules = frozenset(
+        {
+            "start_browser",
+            "save_record",
+            "save_page_html",
+            "pdf_download",
+            "page_wait",
+            "dom_helpers",
+            "form_helpers",
+            "discover_links",
+            "discovered_links_store",
+            "_file_utils",
+            "run_config",
+        }
+    )
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.module == "script_tools":
+            out.append(LintFinding(rule="5b", severity="error", message=_SCRIPT_TOOLS_PKG_MSG, line=node.lineno))
+        elif node.module and node.module.startswith("script_tools."):
+            submod = node.module.split(".", 1)[1]
+            if submod not in valid_modules:
+                out.append(
+                    LintFinding(
+                        rule="0",
+                        severity="error",
+                        message=f"script_tools.{submod} does not exist. Valid modules: {', '.join(sorted(valid_modules))}. Use 'from script_tools.page_wait import prepare_page_wait' (module=page_wait), not 'from script_tools.prepare_page_wait import ...'.",
+                        line=node.lineno,
+                    )
+                )
+    return out
+
+
+def _check_direct_zendriver_import(python_code: str) -> list[LintFinding]:
+    """Flag ``from zendriver import ...`` and ``import zendriver`` in emitted scripts.
+
+    Emitted scripts must use ``from script_tools.start_browser import start_browser``
+    and ``from script_tools.page_wait import ...`` — never import zendriver
+    directly. ``zendriver.cdp`` is used internally by script_tools helpers, but
+    emitted scripts have no need for it.
+    """
     out: list[LintFinding] = []
     try:
         tree = ast.parse(python_code)
     except SyntaxError:
         return out
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "script_tools":
-            out.append(LintFinding(rule="5b", severity="error", message=_SCRIPT_TOOLS_PKG_MSG, line=node.lineno))
+        if not isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        roots = _import_roots(node)
+        for root in roots:
+            if root and root.split(".")[0] == "zendriver":
+                out.append(
+                    LintFinding(
+                        rule="0",
+                        severity="error",
+                        message="never import zendriver directly; use 'from script_tools.start_browser import start_browser' and other script_tools helpers",
+                        line=node.lineno,
+                    )
+                )
     return out
 
 
@@ -898,6 +956,7 @@ class EmittedScriptLinter:
             _check_playwright_selectors,
             _check_el_text_content,
             _check_script_tools_package_import,
+            _check_direct_zendriver_import,
             _check_evaluate_iife,
             _check_evaluate_args,
             _check_evaluate_slice,
@@ -928,6 +987,7 @@ class EmittedScriptLinter:
             _check_download_curl_cffi_args,
             _check_self_contained,
             _check_script_tools_package_import,
+            _check_direct_zendriver_import,
             _check_fanout,
             _check_gate_lock,
             _check_handwritten_discovery,
