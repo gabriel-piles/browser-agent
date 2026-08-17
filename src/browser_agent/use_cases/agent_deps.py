@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from browser_agent.configuration import MAX_LLM_CALLS, MAX_VALIDATION_ATTEMPTS
+from browser_agent.configuration import MAX_EXPLORE_CALLS, MAX_LLM_CALLS, MAX_VALIDATION_ATTEMPTS
 from browser_agent.ports.browser_session_port import BrowserSessionPort
 from browser_agent.ports.llm_port import LlmPort
 from browser_agent.ports.pdf_downloader_port import PdfDownloaderPort
@@ -36,4 +36,7 @@ class AgentDeps:
     validation_attempts: int = 0
     validation_limit: int = MAX_VALIDATION_ATTEMPTS
     explore_calls: int = 0
+    empty_result_streak: int = 0
+    explore_limit: int = MAX_EXPLORE_CALLS
     call_budget: int = MAX_LLM_CALLS
+    last_analyze_selectors: list[str] = field(default_factory=list)

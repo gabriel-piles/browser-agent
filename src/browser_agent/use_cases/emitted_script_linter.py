@@ -615,6 +615,7 @@ def _check_script_tools_package_import(python_code: str) -> list[LintFinding]:
             "dom_helpers",
             "form_helpers",
             "discover_links",
+            "extract_fields",
             "discovered_links_store",
             "_file_utils",
             "run_config",
@@ -829,6 +830,44 @@ def _check_handwritten_discovery(python_code: str) -> list[LintFinding]:
     return []
 
 
+def _check_handwritten_extraction(python_code: str) -> list[LintFinding]:
+    """Rule 14: flag a hand-written ``tab.evaluate`` that reads the DOM.
+
+    Any ``tab.evaluate`` whose first string argument contains
+    ``querySelectorAll`` is a hand-written extraction IIFE — metadata
+    must go through ``extract_fields`` and hrefs through ``extract_links``.
+    """
+    out: list[LintFinding] = []
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return out
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute) or func.attr != "evaluate":
+            continue
+        if not node.args:
+            continue
+        first = node.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            if "querySelectorAll" in first.value:
+                out.append(
+                    LintFinding(
+                        rule="14",
+                        severity="error",
+                        message=(
+                            "hand-written DOM extraction forbidden — use "
+                            "extract_fields(tab, FIELD_SPECS) for metadata and "
+                            "extract_links(tab, selector) for hrefs (rule 14)"
+                        ),
+                        line=node.lineno,
+                    )
+                )
+    return out
+
+
 _DOC_EXTENSIONS = ("pdf", "doc", "docx", "rtf", "xls", "xlsx", "ppt", "pptx")
 _HREF_EXT_RE = re.compile(r"href\$=(['\"])(\.[A-Za-z]{2,5})\1(\s+i)?\]")
 
@@ -981,6 +1020,47 @@ def _check_case_sensitive_extension_selector(python_code: str) -> list[LintFindi
     return out
 
 
+def _check_rename_download(python_code: str) -> list[LintFinding]:
+    """Rule 13: flag ``os.rename``/``os.replace``/``shutil.move`` on a downloaded file."""
+    out: list[LintFinding] = []
+    for pattern in (r"\bos\.rename\s*\(", r"\bos\.replace\s*\(", r"\bshutil\.move\s*\("):
+        for match in re.finditer(pattern, python_code):
+            out.append(
+                LintFinding(
+                    rule="13",
+                    severity="error",
+                    message=(
+                        "never rename a downloaded file — the download helper already derives "
+                        "the canonical name; store Path(result['saved_path']).name verbatim as "
+                        "pdf_filename/supporting_filename"
+                    ),
+                    line=_line_of(python_code, match.start()),
+                )
+            )
+    return out
+
+
+def _check_empty_file_url(python_code: str) -> list[LintFinding]:
+    """Rule 14: flag ``save_record`` rows whose data dict sets ``file_url`` to an empty string."""
+    out: list[LintFinding] = []
+    for match in re.finditer(r"\bsave_record\s*\(", python_code):
+        call_text = _call_args(python_code, match.end() - 1)
+        if '"file_url": ""' in call_text or "'file_url': ''" in call_text:
+            out.append(
+                LintFinding(
+                    rule="14",
+                    severity="error",
+                    message=(
+                        "save_record with an empty file_url — a page with no download links must "
+                        "be SKIPPED (no row), not recorded with an empty file_url; load_failed rows "
+                        "set source_page_url and omit file_url instead"
+                    ),
+                    line=_line_of(python_code, match.start()),
+                )
+            )
+    return out
+
+
 class EmittedScriptLinter:
     """Lint the RAW LLM python_code (before emit transforms)."""
 
@@ -1028,8 +1108,10 @@ class EmittedScriptLinter:
             _check_fanout,
             _check_gate_lock,
             _check_handwritten_discovery,
-            _check_unscoped_compound_selector,
+            _check_handwritten_extraction,
             _check_case_sensitive_extension_selector,
+            _check_rename_download,
+            _check_empty_file_url,
         )
 
     def lint(self, python_code: str, kind: str = "processing") -> list[LintFinding]:

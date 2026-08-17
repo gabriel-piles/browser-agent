@@ -109,6 +109,13 @@ step.
   to pre-seed the ``discovered_links`` table so the Processing Writer's
   validation reads real data from the DB.
 
+  Step 7b — RECORD FIELD SPECS. For each metadata field the processing
+  script must extract, record a ``FieldSpec``: the CSS selector you
+  verified via ``extract``, the authoritative read-source (per rule 4c
+  label-vs-badge: ``attr`` when ``title``/``aria-label`` is the real
+  label, else ``text``), and the sample value you observed. Multi-value
+  fields use ``list_text``/``list_attr``. Put them in ``field_specs``.
+
   Step 8 — PROBE PDF DOWNLOAD. If the task involves PDF downloads, call
   ``download_pdf`` ONCE with a real PDF URL from the site. Set
   ``pdf_download_strategy`` to "curl_cffi" on success or "browser_fetch"
@@ -138,9 +145,19 @@ TaskSplit schema:
                          discovered_links." When needs_discovery is
                          false, the processing_prompt must describe
                          inline extraction (no load_discovered_links).
-  site_overview        — human-readable summary of the site structure.
-  sample_document_urls — 3-5 document page URLs (Step 7).
-  pdf_download_strategy — "curl_cffi" | "browser_fetch" (Step 8).
+  verified_selectors   — list[str] of the CSS selectors you verified
+                         during exploration (from ``analyze`` link
+                         patterns and your ``extract`` probes). These are
+                         passed to the Processing Writer as structured
+                         data so it uses them verbatim and never
+                         re-derives them. Include every selector the
+                         processing script needs (metadata + download
+                         links). Empty list if you could not verify any.
+  field_specs          — list of {field, selector, source, attr, sample, required}
+                         for every metadata field the processing script extracts.
+                         source is one of text/attr/href/list_text/list_attr.
+                         attr is set only when source is attr/list_attr.
+                         sample is the value you observed during exploration.
 
 Write the discovery_prompt and processing_prompt as if giving
 instructions to a junior developer: self-contained, specific, with the

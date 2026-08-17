@@ -51,3 +51,20 @@ def format_smoke_repair(output: str) -> str:
 def format_discovery_repair(report: str) -> str:
     """Format a discovery-verification report as a repair prompt."""
     return f"{_DISCOVERY_HEADER}```\n{report}\n```\n\nEmit the full corrected GeneratedScript now."
+
+
+def format_processing_self_check_repair(output: str, violations: list[str] | None = None) -> str:
+    """Format a processing self-check failure as a repair prompt."""
+    header = (
+        "The emitted processing script FAILED the processing self-check (it ran "
+        "against the sample document links and either downloaded zero files or "
+        "violated correctness invariants). This is NOT a validation attempt. "
+        "Fix the download + save_record path and the invariants below, then emit "
+        "the corrected GeneratedScript."
+    )
+    parts = [header]
+    if violations:
+        parts.append("\n\nCorrectness violations:\n")
+        parts.append("\n".join(f"- {v}" for v in violations))
+    parts.append(f"\n\n```\n{output}\n```\n\nEmit the full corrected GeneratedScript now.")
+    return "".join(parts)

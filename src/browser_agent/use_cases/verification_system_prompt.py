@@ -92,7 +92,7 @@ download.
    data TEXT); discovered_links(url TEXT PRIMARY KEY, filter_label TEXT,
    status TEXT, discovered_at TEXT); `data` is JSON with keys file_url,
    pdf_filename, pdf_id, pdf_name, pdf_type, subcategory, year, state.
-   `discovered_links.status` is 'discovered' or 'processed'.
+   `discovered_links.status` is 'discovered', 'processed', or 'sample' (sample rows are validation seeds, never work items).
 5. run_read_script(python_code) — write+run read-only Python to
    cross-reference DB vs filesystem, parse a PDF's basic integrity,
    compute coverage stats. `DB_PATH` and `DOWNLOADS_PATH` are

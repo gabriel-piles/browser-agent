@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from browser_agent.domain.field_spec import FieldSpec
+
 
 class TaskSplit(BaseModel):
     """The structured handoff from the Explorer agent to the two writer agents.
@@ -37,6 +39,25 @@ class TaskSplit(BaseModel):
             "how to extract metadata, download PDFs, which CSS selectors "
             "to use (verified during exploration), and what the script "
             "should do. Must include the target URL."
+        ),
+    )
+    verified_selectors: list[str] = Field(
+        default_factory=list,
+        description=(
+            "CSS selectors the Explorer verified during exploration, passed "
+            "to the Processing Writer as structured data (not prose). The "
+            "writer uses these verbatim and does NOT re-derive or re-probe "
+            "selectors. Empty when the Explorer could not verify any."
+        ),
+    )
+    field_specs: list[FieldSpec] = Field(
+        default_factory=list,
+        description=(
+            "Metadata fields the Explorer verified during exploration, each with the "
+            "CSS selector, read-source (text/attr/href/list_text/list_attr), and a "
+            "sample value. Passed to the Processing Writer as structured data so it "
+            "calls extract_fields(tab, FIELD_SPECS) verbatim and never hand-writes "
+            "metadata extraction JS. Empty when the Explorer could not verify any."
         ),
     )
     site_overview: str = Field(

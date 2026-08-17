@@ -269,3 +269,27 @@ async def wait_for_anchors(
         if time.monotonic() >= deadline:
             raise TimeoutError(f"selector {selector!r} matched 0 elements after {timeout:.1f}s")
         await asyncio.sleep(poll_interval)
+
+
+async def goto_ready(tab, url, timeout=6.0, quiet_window_ms=300) -> None:
+    """Navigate to ``url`` and wait for render, tolerating a Cloudflare challenge.
+
+    ``await tab.get(url)``, then poll ``document.title`` up to 3 times for
+    "Just a moment" / "Attention Required" (waiting 10s between polls), then
+    wait for the page to be ready (best-effort, never raises). Finally a
+    short settle sleep.
+    """
+    await tab.get(url)
+    for _ in range(3):
+        title = await tab.evaluate("document.title") or ""
+        if "just a moment" not in title.lower() and "attention required" not in title.lower():
+            break
+        await tab.sleep(10)
+    try:
+        await asyncio.wait_for(
+            wait_for_page_ready(tab, url, timeout=timeout, quiet_window_ms=quiet_window_ms),
+            timeout=timeout + 2,
+        )
+    except Exception:
+        pass
+    await tab.sleep(0.4)

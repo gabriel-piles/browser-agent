@@ -24,7 +24,7 @@ _SCHEMA_REMINDER = (
     "discovered_links(url TEXT PRIMARY KEY, filter_label TEXT, status TEXT, discovered_at TEXT). "
     "`data` is a JSON blob whose keys include file_url, pdf_filename, "
     "pdf_id, pdf_name, pdf_type, subcategory, year, state. "
-    "`discovered_links.status` is 'discovered' (not yet processed) or 'processed'."
+    "`discovered_links.status` is 'discovered' (not yet processed), 'processed', or 'sample' (validation seeds, never work items)."
 )
 _SELECT_RE = re.compile(r"^\s*SELECT\b", re.IGNORECASE)
 

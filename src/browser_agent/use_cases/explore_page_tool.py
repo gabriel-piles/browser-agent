@@ -17,6 +17,7 @@ from __future__ import annotations
 from loguru import logger
 from pydantic_ai import RunContext
 from browser_agent.agent_logging import traced_tool
+from browser_agent.configuration import MAX_EMPTY_EXPLORE_RESULTS
 from browser_agent.domain.element_info import ElementInfo
 from browser_agent.domain.link_pattern import LinkPattern
 from browser_agent.domain.page_action import PageAction
@@ -85,6 +86,8 @@ async def explore_page(ctx: RunContext[AgentDeps], action: PageAction) -> str:
     """
     deps = ctx.deps
     deps.explore_calls += 1
+    if deps.explore_calls > deps.explore_limit:
+        return _explore_limit_reached(deps)
     session = deps.browser_session
     summary = _action_summary(action)
     async with traced_tool("explore_page", summary=summary):
@@ -95,7 +98,19 @@ async def explore_page(ctx: RunContext[AgentDeps], action: PageAction) -> str:
             action=summary,
             error=snapshot.error,
         )
-    return _format_snapshot(snapshot) + _budget_footer(deps)
+    empty = _is_empty_result(action, snapshot)
+    if empty:
+        deps.empty_result_streak += 1
+    else:
+        deps.empty_result_streak = 0
+    if action.action == "analyze" and snapshot.structure is not None:
+        deps.last_analyze_selectors = [p.selector for p in snapshot.structure.link_patterns]
+    if deps.empty_result_streak >= MAX_EMPTY_EXPLORE_RESULTS:
+        return _empty_result_directive(deps)
+    result = _format_snapshot(snapshot)
+    if empty:
+        result += _empty_result_hint(deps)
+    return result + _budget_footer(deps)
 
 
 def _format_snapshot(snapshot: PageSnapshot) -> str:
@@ -201,7 +216,70 @@ def _fmt_table(lines: list[str], el: ElementInfo) -> None:
 
 
 def _budget_footer(deps: AgentDeps) -> str:
-    """Return a pacing footer telling the model how many requests remain."""
-    used = deps.explore_calls + deps.validation_attempts
-    remaining = deps.call_budget - used
-    return f"\n# exploration call {deps.explore_calls}; ~{remaining} requests remain before you must emit."
+    """Return a pacing footer telling the model how many explore calls remain."""
+    remaining = deps.explore_limit - deps.explore_calls
+    return f"\n# exploration call {deps.explore_calls}; {remaining} explore calls remain before you must emit."
+
+
+def _is_empty_result(action: PageAction, snapshot: PageSnapshot) -> bool:
+    """True when the action produced no usable elements (a dead selector)."""
+    if action.action == "extract":
+        return snapshot.extracted_count == 0 and not snapshot.error
+    if action.action == "inspect":
+        return bool(snapshot.error)
+    return False
+
+
+def _available_selectors(deps: AgentDeps) -> list[str]:
+    """Return the cached link-pattern selectors from the last analyze, else [].
+
+    ``link_patterns`` selectors are guaranteed to match at least 2 links
+    (groups with fewer are not emitted), so they are a correct-by-construction
+    oracle the agent can use instead of blind-probing.
+    """
+    return deps.last_analyze_selectors
+
+
+def _empty_result_hint(deps: AgentDeps) -> str:
+    """Append the analyze oracle after a dead selector, before the streak hard-stop."""
+    selectors = _available_selectors(deps)
+    if not selectors:
+        return (
+            "\n# NOTE: your selector matched nothing on this page. "
+            "Call explore_page(action='analyze') to see the real structure."
+        )
+    lines = [
+        "\n# NOTE: your extract/inspect selector matched nothing on this page.",
+        "# Verified selectors from the last analyze (guaranteed to match):",
+    ]
+    lines.extend(f"  {s}" for s in selectors)
+    lines.append("# Use one of these — do NOT retry the failing selector.")
+    return "\n".join(lines)
+
+
+def _empty_result_directive(deps: AgentDeps) -> str:
+    """Refuse further blind probing and offer the analyze oracle."""
+    selectors = _available_selectors(deps)
+    lines = [
+        f"# STOP — {deps.empty_result_streak} consecutive queries returned no elements.",
+        "Your recent extract/inspect selectors match nothing on the current page.",
+        "Do NOT retry the same selector.",
+    ]
+    if selectors:
+        lines.append("")
+        lines.append("# Verified selectors from the last analyze (guaranteed to match):")
+        for sel in selectors:
+            lines.append(f"  {sel}")
+        lines.append("Use one of these, or call explore_page(action='analyze') to refresh the list.")
+    else:
+        lines.append("Call explore_page(action='analyze') to see the actual page structure,")
+        lines.append("then pick a selector that exists — or emit your final result now.")
+    return "\n".join(lines)
+
+
+def _explore_limit_reached(deps: AgentDeps) -> str:
+    return (
+        f"# explore_page limit reached ({deps.explore_limit}/{deps.explore_limit}).\n"
+        "You have used all your exploration calls. STOP calling this tool.\n"
+        "Emit your final result now using the selectors and mechanics you have already verified."
+    )

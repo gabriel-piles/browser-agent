@@ -97,8 +97,21 @@ def mark_link_processed(url: str) -> None:
         conn.close()
 
 
-def preseed_sample_links(urls: list[str], db_path: str) -> None:
-    """Insert sample URLs as filter_label='sample' links (idempotent)."""
+def preseed_sample_links(
+    urls: list[str],
+    db_path: str,
+    status: str = "sample",
+    filter_label: str = "sample",
+) -> None:
+    """Insert sample URLs into ``discovered_links`` (idempotent).
+
+    Samples default to ``status='sample'`` so they are excluded from
+    ``load_discovered_links()`` (which returns only ``status='discovered'``)
+    and from the step-2 reconciler's ``discovered_unprocessed`` check. This
+    keeps direct-file sample URLs out of the listing-page scraper queue.
+    Pass ``status='discovered'`` to make the links visible to a processing
+    script's ``load_discovered_links`` (used by the processing self-check).
+    """
     if not urls:
         return
     now = datetime.datetime.now().isoformat(timespec="seconds")
@@ -108,9 +121,8 @@ def preseed_sample_links(urls: list[str], db_path: str) -> None:
         for url in urls:
             canon = _canonical_url(url)
             conn.execute(
-                "INSERT OR IGNORE INTO discovered_links (url, filter_label, status, discovered_at) "
-                "VALUES (?, 'sample', 'discovered', ?)",
-                (canon, now),
+                "INSERT OR IGNORE INTO discovered_links (url, filter_label, status, discovered_at) VALUES (?, ?, ?, ?)",
+                (canon, filter_label, status, now),
             )
         conn.commit()
     finally:

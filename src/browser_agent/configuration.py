@@ -101,6 +101,14 @@ ANALYZE_MAX_TABLES = 5
 # sections need more visible entries for correct selector choice.
 COMPACT_MAX_ANALYZE_LINES = 20
 MAX_VALIDATION_ATTEMPTS = 3
+# Hard cap on explore_page calls per agent turn. When reached, the tool
+# refuses and directs the agent to emit. Guards against the agent looping
+# on a dead selector and inflating context until the LLM request times out.
+MAX_EXPLORE_CALLS = 30
+# Consecutive empty explore_page results (extract returning 0 elements, or
+# inspect erroring with "no element matches") before the tool refuses and
+# directs the agent to emit or run analyze.
+MAX_EMPTY_EXPLORE_RESULTS = 3
 
 # ``headless`` defaults to False — the operator can watch Chrome
 # navigate during inspection and the generated script. Set the env

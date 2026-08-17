@@ -65,7 +65,7 @@ Your script's ONLY output is rows in the ``discovered_links`` table via
 0. Imports — write these lines verbatim at the top (only the ones you
    use); full contracts are in each helper's docstring::
 
-      from script_tools.page_wait import wait_for_page_ready, prepare_page_wait
+      from script_tools.page_wait import wait_for_page_ready, prepare_page_wait, goto_ready
       from script_tools.start_browser import start_browser
       from script_tools.dom_helpers import get_text, get_attr, trusted_click
       from script_tools.form_helpers import select_filter_value
@@ -78,6 +78,7 @@ Your script's ONLY output is rows in the ``discovered_links`` table via
    Signatures::
 
       async def wait_for_page_ready(tab, url=None, timeout=30.0, quiet_window_ms=500) -> None
+      async def goto_ready(tab, url, timeout=6.0, quiet_window_ms=300) -> None
       async def prepare_page_wait(tab) -> None
       async def start_browser(headless=None, user_data_dir=None) -> Browser
       async def get_text(el, tab=None) -> str
@@ -144,6 +145,15 @@ Your script's ONLY output is rows in the ``discovered_links`` table via
    resultados" label, a filter-badge count), PARSE it from the live DOM
    and pass it as ``advertised``; ``discover_links`` never terminates on
    no-growth while ``discovered < advertised`` AND the control exists.
+2a. Derived-URL verification — when a discovered URL is DERIVED from a
+   page link or string manipulation (slicing a suffix, swapping a path
+   segment, following a "Draft resolutions"-style link) rather than a
+   direct ``discover_links`` href, the script MUST navigate to that URL
+   and verify the expected container/selector exists before calling
+   ``save_discovered_link``. A documentation page's "Draft resolutions"
+   link can point at a DIFFERENT section than the one the label implies
+   (session-3 drafts pointed at session 4 in a prior run); verify the
+   target, never trust the link text.
 
 3. Anti-race — after every ``tab.fill``/"tab.click"/"tab.select" or
    scroll, insert ``await tab.sleep(0.5)`` (or longer for AJAX-heavy
@@ -195,22 +205,8 @@ Your script's ONLY output is rows in the ``discovered_links`` table via
    options after the challenge clears. If it doesn't clear after 3
    retries, log a warning and skip that page — do NOT attempt to extract
    from a challenge page (you'll get 0 results and waste a tool call).
-   Encapsulate this check in a ``goto_ready`` helper::
-
-      async def goto_ready(tab, url):
-          await tab.get(url)
-          for _ in range(3):
-              title = await tab.evaluate("document.title") or ""
-              if "just a moment" not in title.lower() and "attention required" not in title.lower():
-                  break
-              await tab.sleep(10)
-          try:
-              await asyncio.wait_for(
-                  wait_for_page_ready(tab, url, timeout=6, quiet_window_ms=300), timeout=8
-              )
-          except Exception:
-              pass
-          await tab.sleep(0.4)
+   Call ``await goto_ready(tab, url)`` from ``script_tools.page_wait`` —
+   do NOT redefine it.
 
 6. Visible browser — ALWAYS ``headless=False`` (lint-enforced as the
    first ``main()`` statement; the operator watches and it looks real to

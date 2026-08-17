@@ -37,15 +37,21 @@ profiles.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import signal
+import sqlite3
 import sys
 
 from pathlib import Path
 
 from loguru import logger
 
+from browser_agent.domain.processing_self_check_result import ProcessingSelfCheckResult
 from browser_agent.domain.smoke_test_result import SmokeTestResult
+
+from browser_agent.script_tools.discovered_links_store import preseed_sample_links
+from browser_agent.script_tools._file_utils import pdf_id_for
 
 from browser_agent.use_cases.zendriver_error_patterns import ZD_RUNTIME_ERROR_PATTERNS
 
@@ -142,6 +148,108 @@ async def smoke_test_script(
         return SmokeTestResult(success=False, output=output, timed_out=False)
     finally:
         _restore_run_config(run_config_path, original_run_config)
+
+
+async def processing_self_check(
+    script_path: Path,
+    sample_urls: list[str],
+    timeout: float = 300.0,
+) -> ProcessingSelfCheckResult:
+    """Run the processing script against sample links; prove it downloads + saves.
+
+    Seeds a scratch ``metadata.db`` with ``sample_urls`` as
+    ``status='discovered'`` links, runs the script as a subprocess, then
+    counts rows in the ``metadata`` table whose ``data`` JSON has
+    ``download_status == "downloaded"`` and a non-empty ``pdf_filename``.
+    A hang is a failure (``timeout_is_success=False``). Downloads land in
+    ``<run>/downloads`` (the script computes ``out_dir`` from ``__file__``);
+    this is benign — the real run's helpers treat already-present canonical
+    files as "already downloaded" and skip.
+    """
+    scratch = script_path.parent.parent / "selfcheck"
+    scratch.mkdir(parents=True, exist_ok=True)
+    db_path = scratch / "metadata.db"
+    if db_path.exists():
+        db_path.unlink()
+    preseed_sample_links(sample_urls, str(db_path), status="discovered", filter_label="selfcheck")
+    run_config_path, original_run_config = _use_smoke_profile(script_path, scratch)
+    cmd = [sys.executable, str(script_path)]
+    env = {
+        **os.environ,
+        "ZENDRIVER_HEADLESS": "true",
+        "BROWSER_AGENT_SAVE_RECORD_DB_PATH": str(db_path),
+        "BROWSER_AGENT_TASK_SLUG": "selfcheck",
+    }
+    try:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+                env=env,
+            )
+        except OSError as exc:
+            return ProcessingSelfCheckResult(
+                success=False, downloaded_rows=0, record_count=0, output=f"failed to launch: {exc}"
+            )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            await _kill_process_group(proc)
+            return ProcessingSelfCheckResult(
+                success=False, downloaded_rows=0, record_count=0, output=f"[timed out after {timeout}s — script hung]"
+            )
+        output = stdout.decode("utf-8", errors="replace") if stdout else ""
+    finally:
+        _restore_run_config(run_config_path, original_run_config)
+    downloaded_rows, record_count, violations = _analyze_records(db_path)
+    return ProcessingSelfCheckResult(
+        success=downloaded_rows >= 1 and not violations,
+        downloaded_rows=downloaded_rows,
+        record_count=record_count,
+        violations=violations,
+        output=output,
+    )
+
+
+def _analyze_records(db_path: Path) -> tuple[int, int, list[str]]:
+    """Return (downloaded_rows, total_rows, violations) from the scratch metadata table.
+
+    Violations are deterministic correctness bugs, one human-readable line each:
+      - canonical_filename: a downloaded row's pdf_filename != pdf_id_for(file_url)+".pdf"
+      - failed_download: a row with file_url but download_status != "downloaded" or empty pdf_filename
+      - load_failed: a row with download_status == "load_failed" (metadata gate never rendered)
+    """
+    if not db_path.exists():
+        return 0, 0, []
+    conn = sqlite3.connect(str(db_path), timeout=5)
+    try:
+        rows = conn.execute("SELECT data FROM metadata").fetchall()
+    except sqlite3.OperationalError:
+        return 0, 0, []
+    finally:
+        conn.close()
+    downloaded = 0
+    violations: list[str] = []
+    for (raw,) in rows:
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        fu = data.get("file_url")
+        pf = data.get("pdf_filename")
+        sf = data.get("supporting_filename")
+        status = data.get("download_status")
+        if status == "downloaded" and (pf or sf):
+            downloaded += 1
+            if fu and pf and pf != pdf_id_for(fu) + ".pdf":
+                violations.append(f"canonical_filename: {pf!r} != {pdf_id_for(fu) + '.pdf'!r} (file_url={fu})")
+        elif status == "load_failed":
+            violations.append(f"load_failed: source_page_url={data.get('source_page_url')!r}")
+        elif fu:
+            violations.append(f"failed_download: status={status!r} pdf_filename={pf!r} (file_url={fu})")
+    return downloaded, len(rows), violations
 
 
 def _scratch_dir(script_path: Path) -> Path:

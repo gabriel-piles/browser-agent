@@ -37,11 +37,14 @@ _TIMEOUT_NOTICE_RE = re.compile(r"\[TIMEOUT[^\]]*\]")
 # errors. Each entry is (regex, fix). Checked in order; first match wins.
 _STATIC_CHECK_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (
-        re.compile(r"^\s*(?:async\s+)?def\s+(?:get_text|get_attr|trusted_click)\s*\(", re.MULTILINE),
-        "get_text/get_attr/trusted_click is redefined inline (rule 0). These are "
-        "importable helpers: add 'from script_tools.dom_helpers import get_text, "
-        "get_attr, trusted_click' at the top and DELETE your local def. The helpers "
-        "MUST NOT be redefined or modified.",
+        re.compile(
+            r"^\s*(?:async\s+)?def\s+(?:get_text|get_attr|trusted_click|extract_fields|extract_links|goto_ready)\s*\(",
+            re.MULTILINE,
+        ),
+        "get_text/get_attr/trusted_click/extract_fields/extract_links/goto_ready is "
+        "redefined inline (rule 0). These are importable helpers: add "
+        "the appropriate 'from script_tools.<module> import ...' at the top and "
+        "DELETE your local def. The helpers MUST NOT be redefined or modified.",
     ),
     (
         re.compile(r"\bawait\s+save_record\s*\("),

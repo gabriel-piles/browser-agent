@@ -37,6 +37,7 @@ from browser_agent.drivers.generation.script_generator import ScriptGenerator
 from browser_agent.drivers.generation.script_path_builder import ScriptPathBuilder
 from browser_agent.drivers.generation.script_smoke_tester import (
     log_smoke_test_result,
+    processing_self_check,
     smoke_test_script,
 )
 from browser_agent.drivers.generation.script_tools_copier import ScriptToolsCopier
@@ -56,6 +57,7 @@ from browser_agent.use_cases.generate_processing_script_use_case import (
 from browser_agent.use_cases.script_repair_prompt import (
     format_discovery_repair,
     format_lint_repair,
+    format_processing_self_check_repair,
     format_smoke_repair,
 )
 
@@ -69,6 +71,7 @@ _MAX_LINT_REPAIRS = 1
 # the second repairs discrepancies flagged by the independent
 # DiscoveryAuditor (post-run cross-filter verification).
 _MAX_DISCOVERY_REPAIRS = 2
+_MAX_PROCESSING_REPAIRS = 3
 
 # Discovery (scroll + load-more across all filter values) takes minutes;
 # the 60s smoke budget is useless here. A timeout is a real failure for
@@ -78,6 +81,8 @@ _DISCOVERY_RUN_TIMEOUT_S = 600.0
 # Exit codes: 0 success, 1 smoke test could not be fixed, 2 could not run.
 EXIT_SMOKE_FAILED = 1
 EXIT_COULD_NOT_RUN = 2
+EXIT_SELF_CHECK_FAILED = 3
+EXIT_LINT_FAILED = 4
 
 
 class GenerateScriptDriver:
@@ -168,6 +173,20 @@ class GenerateScriptDriver:
             discovery_uc,
             processing_uc,
         )
+        # 7b. Lint gate — a script with remaining error-severity lint findings is
+        # deterministically broken; refuse to emit it.
+        remaining = self._error_findings_by_kind(script_set)
+        if remaining:
+            for kind, findings in remaining.items():
+                for f in findings:
+                    logger.error(
+                        "lint gate: {kind} script still has rule {rule} error: {msg}",
+                        kind=kind,
+                        rule=f.rule,
+                        msg=f.message,
+                    )
+            await self._generator.close_all(explorer_uc)
+            return EXIT_LINT_FAILED
         # 8. Emit both scripts
         emit_results: list[EmitResult] = []
         discovery_emit = self._emit_script(task, script_set.discovery_script(), emitter, run_path, context, emit_results)
@@ -190,6 +209,48 @@ class GenerateScriptDriver:
                 await self._generator.close_all(explorer_uc)
                 self._cleanup_emit_artifacts(emit_results)
                 return EXIT_SMOKE_FAILED
+        # 9b. Processing behavioral self-check — correctness gate.
+        if split.sample_document_urls:
+            self_check = await processing_self_check(processing_emit.script_path, split.sample_document_urls)
+            repairs = 0
+            while not self_check.success and repairs < _MAX_PROCESSING_REPAIRS:
+                logger.warning(
+                    "processing self-check FAILED — {v} violation(s); running repair turn {r}",
+                    v=len(self_check.violations),
+                    r=repairs + 1,
+                )
+                new_proc = await self._generator.repair_processing(
+                    processing_uc,
+                    format_processing_self_check_repair(self_check.output, self_check.violations),
+                )
+                script_set = script_set.replace_processing(new_proc)
+                self._cleanup_emit_artifacts(emit_results)
+                emit_results.clear()
+                self._emit_script(task, script_set.discovery_script(), emitter, run_path, context, emit_results)
+                processing_emit = self._emit_script(
+                    task, script_set.processing_script(), emitter, run_path, context, emit_results
+                )
+                assert processing_emit is not None
+                self_check = await processing_self_check(processing_emit.script_path, split.sample_document_urls)
+                repairs += 1
+            logger.info(
+                "processing self-check: success={ok} downloaded_rows={n} records={r} violations={v}",
+                ok=self_check.success,
+                n=self_check.downloaded_rows,
+                r=self_check.record_count,
+                v=len(self_check.violations),
+            )
+            if not self_check.success:
+                logger.error(
+                    "processing self-check FAILED after {r} repair turns — {v} violation(s) remain; refusing to deliver",
+                    r=repairs,
+                    v=len(self_check.violations),
+                )
+                await self._generator.close_all(explorer_uc)
+                self._cleanup_emit_artifacts(emit_results)
+                return EXIT_SELF_CHECK_FAILED
+        else:
+            logger.warning("processing self-check SKIPPED — no sample_document_urls from explorer")
         # 10. Discovery self-check first — its repair turn reuses the shared browser session.
         if discovery_emit is not None and discovery_uc is not None:
             await self._discovery_self_check(task, script_set, discovery_uc, emitter, run_path, context, emit_results)
