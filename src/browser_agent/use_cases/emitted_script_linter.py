@@ -117,6 +117,42 @@ def _check_supporting_status(python_code: str) -> list[LintFinding]:
     return out
 
 
+_HTML_CAPTURE_MSG = (
+    "processing script downloads documents but never captures page HTML "
+    "(rule 14). Call result = await save_page_html(tab, out_dir, page_url) "
+    "for the page where each PDF/doc was found and store "
+    "Path(result['saved_path']).name as 'html_filename' (and the page URL "
+    "as 'source_page_url') in EVERY save_record data dict that has a "
+    "pdf_filename or supporting_filename. On SPA pages pass ready_selector "
+    "naming the late-bound metadata element. Set 'html_filename': '' only "
+    "when no HTML was captured for that row."
+)
+
+
+def _check_html_capture(python_code: str) -> list[LintFinding]:
+    """Rule 14: a script that downloads documents must also capture page HTML."""
+    download = re.search(
+        r"\b(?:download_pdf_browser|download_pdf_curl_cffi|download_file_browser|download_file_curl_cffi)\s*\(",
+        python_code,
+    )
+    if download is None:
+        return []
+    if re.search(r"\bsave_record\s*\(", python_code) is None:
+        return []
+    has_html_call = re.search(r"\bsave_page_html\s*\(", python_code) is not None
+    has_html_key = re.search(r"['\"]html_filename['\"]", python_code) is not None
+    if has_html_call and has_html_key:
+        return []
+    return [
+        LintFinding(
+            rule="14",
+            severity="error",
+            message=_HTML_CAPTURE_MSG,
+            line=_line_of(python_code, download.start()),
+        )
+    ]
+
+
 def _check_ready_selector(python_code: str) -> list[LintFinding]:
     """Reject heading/title ready_selectors — they bind with the initial shell and pass the gate early."""
     out: list[LintFinding] = []
@@ -976,6 +1012,7 @@ class EmittedScriptLinter:
             _check_tab_select_misuse,
             _check_download_status,
             _check_supporting_status,
+            _check_html_capture,
             _check_http_imports,
             _check_playwright_selectors,
             _check_el_text_content,

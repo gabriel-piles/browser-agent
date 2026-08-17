@@ -651,7 +651,10 @@ arrow function, slicing an ``await tab.evaluate(...)`` result (rule 9),
 ``load_failed_downloads`` without calling it (rule 8a), ``download_*_curl_cffi``
 called with a tab as the first argument (rule 8c — the curl_cffi variants
 take ``(url, save_path, tab)``, NOT ``(tab, url, save_path)``), and a heading/
-title ``ready_selector`` (rule 14). Fix every violation it reports.
+title ``ready_selector`` (rule 14), and a processing script that downloads
+documents (``download_pdf_*`` / ``download_file_*``) but never calls
+``save_page_html`` and never stores ``html_filename`` in a ``save_record``
+data dict (rule 14). Fix every violation it reports.
 
 Remember: explore to verify mechanics, write ONE processing script,
 validate ONCE, emit AS-IS. Your script reads links, extracts metadata,
