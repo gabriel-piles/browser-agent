@@ -47,7 +47,7 @@ from browser_agent.drivers.generation.task_reader import TaskReader
 from browser_agent.logging_config import configure_logging
 from browser_agent.script_tools.discovered_links_store import preseed_sample_links
 from browser_agent.use_cases.concurrency_context_renderer import render_concurrency_context
-from browser_agent.use_cases.discovery_manifest_parser import extract_manifest
+from browser_agent.use_cases.discovery_manifest_parser import extract_manifest_detailed
 from browser_agent.use_cases.discovery_self_check_verifier import DiscoverySelfCheckVerifier
 from browser_agent.use_cases.emitted_script_linter import EmittedScriptLinter
 from browser_agent.use_cases.generate_discovery_script_use_case import (
@@ -407,13 +407,13 @@ class GenerateScriptDriver:
 
     def _evaluate_self_check(self, discovery_path: Path, result: SmokeTestResult, scratch_db: Path) -> list[str]:
         """Return failure lines from the manifest+verifier self-check (empty = pass)."""
-        manifest = extract_manifest(discovery_path.read_text(encoding="utf-8"))
-        if manifest is None:
-            return ["no DISCOVERY_MANIFEST in script"]
+        manifest_result = extract_manifest_detailed(discovery_path.read_text(encoding="utf-8"))
+        if manifest_result.error is not None:
+            return [manifest_result.error]
         if not result.success:
             return ["discovery script crashed:\n" + result.output]
         db_rows = self._count_discovered_links(scratch_db)
-        return DiscoverySelfCheckVerifier().verify(manifest, result.output, db_rows)
+        return DiscoverySelfCheckVerifier().verify(manifest_result.manifest, result.output, db_rows)
 
     @staticmethod
     def _count_discovered_links(db_path: Path) -> int:

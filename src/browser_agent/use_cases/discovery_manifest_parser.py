@@ -13,7 +13,10 @@ from __future__ import annotations
 import ast
 import json
 import re
+from dataclasses import dataclass
 from urllib.parse import urljoin
+
+from pydantic import ValidationError
 
 from browser_agent.domain.discovery_manifest import DiscoveryManifest
 from browser_agent.domain.discovery_target import DiscoveryTarget
@@ -23,32 +26,69 @@ _TARGET_RE = re.compile(r"^DISCOVERY target=(.*?) found=(\d+) saved=(\d+)$")
 _TOTAL_RE = re.compile(r"^DISCOVERY total_saved=(\d+)$")
 
 
+@dataclass
+class ManifestExtractResult:
+    """Outcome of parsing ``DISCOVERY_MANIFEST`` — carries the reason on failure."""
+
+    manifest: DiscoveryManifest | None
+    error: str | None
+
+
 def extract_manifest(source: str) -> DiscoveryManifest | None:
     """Extract and validate ``DISCOVERY_MANIFEST`` from script source.
 
-    Returns ``None`` when there is no module-level ``DISCOVERY_MANIFEST``
-    assignment to a dict literal, or when validation fails.
+    Thin wrapper over :func:`extract_manifest_detailed` returning only the
+    manifest (``None`` on any failure). Kept for callers that only need the
+    value, e.g. :class:`DiscoveryAuditor`.
+    """
+    return extract_manifest_detailed(source).manifest
+
+
+def extract_manifest_detailed(source: str) -> ManifestExtractResult:
+    """Extract and validate ``DISCOVERY_MANIFEST``, returning the failure reason.
+
+    Returns a :class:`ManifestExtractResult` whose ``error`` field carries an
+    actionable message when the manifest is absent, not a dict literal, not
+    literal-evaluable (e.g. references a module constant), or fails pydantic
+    validation.
     """
     try:
         tree = ast.parse(source)
-    except SyntaxError:
-        return None
+    except SyntaxError as exc:
+        return ManifestExtractResult(None, f"DISCOVERY_MANIFEST source is not parseable: {exc}")
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
         for tgt in node.targets:
             if isinstance(tgt, ast.Name) and tgt.id == "DISCOVERY_MANIFEST":
                 if not isinstance(node.value, ast.Dict):
-                    return None
+                    return ManifestExtractResult(
+                        None,
+                        f"DISCOVERY_MANIFEST is not a dict literal (got {type(node.value).__name__})",
+                    )
                 try:
                     data = ast.literal_eval(node.value)
-                except (ValueError, SyntaxError):
-                    return None
+                except (ValueError, SyntaxError) as exc:
+                    name_node = next((n for n in ast.walk(node.value) if isinstance(n, ast.Name)), None)
+                    if name_node is not None:
+                        return ManifestExtractResult(
+                            None,
+                            "DISCOVERY_MANIFEST must be pure literals — ast.literal_eval cannot resolve names; "
+                            f"found name reference '{name_node.id}' at line {name_node.lineno} "
+                            f"(inline the value, do not reference module constants like {name_node.id})",
+                        )
+                    return ManifestExtractResult(
+                        None,
+                        f"DISCOVERY_MANIFEST is not literal-evaluable: {exc}",
+                    )
                 try:
-                    return DiscoveryManifest.model_validate(data)
-                except Exception:
-                    return None
-    return None
+                    manifest = DiscoveryManifest.model_validate(data)
+                except ValidationError as exc:
+                    return ManifestExtractResult(None, f"DISCOVERY_MANIFEST failed validation: {str(exc)[:300]}")
+                except Exception as exc:  # pragma: no cover — defensive
+                    return ManifestExtractResult(None, f"DISCOVERY_MANIFEST failed validation: {str(exc)[:300]}")
+                return ManifestExtractResult(manifest, None)
+    return ManifestExtractResult(None, "no DISCOVERY_MANIFEST in script")
 
 
 def parse_discovery_stdout(stdout: str) -> tuple[dict[str, int], dict[str, int], int | None]:

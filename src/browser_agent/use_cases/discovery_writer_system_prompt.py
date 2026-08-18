@@ -242,6 +242,11 @@ Discovery script contract:
   - MANIFEST (REQUIRED, lint rule 2c) — the script MUST define a
     module-level ``DISCOVERY_MANIFEST = {...}`` dict literal describing
     the collection shape. The harness parses it to verify the script.
+    The dict is parsed with ``ast.literal_eval`` — every value MUST be
+    an inline literal (string/int/list/dict). Do NOT reference module
+    constants (e.g. ``LISTING_URL``) inside ``DISCOVERY_MANIFEST``;
+    inline the literal value. A name reference makes the manifest
+    unparseable and fails the self-check.
     Three target shapes:
     fixed (IACHR-style category list)::
        DISCOVERY_MANIFEST = {"targets": {"kind": "fixed", "items": [
