@@ -266,3 +266,42 @@ def assert_fields_non_null(result: dict, fields: list[str]) -> None:
                 found = True
                 break
         assert found, f"Field '{field}' is null/empty in all {len(rows)} rows"
+
+
+def assert_all_links_processed(result: dict) -> None:
+    """Assert no discovered_links row is left status='discovered'.
+
+    The global-gather-timeout bug leaves links unprocessed with no
+    metadata row. This check queries the discovered_links table directly.
+    """
+    import sqlite3
+
+    db_path = result["db_path"]
+    if not db_path.exists():
+        pytest.fail(f"metadata.db not found at {db_path} — save_record was never called")
+    conn = sqlite3.connect(str(db_path))
+    try:
+        remaining = conn.execute("SELECT COUNT(*) FROM discovered_links WHERE status='discovered'").fetchone()[0]
+    except sqlite3.OperationalError:
+        remaining = 0
+    finally:
+        conn.close()
+    assert remaining == 0, (
+        f"{remaining} link(s) still status='discovered' — the worker pool "
+        f"was interrupted before draining all links. Smoke output:\n"
+        f"{result['smoke_output'][-2000:]}"
+    )
+
+
+def assert_linter_rules_clean(result: dict, rules: list[str]) -> None:
+    """Assert the emitted processing script has no error findings for the given rules."""
+    from browser_agent.use_cases.emitted_script_linter import EmittedScriptLinter
+
+    if result["script_path"] is None:
+        pytest.fail("No emitted processing script to lint")
+    code = result["script_path"].read_text(encoding="utf-8")
+    findings = EmittedScriptLinter().lint(code, "processing")
+    violations = [f for f in findings if f.rule in rules and f.severity == "error"]
+    assert not violations, f"Emitted script violates rules {rules}: " + "; ".join(
+        f"rule {f.rule} line {f.line}: {f.message}" for f in violations
+    )

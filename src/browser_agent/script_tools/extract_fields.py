@@ -95,4 +95,48 @@ async def extract_links(tab, selector: str, base_url: str = "") -> list[str]:
         if abs_url not in seen:
             seen.add(abs_url)
             out.append(abs_url)
-    return out
+
+
+async def extract_rows(tab, row_selector: str, cell_specs: list[dict], include_html: bool = False) -> list[dict]:
+    """Return one dict per matching row.
+
+    cell_specs: [{'field': str, 'selector': str, 'source': 'text'|'attr'|'href', 'attr': str}]
+    Each cell selector is evaluated relative to its row element. Returns [] on error.
+    When ``include_html`` is True, each record also carries ``source_html``
+    set to the row element's ``outerHTML`` (the row's serialized DOM). Use this
+    to satisfy the per-row HTML-capture requirement for listing-page-walk tasks
+    where whole-page ``save_page_html`` is the wrong granularity.
+    """
+    if not row_selector or not cell_specs:
+        return []
+    js = (
+        "(() => {"
+        "const rows = Array.from(document.querySelectorAll(" + json.dumps(row_selector) + "));"
+        "const specs = " + json.dumps(cell_specs) + ";"
+        "const includeHtml = " + json.dumps(bool(include_html)) + ";"
+        "const out = [];"
+        "for (const row of rows) {"
+        "const rec = {};"
+        "for (const s of specs) {"
+        "const el = row.querySelector(s.selector);"
+        "if (!el) { rec[s.field] = ''; continue; }"
+        "if (s.source === 'attr') rec[s.field] = (el.getAttribute(s.attr) || '').trim();"
+        "else if (s.source === 'href') rec[s.field] = (el.getAttribute('href') || '').trim();"
+        "else rec[s.field] = (el.textContent || '').trim();"
+        "}"
+        "if (includeHtml) rec['source_html'] = row.outerHTML;"
+        "out.push(rec);"
+        "}"
+        "return JSON.stringify(out);"
+        "})()"
+    )
+    try:
+        raw = await tab.evaluate(js)
+    except Exception:
+        return []
+    if not raw:
+        return []
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return []

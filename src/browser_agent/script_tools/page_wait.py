@@ -293,3 +293,35 @@ async def goto_ready(tab, url, timeout=6.0, quiet_window_ms=300) -> None:
     except Exception:
         pass
     await tab.sleep(0.4)
+
+
+_CHALLENGE_TITLES = (
+    "just a moment",
+    "attention required",
+    "checking your browser",
+    "verify you are human",
+    "human verification",
+    "are you human",
+    "security check",
+    "captcha",
+)
+
+
+async def is_challenge(tab) -> bool:
+    """Return True when the current page is an anti-bot challenge page."""
+    try:
+        title = str(await tab.evaluate("document.title") or "").lower()
+    except Exception:
+        return False
+
+
+async def wait_for_challenge_clear(tab, max_wait: float = 45.0, poll_interval: float = 5.0) -> bool:
+    """Poll until the challenge clears; True when clear, False on timeout."""
+    waited = 0.0
+    while waited < max_wait:
+        if not await is_challenge(tab):
+            return True
+        await tab.sleep(poll_interval)
+        waited += poll_interval
+
+    return not await is_challenge(tab)

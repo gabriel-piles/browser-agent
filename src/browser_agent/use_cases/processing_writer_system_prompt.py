@@ -49,13 +49,14 @@ does inline extraction only (no ``load_discovered_links()`` call).
       from script_tools.save_record import save_record, load_failed_downloads
       from script_tools.save_page_html import save_page_html
       from script_tools.pdf_download import download_pdf_curl_cffi, download_pdf_browser, download_file_curl_cffi, download_file_browser
-      from script_tools.page_wait import wait_for_page_ready, wait_for_anchors, prepare_page_wait, goto_ready
+      from script_tools.page_wait import wait_for_page_ready, wait_for_anchors, prepare_page_wait, goto_ready, is_challenge, wait_for_challenge_clear
       from script_tools.start_browser import start_browser
       from script_tools.dom_helpers import get_text, get_attr, trusted_click
       from script_tools.form_helpers import select_filter_value
       from script_tools.discovered_links_store import load_discovered_links, mark_link_processed
       from script_tools._file_utils import pdf_id_for, doc_id_for
-      from script_tools.extract_fields import extract_fields, extract_links
+      from script_tools.extract_fields import extract_fields, extract_links, extract_rows
+      from script_tools.text_utils import normalize_text, filter_rows
    NEVER write ``from script_tools import X`` — ``script_tools`` is a
    package of modules, not an ``__init__`` that re-exports names. Always
    import from the submodule: ``from script_tools.start_browser import start_browser``.
@@ -79,6 +80,11 @@ does inline extraction only (no ``load_discovered_links()`` call).
       async def select_filter_value(tab, selector: str, value) -> bool
       async def extract_fields(tab, specs: list[dict]) -> dict[str, str | list[str]]
       async def extract_links(tab, selector: str, base_url: str = "") -> list[str]
+      async def extract_rows(tab, row_selector: str, cell_specs: list[dict], include_html: bool = False) -> list[dict]
+      async def is_challenge(tab) -> bool
+      async def wait_for_challenge_clear(tab, max_wait=45.0, poll_interval=5.0) -> bool
+      def normalize_text(value: str) -> str
+      def filter_rows(rows, field, keep=None, drop=None) -> tuple[list, list]
       async def start_browser(headless=None, user_data_dir=None) -> Browser
       def pdf_id_for(url: str) -> str
       def doc_id_for(url) -> str
@@ -163,16 +169,14 @@ does inline extraction only (no ``load_discovered_links()`` call).
     CSS ``i`` flag for case-insensitive extension matching:
     ``a[href$='.doc' i]`` matches ``.DOC`` and ``.doc``.
 
-5. Cloudflare challenge detection — after every ``goto_ready`` (or
-   equivalent navigation+wait), check whether the page is a Cloudflare
-   challenge by testing ``document.title`` for "Just a moment" or
-   "Attention Required". If a challenge is detected, wait 10s and
-   re-check, up to 3 times (30s total). Only proceed to extract/analyze
-   after the challenge clears. If it doesn't clear after 3 retries, log
-   a warning and skip that page — do NOT attempt to extract from a
-   challenge page (you'll get 0 results and waste a tool call). Call
-   ``await goto_ready(tab, url)`` from ``script_tools.page_wait`` — do
-   NOT redefine it.
+5. Cloudflare challenge detection — after every ``goto_ready``, call
+   ``await wait_for_challenge_clear(tab, max_wait=30.0)`` from
+   ``script_tools.page_wait``; it polls the page title and returns True
+   once the challenge clears. To branch on the current state, use
+   ``if await is_challenge(tab):``. NEVER hand-roll a ``document.title``
+   check or define your own ``is_challenge`` — the helpers are
+   correct-by-construction. If the challenge does not clear, log a
+   warning and skip that page.
 
 5a. Cloudflare session warm-up — when the target site is behind
     Cloudflare (the ``download_pdf`` probe returned 403, or the
@@ -385,6 +389,16 @@ does inline extraction only (no ``load_discovered_links()`` call).
     strip detaches held handles (``DOM.resolveNode`` -32000). Hidden
     elements (``display:none``) ARE found by ``querySelector`` — you do
     NOT need to "open" a dropdown before extracting links from inside it.
+    LISTING-PAGE-WALK EXCEPTION — for listing-page-walk tasks (rule 20)
+    where the metadata lives in table rows on a listing page and
+    whole-page HTML is the wrong granularity, ``source_html`` per row
+    satisfies the HTML-capture intent. Call
+    ``rows = await extract_rows(tab, row_selector, CELL_SPECS, include_html=True)``
+    and store ``row["source_html"]`` (the row's outerHTML) in every
+    ``save_record`` data dict for variants derived from that row. The
+    linter accepts a ``source_html`` key in lieu of ``save_page_html`` +
+    ``html_filename`` for this task shape. ``save_page_html`` remains
+    MANDATORY for the pre-existing per-document-page shape (above).
 
 14b. Per-document gate + download-widget variants — when the task
     processes many document pages, gate each page's readiness on the
@@ -566,6 +580,84 @@ does inline extraction only (no ``load_discovered_links()`` call).
     into a 4-record demo while printing "SUCCESS". The ONLY acceptable
     bounds are ones the task explicitly states.
 
+18. Await EVERY async helper — every ``script_tools`` helper whose
+    signature is ``async def`` (rule 0) MUST be called with ``await``.
+    A coroutine object is always truthy: ``if not is_challenge(tab)`` is
+    always False and ``or is_challenge(tab)`` is always True, silently
+    disabling the check. The ONLY sync helpers are ``save_record``,
+    ``load_failed_downloads``, ``load_discovered_links``,
+    ``mark_link_processed``, ``pdf_id_for``, ``doc_id_for`` (rule 0
+    marks them SYNC). Lint-enforced (rule 18).
+
+19. No hand-rolled row filters — NEVER write
+    ``re.match``/``re.search``/``re.fullmatch`` to decide whether to
+    keep or drop a scraped row (``if not re.match(...): continue`` /
+    ``return 0``). A hard-coded filter silently drops rows whose values
+    differ in form (e.g. ``17/1`` vs ``A/HRC/RES/17/1``) and turns a
+    "download all" task into 0 records. Keep every row by default. If
+    the task explicitly requires filtering, use
+    ``filter_rows(rows, field, keep=..., drop=...)`` from
+    ``script_tools.text_utils`` with an explicit pattern list — it logs
+    every dropped row so data loss is never silent. Lint-enforced
+    (rule 19).
+20. Listing-page-walk targets — a discovered link may be a LISTING/TABLE
+    PAGE (e.g. a session's ``res-dec-stat`` page), not a per-document page.
+    Gate on the TABLE-ROW selector, NOT on a per-document download widget
+    (rule 14b's gate reframes: the listing's table rows are the data
+    carrier). Per listing page:
+    a) Navigate to the discovered URL and gate with
+       ``wait_for_anchors(tab, "<row selector>", timeout=20)`` — the row
+       selector is the one the Explorer verified for the document-table
+       rows across ALL sections (Resolutions + Decisions + President's
+       statements), scoped with ``:is()`` if multi-table (rule 4d).
+    b) Extract rows with HTML::
+         rows = await extract_rows(tab, "<row selector>", CELL_SPECS,
+                                   include_html=True)
+       ``CELL_SPECS`` read, per row: ``document_ref`` (adopted-text
+       column link TEXT — old-era hrefs are generic with no symbol, so
+       the ref is in the link text, not the href), ``title`` (title
+       column text), ``date``/``item``/``action`` (action-taken column
+       text), ``adopted_href`` (adopted-text column link href),
+       ``draft_ref`` + ``draft_href`` (draft column link text + href).
+       ``include_html=True`` populates ``row["source_html"]`` = the
+       row's outerHTML — store it verbatim in EVERY ``save_record`` data
+       dict for variants derived from that row. This is the task's
+       ``source_html`` requirement; it replaces ``html_filename``/
+       ``save_page_html`` for this task shape (rule 14 listing-page-walk
+       exception; the linter agrees).
+    c) Per row, emit up to TWO documents: the ADOPTED (from
+       ``adopted_href``/``document_ref``) and the DRAFT (from
+       ``draft_href``/``draft_ref``, when not "n/a"/"N/A"). For each
+       document, resolve EN/ES PDF/DOC/DOCX download URLs: PREFER
+       DERIVING ``https://daccess-ods.un.org/access.nsf/Get?Open&DS=<ref>&Lang=E``
+       (and ``&Lang=S``) when the Explorer verified that pattern;
+       otherwise navigate the viewer href (``undocs.org/<ref>`` /
+       ``ap.ohchr.org``) and ``extract_links`` the language/format
+       anchors. The Explorer records the chosen strategy in the task
+       prompt.
+    d) For each (document, language, format) variant: download via
+       ``download_pdf_*`` (PDF) or ``download_file_*`` (DOC/DOCX,
+       ``download_role="supporting"``), then ``save_record`` with keys:
+       ``document_ref``, ``document_status`` (``"Draft"`` if ``"L"`` in
+       ``document_ref`` else ``"Adopted"``), ``language``
+       (``"English"``/``"Spanish"``), ``file_type``
+       (``"pdf"``/``"doc"``/``"docx"``), ``file_url`` (absolute,
+       percent-encoded per rule 13), ``title``, ``date``,
+       ``source_html``, ``source_page_url`` (the listing-page URL),
+       plus the existing download-discipline keys
+       (``pdf_filename``/``supporting_filename``/``download_status``/
+       ``download_error``). ``source_url`` (PK) =
+       ``f"{listing_url}/{document_ref}/{language}/{file_type}"``
+       (content-stable; never a position index — rule 13).
+    e) Missing-translation: if a language variant is absent, SKIP it
+       without error — do NOT record a ``failed`` row for a merely-absent
+       variant. DOC/DOCX may not exist for every ref; capture whatever
+       formats appear (the task's "whatever format they appear" clause).
+       No failure for absent DOC/DOCX.
+    f) Rate limiting: ``await tab.sleep(1.5)`` between listing-page
+       navigations (the download helpers already throttle between
+       downloads).
+
 Processing script contract:
   - When a discovery script was emitted (links in the DB):
     Skeleton: ``start_browser`` → open worker tabs (if concurrency) →
@@ -661,9 +753,14 @@ arrow function, slicing an ``await tab.evaluate(...)`` result (rule 9),
 called with a tab as the first argument (rule 8c — the curl_cffi variants
 take ``(url, save_path, tab)``, NOT ``(tab, url, save_path)``), and a heading/
 title ``ready_selector`` (rule 14), and a processing script that downloads
-documents (``download_pdf_*`` / ``download_file_*``) but never calls
-``save_page_html`` and never stores ``html_filename`` in a ``save_record``
-data dict (rule 14). Fix every violation it reports.
+documents (``download_pdf_*`` / ``download_file_*``) but never captures
+page HTML — i.e. has no ``save_page_html`` + ``html_filename`` key AND no
+``source_html`` key in any ``save_record`` data dict (rule 14; for
+listing-page-walk tasks ``source_html`` via
+``extract_rows(include_html=True)`` is the accepted alternative), an
+async helper called without ``await`` (rule 18), and a hard-coded
+``re.match``/``re.search``/``re.fullmatch`` row filter (rule 19). Fix
+every violation it reports.
 
 Remember: use the VERIFIED SELECTORS verbatim, write ONE processing
 script, validate ONCE, emit AS-IS. Your script reads links, extracts

@@ -52,6 +52,11 @@ _DISCOVERY_NO_SAVE_MSG = (
     "script reads links from load_discovered_links() which reads the DB"
 )
 
+_DISCOVERY_MANIFEST_MSG = (
+    "discovery script MUST define a module-level DISCOVERY_MANIFEST = {...} dict "
+    "(targets, count_selector, min_per_target, max_links_per_item) — see the discovery contract"
+)
+
 
 def _check_discovery_save_link(python_code: str) -> list[LintFinding]:
     """Flag discovery scripts that never call ``save_discovered_link``."""
@@ -119,18 +124,28 @@ def _check_supporting_status(python_code: str) -> list[LintFinding]:
 
 _HTML_CAPTURE_MSG = (
     "processing script downloads documents but never captures page HTML "
-    "(rule 14). Call result = await save_page_html(tab, out_dir, page_url) "
-    "for the page where each PDF/doc was found and store "
+    "(rule 14). Either: (a) call result = await save_page_html(tab, out_dir, "
+    "page_url) for the page where each PDF/doc was found and store "
     "Path(result['saved_path']).name as 'html_filename' (and the page URL "
     "as 'source_page_url') in EVERY save_record data dict that has a "
-    "pdf_filename or supporting_filename. On SPA pages pass ready_selector "
-    "naming the late-bound metadata element. Set 'html_filename': '' only "
-    "when no HTML was captured for that row."
+    "pdf_filename or supporting_filename — use this for per-document-page "
+    "tasks; or (b) for listing-page-walk tasks where metadata lives in table "
+    "rows and whole-page HTML is the wrong granularity, call "
+    "extract_rows(tab, row_selector, cell_specs, include_html=True) and "
+    "store its 'source_html' field (the row's outerHTML) in every save_record "
+    "data dict. On SPA pages pass ready_selector naming the late-bound "
+    "metadata element. Set 'html_filename': '' only when no HTML was captured "
+    "for that row."
 )
 
 
 def _check_html_capture(python_code: str) -> list[LintFinding]:
-    """Rule 14: a script that downloads documents must also capture page HTML."""
+    """Rule 14: a script that downloads documents must also capture page HTML.
+
+    Accepts either ``save_page_html`` + ``html_filename`` key (per-document-page
+    shape) or a ``source_html`` key (listing-page-walk shape, populated via
+    ``extract_rows(include_html=True)``).
+    """
     download = re.search(
         r"\b(?:download_pdf_browser|download_pdf_curl_cffi|download_file_browser|download_file_curl_cffi)\s*\(",
         python_code,
@@ -141,7 +156,8 @@ def _check_html_capture(python_code: str) -> list[LintFinding]:
         return []
     has_html_call = re.search(r"\bsave_page_html\s*\(", python_code) is not None
     has_html_key = re.search(r"['\"]html_filename['\"]", python_code) is not None
-    if has_html_call and has_html_key:
+    has_source_html_key = re.search(r"['\"]source_html['\"]", python_code) is not None
+    if (has_html_call and has_html_key) or has_source_html_key:
         return []
     return [
         LintFinding(
@@ -731,6 +747,7 @@ def _check_script_tools_package_import(python_code: str) -> list[LintFinding]:
             "discovered_links_store",
             "_file_utils",
             "run_config",
+            "text_utils",
         }
     )
     for node in ast.walk(tree):
@@ -788,7 +805,6 @@ def _check_direct_zendriver_import(python_code: str) -> list[LintFinding]:
 # Separated from general lint rules so the driver can log them distinctly.
 _ZENDRIVER_RULES: frozenset[str] = frozenset(
     {
-        "2",  # hand-written discovery loop instead of discover_links helper
         "0",  # zd.start() vs start_browser()
         "4b",  # el.text_content() is a Playwright method, not zendriver
         "7",  # Playwright-only selectors (CDP rejects them)
@@ -811,7 +827,6 @@ _ZENDRIVER_RULE_NAMES: dict[str, str] = {
     "4b": "element handle — used el.text_content() which is not a zendriver method (use get_text)",
     "7": "selectors — uses Playwright-only pseudo-selectors rejected by CDP",
     "8": "HTTP client — uses raw HTTP lib instead of zendriver tab.get()",
-    "2": "discovery loop — hand-written scroll/load-more loop instead of discover_links helper",
     "11": "save_record — awaited a synchronous helper (TypeError at runtime)",
     "13": "result shape — uses file_size key instead of size",
     "8c": "download helper args — called download_pdf_curl_cffi/download_file_curl_cffi with tab first; curl_cffi variants take (url, save_path, tab), browser variants take (tab, url, save_path)",
@@ -904,42 +919,20 @@ def _check_skeleton(python_code: str) -> list[LintFinding]:
     return findings
 
 
-def _loop_has_discovery_signals(body: list[ast.stmt]) -> bool:
-    """True when a loop body has scroll + link-read + growth/termination signals."""
-    has_scroll = has_linkread = has_growth = False
-    for node in ast.walk(ast.Module(body=body, type_ignores=[])):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if "scrollTo" in node.value or "scrollHeight" in node.value:
-                has_scroll = True
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if "querySelectorAll" in node.value:
-                has_linkread = True
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            if node.func.id in {"get_links", "_count_links"}:
-                has_linkread = True
-        if isinstance(node, ast.Name) and node.id in {"stable", "prev"}:
-            has_growth = True
-    return has_scroll and has_linkread and has_growth
-
-
-def _check_handwritten_discovery(python_code: str) -> list[LintFinding]:
-    """Rule 2: flag a hand-written discovery loop when no discover_links call exists."""
+def _check_discovery_manifest(python_code: str) -> list[LintFinding]:
+    """Rule 2c: require a module-level ``DISCOVERY_MANIFEST = {...}`` dict literal."""
     try:
         tree = ast.parse(python_code)
     except SyntaxError:
         return []
-    if "discover_links(" not in python_code:
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.For, ast.While, ast.AsyncFor)) and _loop_has_discovery_signals(node.body):
-                return [
-                    LintFinding(
-                        rule="2",
-                        severity="error",
-                        message="hand-written discovery loop forbidden — call discover_links(tab, ...) from script_tools.discover_links (rule 2)",
-                        line=node.lineno,
-                    )
-                ]
-    return []
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name) and tgt.id == "DISCOVERY_MANIFEST":
+                    if isinstance(node.value, ast.Dict):
+                        return []
+                    return [LintFinding(rule="2c", severity="error", message=_DISCOVERY_MANIFEST_MSG, line=node.lineno)]
+    return [LintFinding(rule="2c", severity="error", message=_DISCOVERY_MANIFEST_MSG, line=None)]
 
 
 def _check_handwritten_extraction(python_code: str) -> list[LintFinding]:
@@ -978,6 +971,169 @@ def _check_handwritten_extraction(python_code: str) -> list[LintFinding]:
                     )
                 )
     return out
+
+
+_AWAIT_SAFE_FUNCS = frozenset({"gather", "wait", "create_task", "ensure_future", "wait_for", "as_completed", "run"})
+
+
+def _is_awaited(call: ast.Call, parents: list[ast.AST]) -> bool:
+    """True when ``call`` is directly awaited or passed to an asyncio primitive."""
+    for parent in parents:
+        if isinstance(parent, ast.Await):
+            return True
+        if isinstance(parent, ast.Call):
+            func = parent.func
+            if isinstance(func, ast.Attribute) and func.attr in _AWAIT_SAFE_FUNCS:
+                if isinstance(func.value, ast.Name) and func.value.id == "asyncio":
+                    return True
+            if isinstance(func, ast.Name) and func.id in _AWAIT_SAFE_FUNCS:
+                return True
+        if isinstance(parent, (ast.stmt, ast.AsyncFunctionDef, ast.FunctionDef, ast.Module)):
+            break
+    return False
+
+
+def _check_unawaited_async_call(python_code: str) -> list[LintFinding]:
+    """Rule 18: flag an ``async def`` helper called without ``await``.
+
+    A bare coroutine object is always truthy: ``if not is_challenge(t)``
+    is always False and ``or is_challenge(t)`` is always True, silently
+    disabling the check.
+    """
+    out: list[LintFinding] = []
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return out
+    async_names = {n.name for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)}
+    if not async_names:
+        return out
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Name) or func.id not in async_names:
+            continue
+        if func.id == node.__class__.__name__:
+            continue
+        parents = _parents_of(tree, node)
+        if _is_awaited(node, parents):
+            continue
+        out.append(
+            LintFinding(
+                rule="18",
+                severity="error",
+                message=(
+                    f"async function '{func.id}' called without await — "
+                    "a coroutine object is always truthy; "
+                    f"'if not {func.id}(...)' is always False and "
+                    f"'or {func.id}(...)' is always True. "
+                    "Await it, or pass it to asyncio.gather(...)."
+                ),
+                line=node.lineno,
+            )
+        )
+    return out
+
+
+_REGEX_FUNCS = frozenset({"match", "search", "fullmatch"})
+
+
+def _parents_of(tree: ast.AST, target: ast.AST) -> list[ast.AST]:
+    """Return the full ancestor chain of ``target`` (immediate parent first)."""
+    parent_map: dict[int, ast.AST] = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parent_map[id(child)] = parent
+    chain: list[ast.AST] = []
+    cur = parent_map.get(id(target))
+    while cur is not None:
+        chain.append(cur)
+        cur = parent_map.get(id(cur))
+    return chain
+
+
+def _contains_node(root: ast.AST, target: ast.AST) -> bool:
+    """True when ``target`` is ``root`` or nested within it."""
+    if root is target:
+        return True
+    for child in ast.iter_child_nodes(root):
+        if _contains_node(child, target):
+            return True
+    return False
+
+
+def _body_has_continue_or_return(body: list[ast.stmt]) -> bool:
+    """True when any statement in ``body`` is/contains a ``continue`` or ``return``."""
+    for stmt in body:
+        for node in ast.walk(stmt):
+            if isinstance(node, (ast.Continue, ast.Return)):
+                return True
+    return False
+
+
+def _check_hardcoded_row_filter(python_code: str) -> list[LintFinding]:
+    """Rule 19: flag a hard-coded ``re.match``/``re.search``/``re.fullmatch`` row filter.
+
+    ``if not re.match(...): continue`` silently drops rows whose values
+    differ in form (e.g. ``17/1`` vs ``A/HRC/RES/17/1``).
+    """
+    out: list[LintFinding] = []
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return out
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        is_regex = False
+        if isinstance(func, ast.Name) and func.id in _REGEX_FUNCS:
+            is_regex = True
+        elif (
+            isinstance(func, ast.Attribute)
+            and func.attr in _REGEX_FUNCS
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "re"
+        ):
+            is_regex = True
+        if not is_regex:
+            continue
+        parents = _parents_of(tree, node)
+        for parent in parents:
+            if not isinstance(parent, (ast.If, ast.While)):
+                continue
+            if not _contains_node(parent.test, node):
+                continue
+            if not _is_not_operand(parent.test, node):
+                continue
+            if _body_has_continue_or_return(parent.body) or _body_has_continue_or_return(parent.orelse):
+                out.append(
+                    LintFinding(
+                        rule="19",
+                        severity="error",
+                        message=(
+                            "hard-coded regex row filter — use "
+                            "filter_rows(rows, field, keep=..., drop=...) "
+                            "from script_tools.text_utils (or do not filter); "
+                            "a hard-coded re.match drops rows whose values "
+                            "differ in form (e.g. '17/1' vs 'A/HRC/RES/17/1')."
+                        ),
+                        line=node.lineno,
+                    )
+                )
+                break
+    return out
+
+
+def _is_not_operand(test: ast.AST, target: ast.AST) -> bool:
+    """True when ``target`` is the operand of a ``not`` within ``test``."""
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        return _contains_node(test.operand, target)
+    for child in ast.iter_child_nodes(test):
+        if _is_not_operand(child, target):
+            return True
+    return False
 
 
 _DOC_EXTENSIONS = ("pdf", "doc", "docx", "rtf", "xls", "xlsx", "ppt", "pptx")
@@ -1192,9 +1348,9 @@ class EmittedScriptLinter:
             _check_bare_paths,
             _check_self_contained,
             _check_tab_select_misuse,
-            _check_handwritten_discovery,
+            _check_discovery_manifest,
             _check_unscoped_compound_selector,
-            _check_case_sensitive_extension_selector,
+            _check_unawaited_async_call,
         )
         self._PROCESSING_CHECKS = (
             _check_syntax,
@@ -1220,11 +1376,12 @@ class EmittedScriptLinter:
             _check_global_gather_timeout,
             _check_retry_phase,
             _check_gate_lock,
-            _check_handwritten_discovery,
             _check_handwritten_extraction,
             _check_case_sensitive_extension_selector,
             _check_rename_download,
             _check_empty_file_url,
+            _check_unawaited_async_call,
+            _check_hardcoded_row_filter,
         )
 
     def lint(self, python_code: str, kind: str = "processing") -> list[LintFinding]:

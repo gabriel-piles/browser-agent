@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -46,7 +47,8 @@ from browser_agent.drivers.generation.task_reader import TaskReader
 from browser_agent.logging_config import configure_logging
 from browser_agent.script_tools.discovered_links_store import preseed_sample_links
 from browser_agent.use_cases.concurrency_context_renderer import render_concurrency_context
-from browser_agent.use_cases.discovery_output_parser import under_collected_paths
+from browser_agent.use_cases.discovery_manifest_parser import extract_manifest
+from browser_agent.use_cases.discovery_self_check_verifier import DiscoverySelfCheckVerifier
 from browser_agent.use_cases.emitted_script_linter import EmittedScriptLinter
 from browser_agent.use_cases.generate_discovery_script_use_case import (
     GenerateDiscoveryScriptUseCase,
@@ -67,9 +69,9 @@ from browser_agent.use_cases.script_repair_prompt import (
 DEFAULT_PROMPT = "Visit https://quotes.toscrape.com and print every quote on the first three pages."
 
 _MAX_LINT_REPAIRS = 1
-# Two repair cycles: the first repairs UNDER-COLLECTED (self-check),
-# the second repairs discrepancies flagged by the independent
-# DiscoveryAuditor (post-run cross-filter verification).
+# Two repair cycles: the first repairs self-check verifier failures
+# (manifest + stdout protocol + DB row count), the second repairs
+# discrepancies flagged by the independent DiscoveryAuditor.
 _MAX_DISCOVERY_REPAIRS = 2
 _MAX_PROCESSING_REPAIRS = 3
 
@@ -296,18 +298,27 @@ class GenerateScriptDriver:
         context: str,
         emit_results: list[EmitResult],
     ) -> None:
-        """Run the emitted discovery script, repair UNDER-COLLECTED, then run the independent audit."""
+        """Run the emitted discovery script, repair on verifier failures, then run the independent audit."""
         discovery_path = emit_results[0].script_path
+        scratch_db = discovery_path.parent.parent / "smoke" / "metadata.db"
+        if scratch_db.exists():
+            scratch_db.unlink()
         logger.info("running discovery self-check {path}", path=discovery_path)
         result = await smoke_test_script(discovery_path, timeout=_DISCOVERY_RUN_TIMEOUT_S, timeout_is_success=False)
         log_smoke_test_result(result, discovery_path, attempt=1)
+        failures = self._evaluate_self_check(discovery_path, result, scratch_db)
         current_script_set = script_set
         current_disc_path = discovery_path
         current_stdout = result.output
-        if not (result.success and "UNDER-COLLECTED" not in result.output):
-            paths = under_collected_paths(result.output)
-            logger.warning("discovery self-check UNDER-COLLECTS on {paths} — running repair turn", paths=paths)
-            new_discovery = await self._generator.repair_discovery(discovery_uc, format_discovery_repair(result.output))
+        if failures:
+            logger.warning(
+                "discovery self-check FAILED — {n} issue(s); running repair turn\n{report}",
+                n=len(failures),
+                report="\n".join(failures),
+            )
+            new_discovery = await self._generator.repair_discovery(
+                discovery_uc, format_discovery_repair("\n".join(failures) or result.output)
+            )
             current_script_set = current_script_set.replace_discovery(new_discovery)
             self._cleanup_emit_artifacts(emit_results)
             emit_results.clear()
@@ -323,18 +334,16 @@ class GenerateScriptDriver:
             )
             log_smoke_test_result(re_result, current_disc_path, attempt=2)
             current_stdout = re_result.output
-            if re_result.success and "UNDER-COLLECTED" not in re_result.output:
-                logger.info("discovery self-check passed after repair")
-            else:
+            re_failures = self._evaluate_self_check(current_disc_path, re_result, scratch_db)
+            if re_failures:
                 logger.error(
-                    "discovery self-check STILL under-collects after repair on {paths} — proceeding to audit",
-                    paths=under_collected_paths(re_result.output),
+                    "discovery self-check STILL failing after repair — proceeding to audit\n{report}",
+                    report="\n".join(re_failures),
                 )
+            else:
+                logger.info("discovery self-check passed after repair")
         else:
             logger.info("discovery self-check passed — proceeding to independent audit")
-        # Independent cross-filter audit — does NOT trust the script's
-        # own UNDER-COLLECTED signal; uses a correct-by-construction
-        # selector as an oracle. Triggers a second repair on discrepancy.
         await self._discovery_audit_repair(
             task,
             current_script_set,
@@ -367,12 +376,15 @@ class GenerateScriptDriver:
         db_path = run_path / "metadata.db"
         auditor = DiscoveryAuditor(session, db_path)
         logger.info("running independent discovery audit {path}", path=discovery_path)
-        report = await auditor.audit(discovery_path, self_check_stdout)
-        if not report:
+        outcome = await auditor.audit(discovery_path, self_check_stdout)
+        if outcome.status == "skipped":
+            logger.info("discovery audit skipped — {reason}", reason=outcome.reason)
+            return
+        if outcome.status == "passed":
             logger.info("discovery audit passed — no discrepancies")
             return
         logger.warning("discovery audit found discrepancies — running repair turn")
-        new_discovery = await self._generator.repair_discovery(discovery_uc, format_discovery_repair(report))
+        new_discovery = await self._generator.repair_discovery(discovery_uc, format_discovery_repair(outcome.report))
         new_script_set = script_set.replace_discovery(new_discovery)
         self._cleanup_emit_artifacts(emit_results)
         emit_results.clear()
@@ -384,13 +396,38 @@ class GenerateScriptDriver:
             new_disc_emit.script_path, timeout=_DISCOVERY_RUN_TIMEOUT_S, timeout_is_success=False
         )
         log_smoke_test_result(re_result, new_disc_emit.script_path, attempt=3)
-        if re_result.success and "UNDER-COLLECTED" not in re_result.output:
-            logger.info("discovery self-check passed after audit repair")
-        else:
+        re_failures = self._evaluate_self_check(new_disc_emit.script_path, re_result, db_path)
+        if re_failures:
             logger.error(
-                "discovery self-check STILL under-collects after audit repair on {paths} — script emitted anyway",
-                paths=under_collected_paths(re_result.output),
+                "discovery self-check STILL failing after audit repair — script emitted anyway\n{report}",
+                report="\n".join(re_failures),
             )
+        else:
+            logger.info("discovery self-check passed after audit repair")
+
+    def _evaluate_self_check(self, discovery_path: Path, result: SmokeTestResult, scratch_db: Path) -> list[str]:
+        """Return failure lines from the manifest+verifier self-check (empty = pass)."""
+        manifest = extract_manifest(discovery_path.read_text(encoding="utf-8"))
+        if manifest is None:
+            return ["no DISCOVERY_MANIFEST in script"]
+        if not result.success:
+            return ["discovery script crashed:\n" + result.output]
+        db_rows = self._count_discovered_links(scratch_db)
+        return DiscoverySelfCheckVerifier().verify(manifest, result.output, db_rows)
+
+    @staticmethod
+    def _count_discovered_links(db_path: Path) -> int:
+        """Return ``SELECT COUNT(*) FROM discovered_links`` (0 on miss)."""
+        if not db_path.exists():
+            return 0
+        uri = f"file:{db_path.as_posix()}?mode=ro"
+        try:
+            conn = sqlite3.connect(uri, uri=True)
+            count = conn.execute("SELECT COUNT(*) FROM discovered_links").fetchone()[0]
+            conn.close()
+        except sqlite3.Error:
+            return 0
+        return int(count)
 
     @staticmethod
     def _cleanup_emit_artifacts(emit_results: list[EmitResult]) -> None:

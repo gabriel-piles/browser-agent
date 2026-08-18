@@ -6,7 +6,13 @@ from typing import Any
 
 from loguru import logger
 
-from browser_agent.adapters.execution.file_ops import existing_size, pdf_filename_for, write_atomic, assert_pdf_magic
+from browser_agent.adapters.execution.file_ops import (
+    existing_size,
+    pdf_filename_for,
+    write_atomic,
+    assert_pdf_magic,
+    is_pdf_bytes,
+)
 from browser_agent.configuration import PROJECT_ROOT
 from browser_agent.domain.download_result import DownloadResult
 from browser_agent.ports.pdf_downloader_port import PdfDownloaderPort
@@ -89,6 +95,11 @@ class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
                 if attempt < _RETRIES:
                     await asyncio.sleep(_RETRY_DELAY_S * attempt)
                 continue
+            if not is_pdf_bytes(r.content):
+                last_error = "non-PDF body (magic check failed)"
+                if attempt < _RETRIES:
+                    await asyncio.sleep(_RETRY_DELAY_S * attempt)
+                continue
             write_atomic(path, r.content)
             try:
                 assert_pdf_magic(path, r.content, url)
@@ -142,5 +153,7 @@ class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
             return f"file exceeds {_MAX_SIZE_BYTES // (1024 * 1024)} MB limit"
         ct = r.headers.get("content-type", "")
         if "pdf" not in ct.lower():
-            logger.warning("download_pdf: content-type is {!r}, saving anyway", ct)
+            logger.warning(
+                "download_pdf: content-type is {!r}, not a PDF label; verifying PDF magic bytes before saving", ct
+            )
         return ""

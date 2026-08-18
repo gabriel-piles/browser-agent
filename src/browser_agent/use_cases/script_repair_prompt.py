@@ -23,13 +23,15 @@ _SMOKE_HEADER = (
     "crash below and emit the corrected GeneratedScript.\n\n"
 )
 _DISCOVERY_HEADER = (
-    "An independent verification script re-walked the site and proved your "
-    "emitted script's LINK DISCOVERY is INCOMPLETE: it under-collects target "
-    "links on the paths listed below (e.g. it stops at page one). This is NOT "
-    "a validation attempt — it does NOT consume one. Fix the discovery loop "
-    "(scroll / load-more trigger / dropdown iteration) so it reaches the "
-    "site-advertised totals on every path, keeping the rest of the pipeline "
-    "intact, and emit the corrected GeneratedScript.\n\n"
+    "An independent verification step proved the emitted script's LINK "
+    "DISCOVERY is incomplete or its reported counts do not match an "
+    "independent re-walk of the site (e.g. it under-collects targets, "
+    "stops at page one, or the manifest/stdout protocol is wrong). This "
+    "is NOT a validation attempt — it does NOT consume one. Fix the "
+    "discovery logic (manifest, target enumeration, scroll / load-more "
+    "trigger, stdout protocol) so it reaches the site-advertised totals "
+    "on every target, keeping the rest of the pipeline intact, and emit "
+    "the corrected GeneratedScript.\n\n"
 )
 
 

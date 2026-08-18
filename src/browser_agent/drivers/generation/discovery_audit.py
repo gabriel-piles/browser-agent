@@ -1,59 +1,42 @@
-"""Independent post-run audit of a discovery script's link collection.
+"""Shape-agnostic independent audit of a discovery script's collection.
 
-After the discovery self-check finishes, :class:`DiscoveryAuditor`
-re-walks a SAMPLE of filter values using a correct-by-construction JS
-selector and compares the independent count against the script's
-collected count (parsed from self-check stdout) and the
-``discovered_links`` rows in ``metadata.db``. Discrepancies trigger a
-repair turn.
+After the self-check finishes, :class:`DiscoveryAuditor` re-walks the
+site independently and compares its own count against the script's
+reported ``found`` counts (parsed from the self-check stdout via the
+uniform ``DISCOVERY target=... found=...`` protocol). Discrepancies
+trigger a repair turn.
 
 The audit is an INDEPENDENT ORACLE — it does not trust the script's
-own ``UNDER-COLLECTED`` signal. Its selector is immune to both the
-comma-scoping bug (``querySelectorAll`` is called on the scope element,
-so all comma-parts are scoped) and the case-sensitivity bug (the CSS
-``i`` flag). If the script's selector is buggy, the audit detects the
-mismatch.
-
-Best-effort: if the script's structure cannot be parsed (the agent
-used a different shape than ``SUBCATEGORIES`` + ``DOC_SELECTOR``), the
-audit logs a warning and skips — the lint rules still catch the bug
-deterministically. The audit does NOT need an LLM; it is pure
-deterministic code, making it fast and reliable.
+own counts or its selectors. It reads the script's
+``DISCOVERY_MANIFEST`` (a structured manifest), independently
+enumerates the targets, verifies every target is reported (coverage),
+then samples a subset and re-counts via a correct-by-construction
+scoped ``querySelectorAll`` (or ``discover_links`` for scroll shapes).
+If the script's selector/loop is buggy, the audit detects the
+mismatch. It no longer trusts the DB — the self-check owns DB
+consistency.
 """
 
 from __future__ import annotations
 
-import ast
 import json
-import re
-import sqlite3
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
+from browser_agent.domain.discovery_audit_outcome import DiscoveryAuditOutcome
+from browser_agent.domain.discovery_manifest import DiscoveryManifest
+from browser_agent.domain.fixed_targets import FixedTargets
+from browser_agent.domain.listing_targets import ListingTargets
+from browser_agent.domain.single_targets import SingleTargets
+from browser_agent.domain.discovery_target import DiscoveryTarget
 from browser_agent.ports.browser_session_port import BrowserSessionPort
-
-# Correct-by-construction: case-insensitive, scoped via the element
-# returned by querySelector(scope) so all comma-parts apply to the scope.
-_AUDIT_JS = """
-(() => {{
-  const scope = document.querySelector({scope});
-  if (!scope) return JSON.stringify({{error: 'scope not found', count: 0, hrefs: []}});
-  const hrefs = Array.from(
-    scope.querySelectorAll("a[href$='.pdf' i], a[href$='.doc' i], a[href$='.docx' i], a[href$='.rtf' i], a[href$='.xls' i], a[href$='.xlsx' i], a[href$='.ppt' i], a[href$='.pptx' i]")
-  ).map(a => a.href);
-  return JSON.stringify({{count: hrefs.length, hrefs: hrefs}});
-}})()
-"""
-
-_SELECT_OPTIONS_JS = """
-(() => {{
-  const sel = document.querySelector('select');
-  if (!sel) return [];
-  return Array.from(sel.options).map(o => String(o.value || o.text).trim());
-}})()
-"""
+from browser_agent.use_cases.discovery_manifest_parser import (
+    enumerate_listing_targets,
+    extract_manifest,
+    parse_discovery_stdout,
+)
 
 _MIN_SAMPLE = 3
 _MAX_SAMPLE = 10
@@ -69,267 +52,145 @@ def _sample_indices(n: int) -> list[int]:
     return [round(i * (n - 1) / (cap - 1)) for i in range(cap)]
 
 
-class DiscoveryAuditor:
-    """Re-walk a sample of filter values and compare against the script's counts."""
-
-    def __init__(self, session: BrowserSessionPort, db_path: Path) -> None:
-        self._session = session
-        self._db_path = db_path
-
-    async def audit(self, discovery_path: Path, self_check_stdout: str) -> str:
-        """Return a discrepancy report (empty string if none found)."""
-        source = discovery_path.read_text(encoding="utf-8")
-        parsed = _parse_discovery_script(source)
-        if parsed is None:
-            logger.warning("discovery audit: could not parse script structure — skipping audit")
-            return ""
-        scope, doc_selector, subcategories, filter_param, select_selector = parsed
-        if not subcategories:
-            logger.warning("discovery audit: no subcategories parsed — skipping audit")
-            return ""
-        script_counts = _parse_script_counts(self_check_stdout)
-        db_links = _load_db_links(self._db_path)
-        report_lines: list[str] = []
-        for base_url in subcategories:
-            tab = await self._session.new_tab()
-            try:
-                tab_report = await self._audit_subcategory(
-                    tab,
-                    base_url,
-                    scope,
-                    doc_selector,
-                    filter_param,
-                    select_selector,
-                    script_counts,
-                    db_links,
-                )
-                if tab_report:
-                    report_lines.append(tab_report)
-            except Exception:
-                logger.exception("discovery audit: subcategory {} failed", base_url)
-            finally:
-                await _close_tab_silently(tab)
-        return "\n".join(report_lines)
-
-    async def _audit_subcategory(
-        self,
-        tab: Any,
-        base_url: str,
-        scope: str,
-        doc_selector: str,
-        filter_param: str | None,
-        select_selector: str,
-        script_counts: dict[str, int],
-        db_links: dict[str, set[str]],
-    ) -> str:
-        """Audit one subcategory; return a report block (empty if clean)."""
-        await tab.get(base_url)
-        await tab.sleep(1.0)
-        filter_values = await _read_select_options(tab, select_selector)
-        if not filter_values:
-            logger.warning("discovery audit: no <select> options at {} — skipping", base_url)
-            return ""
-        sample = _sample_indices(len(filter_values))
-        blocks: list[str] = []
-        for idx in sample:
-            value = filter_values[idx]
-            label = _filter_label(base_url, value)
-            url = _filter_url(base_url, value, filter_param)
-            await tab.get(url)
-            await tab.sleep(1.0)
-            audit_hrefs, audit_count = await _independent_count(tab, scope)
-            script_count = script_counts.get(label)
-            db_count = len(db_links.get(label, set())) if label in db_links else None
-            block = _compare(label, audit_count, audit_hrefs, script_count, db_count, db_links.get(label, set()))
-            if block:
-                blocks.append(block)
-        if not blocks:
-            return ""
-        return f"script doc_selector: {doc_selector}\n" + "\n".join(blocks)
-
-
-def _parse_discovery_script(source: str) -> tuple[str, str, list[str], str | None, str] | None:
-    """Extract (scope, doc_selector, subcategories, filter_param, select_selector).
-
-    Returns None when the structure cannot be parsed (best-effort skip).
-    """
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return None
-    subcategories = _extract_subcategories(tree)
-    scope, doc_selector = _extract_selectors(source, tree)
-    filter_param = _extract_filter_param(source)
-    select_selector = _extract_select_selector(tree) or "select"
-    if scope is None or doc_selector is None:
-        return None
-    return scope, doc_selector, subcategories, filter_param, select_selector
-
-
-def _extract_subcategories(tree: ast.Module) -> list[str]:
-    """Find a module-level ``SUBCATEGORIES = [...]`` list of string literals."""
-    for node in tree.body:
-        if isinstance(node, ast.Assign):
-            for tgt in node.targets:
-                if isinstance(tgt, ast.Name) and tgt.id == "SUBCATEGORIES" and isinstance(node.value, ast.List):
-                    urls: list[str] = []
-                    for elt in node.value.elts:
-                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
-                            urls.append(elt.value)
-                    if urls:
-                        return urls
-    return []
-
-
-def _extract_selectors(source: str, tree: ast.Module) -> tuple[str | None, str | None]:
-    """Find the scope selector and doc selector from the source.
-
-    Scope: a module-level constant assigned an id-like string (``#tabToday``,
-    ``#rightmaincol``), named ``SCOPE`` or ``SCOPE_SELECTOR``.
-    Doc selector: any string literal containing ``href$=``.
-    """
-    scope: str | None = None
-    doc_selector: str | None = None
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-            name = ""
-            for tgt in node.targets:
-                if isinstance(tgt, ast.Name):
-                    name = tgt.id
-            val = node.value.value
-            if name in ("SCOPE", "SCOPE_SELECTOR", "SCOPE_SELECTOR_") and val.startswith("#"):
-                scope = val
-            if "href$=" in val and doc_selector is None:
-                doc_selector = val
-    if scope is None:
-        scope_match = re.search(r'SCOPE(?:_SELECTOR)?\s*=\s*["\']#[A-Za-z0-9_-]+["\']', source)
-        if scope_match:
-            inner = re.search(r"#[A-Za-z0-9_-]+", scope_match.group(0))
-            scope = inner.group(0) if inner else None
-    return scope, doc_selector
-
-
-def _extract_filter_param(source: str) -> str | None:
-    """Find a ``?Year=`` / ``?year=`` / ``?param=`` pattern in the source."""
-    match = re.search(r"[?&](\w+)=", source)
-    return match.group(1) if match else None
-
-
-def _extract_select_selector(tree: ast.Module) -> str | None:
-    """Find a ``select`` selector constant (``SELECT_SELECTOR`` etc.)."""
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-            for tgt in node.targets:
-                if isinstance(tgt, ast.Name) and "SELECT" in tgt.id and "select" in node.value.value.lower():
-                    return node.value.value
-    return None
-
-
-def _parse_script_counts(stdout: str) -> dict[str, int]:
-    """Parse ``{label} {year}: collected {N}`` lines from self-check stdout."""
-    out: dict[str, int] = {}
-    for match in re.finditer(r"([^\n:]*?):\s*collected\s+(\d+)", stdout):
-        out[match.group(1).strip()] = int(match.group(2))
-    return out
-
-
-def _load_db_links(db_path: Path) -> dict[str, set[str]]:
-    """Return ``{filter_label: set(url)}`` from the ``discovered_links`` table."""
-    if not db_path.exists():
-        return {}
-    uri = f"file:{db_path.as_posix()}?mode=ro"
-    conn = sqlite3.connect(uri, uri=True)
-    try:
-        rows = conn.execute("SELECT url, filter_label FROM discovered_links").fetchall()
-    except sqlite3.Error:
-        return {}
-    finally:
-        conn.close()
-    out: dict[str, set[str]] = {}
-    for url, label in rows:
-        out.setdefault(label, set()).add(url)
-    return out
-
-
-async def _read_select_options(tab: Any, selector: str) -> list[str]:
-    """Return the live ``<option>`` value/text strings from the DOM."""
-    js = f"(() => {{const s = document.querySelector({json.dumps(selector)}); return s ? Array.from(s.options).map(o => String(o.value || o.text).trim()) : [];}})()"
-    try:
-        opts = await tab.evaluate(js)
-    except Exception:
-        return []
-    return [str(o) for o in opts] if opts else []
-
-
-async def _independent_count(tab: Any, scope: str) -> tuple[list[str], int]:
-    """Run the correct-by-construction JS count; return (hrefs, count)."""
-    js = _AUDIT_JS.format(scope=json.dumps(scope))
-    try:
-        raw = await tab.evaluate(js)
-    except Exception:
-        logger.exception("discovery audit: evaluate failed")
-        return [], 0
-    if not raw:
-        return [], 0
-    try:
-        data = json.loads(raw) if isinstance(raw, str) else raw
-    except json.JSONDecodeError:
-        return [], 0
-    if not isinstance(data, dict):
-        return [], 0
-    if data.get("error"):
-        logger.warning("discovery audit: {}", data["error"])
-        return [], 0
-    hrefs = data.get("hrefs", [])
-    return list(hrefs), int(data.get("count", 0))
-
-
-def _filter_label(base_url: str, value: str) -> str:
-    """Construct the filter label the script likely used."""
-    return f"{base_url} {value}"
-
-
-def _filter_url(base_url: str, value: str, filter_param: str | None) -> str:
-    """Build the filter URL: ``base?{param}={value}`` (best-effort)."""
-    sep = "&" if "?" in base_url else "?"
-    param = filter_param or "Year"
-    return f"{base_url}{sep}{param}={value}"
-
-
-def _compare(
-    label: str,
-    audit_count: int,
-    audit_hrefs: list[str],
-    script_count: int | None,
-    db_count: int | None,
-    db_hrefs: set[str],
-) -> str:
-    """Return a discrepancy block for one filter value (empty if clean)."""
-    audit_set = set(audit_hrefs)
-    issues: list[str] = []
-    if script_count is not None and script_count > audit_count:
-        issues.append(f"OVER-COLLECTED: script collected {script_count}, audit found {audit_count}")
-    if script_count is not None and script_count < audit_count:
-        issues.append(f"UNDER-COLLECTED: script collected {script_count}, audit found {audit_count}")
-    if db_count is not None and db_count > audit_count:
-        issues.append(f"DB over-collection: {db_count} rows, audit found {audit_count}")
-    if db_count is not None and db_count < audit_count:
-        issues.append(f"DB under-collection: {db_count} rows, audit found {audit_count}")
-    missing = audit_set - db_hrefs
-    if missing and db_count is not None:
-        issues.append(f"MISSING from DB ({len(missing)}): {sorted(missing)[:5]}")
-    extras = db_hrefs - audit_set
-    if extras and db_count is not None:
-        issues.append(f"FALSE POSITIVES in DB ({len(extras)}): {sorted(extras)[:5]}")
-    if not issues:
-        return ""
-    header = f"[{label}] audit_count={audit_count} script_count={script_count} db_count={db_count}"
-    return header + "\n  " + "\n  ".join(issues)
-
-
 async def _close_tab_silently(tab: Any) -> None:
     """Close ``tab`` if the zendriver API exposes it; swallow errors."""
     try:
         await tab.close()
     except Exception:
         pass
+
+
+async def _count_selector(tab: Any, selector: str, scope: str | None) -> int:
+    """Correct-by-construction scoped ``querySelectorAll`` count."""
+    if not selector:
+        return 0
+    if scope:
+        js = (
+            "(() => {const s = document.querySelector(" + json.dumps(scope) + ");"
+            "if (!s) return 0; return s.querySelectorAll(':is(" + selector + ")').length;})()"
+        )
+    else:
+        js = "document.querySelectorAll(" + json.dumps(selector) + ").length"
+    try:
+        raw = await tab.evaluate(js)
+    except Exception:
+        logger.exception("discovery audit: count evaluate failed")
+        return 0
+    try:
+        return int(raw) if raw is not None else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+async def _audit_count_for_target(tab: Any, target: DiscoveryTarget, manifest: DiscoveryManifest) -> int:
+    """Independent count for one target page."""
+    await _settle(tab)
+    if manifest.load_more_selector:
+        from browser_agent.script_tools.discover_links import discover_links
+
+        links = await discover_links(tab, manifest.count_selector, manifest.load_more_selector)
+        return len(links)
+    return await _count_selector(tab, manifest.count_selector, manifest.count_scope)
+
+
+async def _settle(tab: Any) -> None:
+    """Wait for page ready then a 2s settle (HRC bug was too-short wait)."""
+    try:
+        from browser_agent.script_tools.page_wait import wait_for_page_ready
+
+        await wait_for_page_ready(tab)
+    except Exception:
+        await tab.sleep(2.0)
+        return
+    await tab.sleep(2.0)
+
+
+class DiscoveryAuditor:
+    """Independent shape-agnostic re-walk of a discovery script's targets."""
+
+    def __init__(self, session: BrowserSessionPort, db_path: Path) -> None:
+        self._session = session
+        self._db_path = db_path
+
+    async def audit(self, discovery_path: Path, self_check_stdout: str) -> DiscoveryAuditOutcome:
+        """Return a ``DiscoveryAuditOutcome`` (skipped/passed/discrepancies)."""
+        source = discovery_path.read_text(encoding="utf-8")
+        manifest = extract_manifest(source)
+        if manifest is None:
+            return DiscoveryAuditOutcome(status="skipped", reason="no parseable DISCOVERY_MANIFEST")
+        found_by_label, _, _ = parse_discovery_stdout(self_check_stdout)
+        targets = await self._enumerate_targets(manifest)
+        blocks: list[str] = []
+        blocks.extend(self._coverage_check(targets, found_by_label))
+        blocks.extend(await self._count_sample(manifest, targets, found_by_label))
+        if not blocks:
+            return DiscoveryAuditOutcome(status="passed")
+        return DiscoveryAuditOutcome(status="discrepancies", report="\n".join(blocks))
+
+    async def _enumerate_targets(self, manifest: DiscoveryManifest) -> list[DiscoveryTarget]:
+        """Build the independent target list from the manifest."""
+        t = manifest.targets
+        if isinstance(t, FixedTargets):
+            return list(t.items)
+        if isinstance(t, SingleTargets):
+            return [DiscoveryTarget(label=t.label, url=t.url)]
+        if isinstance(t, ListingTargets):
+            tab = await self._session.new_tab()
+            try:
+                return await enumerate_listing_targets(tab, t)
+            except Exception:
+                logger.exception("discovery audit: listing enumeration failed")
+                return []
+            finally:
+                await _close_tab_silently(tab)
+        return []
+
+    def _coverage_check(self, targets: list[DiscoveryTarget], found_by_label: dict[str, int]) -> list[str]:
+        """Flag any enumerated target the script did not report."""
+        out: list[str] = []
+        for target in targets:
+            if target.label not in found_by_label:
+                out.append(f"[{target.label}] MISSING: script did not report this target")
+        return out
+
+    async def _count_sample(
+        self, manifest: DiscoveryManifest, targets: list[DiscoveryTarget], found_by_label: dict[str, int]
+    ) -> list[str]:
+        """Independently count a sample of targets and compare."""
+        if not manifest.count_selector:
+            return []
+        sample = _sample_indices(len(targets))
+        blocks: list[str] = []
+        for idx in sample:
+            target = targets[idx]
+            block = await self._audit_one_target(manifest, target, found_by_label)
+            blocks.extend(block)
+        return blocks
+
+    async def _audit_one_target(
+        self, manifest: DiscoveryManifest, target: DiscoveryTarget, found_by_label: dict[str, int]
+    ) -> list[str]:
+        """Count one target independently and build discrepancy blocks."""
+        script_found = found_by_label.get(target.label)
+        if script_found is None:
+            return []
+        tab = await self._session.new_tab()
+        try:
+            audit_count = await _audit_count_for_target(tab, target, manifest)
+        except Exception:
+            logger.exception("discovery audit: target {} failed", target.label)
+            return []
+        finally:
+            await _close_tab_silently(tab)
+        return self._compare_counts(target.label, script_found, audit_count)
+
+    def _compare_counts(self, label: str, script_found: int, audit_count: int) -> list[str]:
+        """Build discrepancy blocks for one target (empty if clean)."""
+        out: list[str] = []
+        if script_found < audit_count:
+            out.append(f"[{label}] UNDER-COLLECTED: script found={script_found}, audit={audit_count}")
+        if script_found > audit_count:
+            out.append(f"[{label}] OVER-COLLECTED: script found={script_found}, audit={audit_count}")
+        if script_found == 0 and audit_count > 0:
+            out.append(f"[{label}] EMPTY: script found 0 rows, audit={audit_count} — likely a too-short page wait")
+        return out

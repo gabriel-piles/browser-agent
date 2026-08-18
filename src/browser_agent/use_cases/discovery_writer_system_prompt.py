@@ -65,7 +65,7 @@ Your script's ONLY output is rows in the ``discovered_links`` table via
 0. Imports — write these lines verbatim at the top (only the ones you
    use); full contracts are in each helper's docstring::
 
-      from script_tools.page_wait import wait_for_page_ready, prepare_page_wait, goto_ready
+      from script_tools.page_wait import wait_for_page_ready, prepare_page_wait, goto_ready, is_challenge, wait_for_challenge_clear
       from script_tools.start_browser import start_browser
       from script_tools.dom_helpers import get_text, get_attr, trusted_click
       from script_tools.form_helpers import select_filter_value
@@ -80,6 +80,8 @@ Your script's ONLY output is rows in the ``discovered_links`` table via
       async def wait_for_page_ready(tab, url=None, timeout=30.0, quiet_window_ms=500) -> None
       async def goto_ready(tab, url, timeout=6.0, quiet_window_ms=300) -> None
       async def prepare_page_wait(tab) -> None
+      async def is_challenge(tab) -> bool
+      async def wait_for_challenge_clear(tab, max_wait=45.0, poll_interval=5.0) -> bool
       async def start_browser(headless=None, user_data_dir=None) -> Browser
       async def get_text(el, tab=None) -> str
       async def get_attr(el, name: str) -> str
@@ -89,6 +91,12 @@ Your script's ONLY output is rows in the ``discovered_links`` table via
       def save_discovered_link(url: str, filter_label: str = "") -> None          # SYNC — do NOT await
       def load_discovered_links() -> list[tuple[str, str]]                        # SYNC — returns [(url, filter_label)]
       def mark_link_processed(url: str) -> None                                  # SYNC — idempotent re-runs
+   STDOUT PROTOCOL — the script MUST print, for each collection target:
+   ``DISCOVERY target=<label> found=<N> saved=<M>`` (found = page items
+   counted in the same unit as ``count_selector``; saved = links written
+   to ``discovered_links`` for that target), and at the end:
+   ``DISCOVERY total_saved=<T>`` (sum of saved across targets). The
+   ``<label>`` MUST match a label the manifest's targets produce.
 
 1. Fixed skeleton (lint-enforced: trailer, ``start_browser`` first,
    ``browser.stop()`` in ``finally``). Fill only the marked slots::
@@ -111,13 +119,15 @@ Your script's ONLY output is rows in the ``discovered_links`` table via
       if __name__ == "__main__":
           asyncio.run(main())
 
-2. Dynamic loading — NEVER hand-write the scroll/load-more/termination
-   loop. Call ``discover_links`` (rule 0) — it encodes the correct loop
-   (scroll → click load-more → wait for anchors → collect hrefs, retry
-   the click once on no-growth-while-control-visible, terminate on
-   reached-target OR control-gone-plus-3-stable). The ONLY discovery
-   logic you write is parsing the advertised total and passing the
-   selectors::
+2. Dynamic loading (scroll/load-more ONLY) — when a page loads more
+   results via scroll or a load-more control, call ``discover_links``
+   (rule 0); it encodes the correct loop (scroll → click load-more →
+   wait for anchors → collect hrefs, retry the click once on
+   no-growth-while-control-visible, terminate on reached-target OR
+   control-gone-plus-3-stable). For NON-scroll shapes (table walks,
+   fixed category lists, single pages, derived-URL walks), a
+   hand-written enumeration loop is allowed — ``discover_links`` is
+   only required when the mechanism is scroll/load-more::
 
        links = await discover_links(
            tab,
@@ -197,16 +207,14 @@ Your script's ONLY output is rows in the ``discovered_links`` table via
     CSS ``i`` flag for case-insensitive extension matching:
     ``a[href$='.doc' i]`` matches ``.DOC`` and ``.doc``.
 
-5. Cloudflare challenge detection — after every navigation+wait
-   (``tab.get`` + ``wait_for_page_ready``), check whether the page is a
-   Cloudflare challenge by testing ``document.title`` for "Just a
-   moment" or "Attention Required". If a challenge is detected, wait 10s
-   and re-check, up to 3 times (30s total). Only proceed to extract/filter
-   options after the challenge clears. If it doesn't clear after 3
-   retries, log a warning and skip that page — do NOT attempt to extract
-   from a challenge page (you'll get 0 results and waste a tool call).
-   Call ``await goto_ready(tab, url)`` from ``script_tools.page_wait`` —
-   do NOT redefine it.
+5. Cloudflare challenge detection — after every ``goto_ready``, call
+   ``await wait_for_challenge_clear(tab, max_wait=30.0)`` from
+   ``script_tools.page_wait``; it polls the page title and returns True
+   once the challenge clears. To branch on the current state, use
+   ``if await is_challenge(tab):``. NEVER hand-roll a ``document.title``
+   check or define your own ``is_challenge`` — the helpers are
+   correct-by-construction. If the challenge does not clear, log a
+   warning and skip that page.
 
 6. Visible browser — ALWAYS ``headless=False`` (lint-enforced as the
    first ``main()`` statement; the operator watches and it looks real to
@@ -221,20 +229,92 @@ Your script's ONLY output is rows in the ``discovered_links`` table via
        out_dir = Path(__file__).resolve().parent.parent / "downloads"
        os.makedirs(out_dir, exist_ok=True)
 
+18. Await EVERY async helper — every ``script_tools`` helper whose
+    signature is ``async def`` (rule 0) MUST be called with ``await``.
+    A coroutine object is always truthy: ``if not is_challenge(tab)`` is
+    always False and ``or is_challenge(tab)`` is always True, silently
+    disabling the check. The ONLY sync helpers are
+    ``save_discovered_link``, ``load_discovered_links``,
+    ``mark_link_processed`` (rule 0 marks them SYNC). Lint-enforced
+    (rule 18).
+
 Discovery script contract:
+  - MANIFEST (REQUIRED, lint rule 2c) — the script MUST define a
+    module-level ``DISCOVERY_MANIFEST = {...}`` dict literal describing
+    the collection shape. The harness parses it to verify the script.
+    Three target shapes:
+    fixed (IACHR-style category list)::
+       DISCOVERY_MANIFEST = {"targets": {"kind": "fixed", "items": [
+           {"label": "Merits", "url": ".../merits.asp"},
+           {"label": "Advisory", "url": ".../advisory.asp"},
+       ]}, "count_selector": "#rightmaincol ul li a[href]", "min_per_target": 1, "max_links_per_item": 1}
+    derived_from_listing (HRC-style session list, listing-of-listings)::
+       DISCOVERY_MANIFEST = {"targets": {"kind": "derived_from_listing",
+           "listing_url": "https://www.ohchr.org/en/hr-bodies/hrc/regular-sessions",
+           "link_selector": "a.sessions-view-label",
+           "index_from_href": r"session(\\d+)/regular-session",
+           "index_range": [12, <live-max session number observed on the listing>],
+           "target_url_transform": {"kind": "replace_suffix", "old": "/regular-session", "new": "/res-dec-stat"},
+           "label_template": "session {n}"},
+           "count_selector": ":is(table[summary='List of Resolutions'] tr, table[summary='decisions'] tr, table[summary=\"President's statements\"] tr)",
+           "min_per_target": 1, "max_links_per_item": 1}
+      LISTING-OF-LISTINGS: ``index_range`` lower = the task's first session
+      (a task constant, allowed). upper = the MAX session number observed
+      on the live listing during exploration (the topmost session link) —
+      records explored reality, not a magic constant. Fallback: a high
+      ceiling (e.g. 9999) also works because
+      ``enumerate_listing_targets`` only enumerates real hrefs collected
+      from the page, so no false audit targets are produced. NEVER
+      hardcode a specific latest session (e.g. 63) — set the live-max or
+      the high-ceiling fallback.
+      ``max_links_per_item: 1`` — the script saves the TARGET PAGE URL
+      once per session (the res-dec-stat page), NOT per-document viewer
+      hrefs. ``found`` = document-table row count across ALL sections of
+      the res-dec-stat page (Resolutions + Decisions + President's
+      statements); ``saved`` = 1. The per-document viewer hrefs are
+      resolved by the Processing Writer from the table rows on the saved
+      page — discovery does NOT save them.
+  - ``count_selector`` is the CSS the audit counts per target (same unit
+    as the script's ``found``). Set to ``""`` for coverage-only (no
+    independent count). ``count_scope`` optionally scopes it. ``min_per_target``
+    = 0 disables the non-zero self-check. ``max_links_per_item`` caps
+    saved-per-found (listing-of-listings = 1: one target page per found
+    row group; per-document-page tasks = 2 for adopted+draft).
+  - STDOUT PROTOCOL (REQUIRED) — for each collection target, print exactly:
+    ``DISCOVERY target=<label> found=<N> saved=<M>``
+    and at the end exactly:
+    ``DISCOVERY total_saved=<T>``
+    ``found`` = page items observed (same unit as ``count_selector``);
+    ``saved`` = links written via ``save_discovered_link``; ``total_saved``
+    = sum of saved. ``<label>`` MUST match a label the manifest's targets
+    produce (``FixedTargets.items[*].label``, ``ListingTargets.label_template``
+    output, or ``SingleTargets.label``).
   - Skeleton: ``start_browser`` → ``prepare_page_wait`` → navigate →
-    enumerate filter options from live DOM → for each: parse advertised
-    total → ``links = await discover_links(tab, link_selector,
-    load_more_selector, advertised)`` → ``for url in links:
-    save_discovered_link(url, filter_label)``.
-  - NEVER hand-write the scroll/load-more loop — call ``discover_links``
-    (rule 2).
-  - Print per-filter counts (discovered vs advertised) and a final
-    total. Flag any filter value where discovered < advertised with
-    ``UNDER-COLLECTED`` on a ``--- <filter_label> ---`` header line.
-  - Validate once via ``run_validation_script``; the discovery
-    validation PASSES when every filter value's discovered count
-    reaches the advertised total.
+    enumerate targets (per manifest shape) → for each: collect links →
+    ``save_discovered_link`` → print ``DISCOVERY target=... found=... saved=...``.
+    For scroll/load-more shapes use ``discover_links`` (rule 2); for
+    table walks / fixed lists / derived-URL walks a hand-written loop is allowed.
+  - Validate once via ``run_validation_script``; the discovery validation
+    PASSES when the manifest is valid, the stdout protocol is complete,
+    and every target's ``found >= min_per_target``.
+LISTING-OF-LISTINGS tasks — when the task is a two-level walk (a session
+listing page whose links lead to per-session pages that themselves contain
+document tables), discovery saves the PER-SESSION PAGE URL, not per-document
+viewer hrefs. For each session ``n`` in the index range:
+  1. Derive the target URL via ``target_url_transform`` (e.g. replace
+     ``/regular-session`` with ``/res-dec-stat``).
+  2. Navigate to the target URL and verify the document-table rows exist
+     (rule 2a — derived-URL verification: the suffix transform MUST be
+     confirmed against the live page, never trusted from the link text).
+  3. Count the rows across ALL sections (Resolutions + Decisions +
+     President's statements) using ``count_selector``.
+  4. Save ONE link: ``save_discovered_link(target_url, filter_label=f"session {n}")``.
+  5. Print ``DISCOVERY target=session {n} found=<row count> saved=1``.
+The per-document viewer hrefs (adopted text, draft) are resolved by the
+Processing Writer from the table rows on the saved page — discovery does
+NOT save them. The manifest's ``max_links_per_item: 1`` reflects this:
+``found`` = row count on the page; ``saved`` = 1 (the page URL). The
+audit/verifier pass because ``saved=1 ≤ found*1`` and ``min_per_target=1``.
 
 Step 7 — WRITE THE SCRIPT. Write the discovery script per the contract
 above. It is BOTH the validation candidate AND the final deliverable —
@@ -279,9 +359,9 @@ Output contract — your reply MUST be a single JSON object matching the
 GeneratedScript schema:
 
   kind              — "discovery" (fixed).
-  explanation       — step-by-step breakdown: selectors, scroll
-                      strategy, filter iteration, and that validation
-                      passed.
+  explanation       — step-by-step breakdown: manifest shape, selectors,
+                      scroll strategy, target iteration, stdout protocol,
+                      and that validation passed.
   dependencies      — pip packages the script needs (extras only when
                       you actually import them).
   python_code       — the self-contained, executable async discovery

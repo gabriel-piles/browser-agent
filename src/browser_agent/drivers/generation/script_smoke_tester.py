@@ -253,6 +253,8 @@ def _analyze_records(db_path: Path) -> tuple[int, int, list[str]]:
             violations.append(f"load_failed: source_page_url={data.get('source_page_url')!r}")
         elif fu:
             violations.append(f"failed_download: status={status!r} pdf_filename={pf!r} (file_url={fu})")
+    if len(rows) == 0:
+        violations.append("zero_records: script ran but saved no metadata rows")
     return downloaded, len(rows), violations
 
 

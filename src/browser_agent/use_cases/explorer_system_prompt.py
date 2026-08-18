@@ -102,6 +102,32 @@ step.
   ``load_discovered_links()`` call). The discovery_prompt field is still
   required (write a brief note like "Not needed — single-page task") but
   it will not be used.
+  LISTING-OF-LISTINGS — a two-level walk: a session listing page whose
+  links lead to per-session pages that THEMSELVES contain document tables
+  (e.g. OHCHR HRC: ``/regular-sessions`` lists sessions; each session's
+  ``/res-dec-stat`` page has Resolutions/Decisions/President's-statements
+  tables). The split is: discovery saves the PER-SESSION page URL (derived
+  via ``target_url_transform``); processing walks each page's table rows.
+  During Steps 1-6 verify: (a) the session-link selector on the listing
+  page, (b) the suffix transform (e.g. ``/regular-session`` →
+  ``/res-dec-stat``) by navigating to a derived URL and confirming the
+  document tables render, (c) the per-session TABLE-ROW selector + column
+  structure (which column holds the adopted-text link, which holds the
+  draft link, which holds title/date). Record the row selector and cell
+  selectors in ``field_specs`` and ``verified_selectors``. In the
+  discovery_prompt, instruct: "save the per-session page URL via
+  save_discovered_link(filter_label='session {n}'); do NOT save
+  per-document viewer hrefs." In the processing_prompt, instruct:
+  "per listing page, enumerate document-table rows with extract_rows
+  (include_html=True), extract per-row metadata + source_html, then
+  follow each row's adopted/draft hrefs to resolve EN/ES download URLs."
+  ADOPTED/DRAFT AS COLUMNS — inspect the table COLUMNS on the per-session
+  page. Adopted and Draft may be COLUMNS in the same row, not separate
+  tabs/pages/sections. Record cell selectors for the adopted-text column
+  and the draft column SEPARATELY in ``field_specs``. Do not assume
+  separate pages — the document_ref is in the link TEXT (old-era hrefs are
+  generic ``ap.ohchr.org/sdpage_e.aspx`` with no symbol); only newer
+  ``undocs.org/<ref>`` hrefs carry the symbol in the href.
 
   Step 7 — COLLECT SAMPLE URLS. Collect 3-5 sample document page URLs
   (the pages where metadata is extracted / PDFs are downloaded) during
@@ -121,6 +147,18 @@ step.
   ``pdf_download_strategy`` to "curl_cffi" on success or "browser_fetch"
   on failure. If the task does not involve downloads, leave the default
   "browser_fetch".
+  EN/ES DOWNLOAD-URL STRATEGY (listing-of-listings tasks) — also verify
+  the EN/ES download-URL strategy for the per-document variants. Probe
+  whether ``https://daccess-ods.un.org/access.nsf/Get?Open&DS=<ref>&Lang=E``
+  returns a PDF (call ``download_pdf`` with that URL and a real ref from
+  the page), and whether ``&Lang=S`` resolves. If the derived pattern
+  works, record in ``discovery_prompt``/``processing_prompt``: "derive
+  EN/ES download URLs as ``daccess-ods.un.org/access.nsf/Get?Open&DS=<ref>&Lang={E|S}``;
+  do not navigate the viewer page." If it fails, record: "navigate the
+  viewer href (``undocs.org/<ref>`` / ``ap.ohchr.org``) and
+  ``extract_links`` the language/format anchors." Also probe ONE DOC/DOCX
+  variant via the viewer page if present, and note which formats are
+  available per ref.
 
 OUTPUT CONTRACT — your reply MUST be a single JSON object matching the
 TaskSplit schema:

@@ -80,9 +80,14 @@ def write_atomic(path: Path, data: bytes) -> None:
         raise
 
 
+def is_pdf_bytes(data: bytes) -> bool:
+    """Return True when ``data`` has a PDF header and EOF trailer."""
+    return data[:4] == b"%PDF" and b"%%EOF" in data[-1024:]
+
+
 def assert_pdf_magic(path: Path, data: bytes, url: str) -> None:
     """Delete ``path`` and raise RuntimeError if ``data`` is not a real PDF."""
-    if not (data[:4] == b"%PDF" and b"%%EOF" in data[-1024:]):
+    if not is_pdf_bytes(data):
         try:
             path.unlink()
         except OSError:
