@@ -254,6 +254,36 @@ does inline extraction only (no ``load_discovered_links()`` call).
     metadata-gate retry (rule 14b). The retry phase is NOT optional even
     if the smoke test passes — it is the recovery path that makes the
     script resilient to concurrency races on re-runs.
+    Unprocessed-link drain (MANDATORY when load_discovered_links is used) —
+    AFTER the worker gather and BEFORE the load_failed_downloads retry,
+    call ``load_discovered_links()`` again. If it returns any rows, links
+    were not reached by the worker pool (global timeout, crash, or queue
+    starvation). Re-process each remaining link SERIALLY on
+    ``browser.main_tab`` (always visible) via ``process_document``, then
+    ``mark_link_processed(url)``. Loop until ``load_discovered_links()``
+    returns ``[]``. Required structure after the gather::
+
+        # --- unprocessed-link drain (rule 8a) ---
+        remaining = load_discovered_links()
+        while remaining:
+            for url, _ in remaining:
+                print(f"  DRAIN unprocessed: {url}")
+                try:
+                    await asyncio.wait_for(
+                        process_document(main_tab, url, out_dir, 0, gate_lock),
+                        timeout=180)
+                except Exception as exc:
+                    print(f"  DRAIN failed {url}: {exc}")
+            remaining = load_discovered_links()
+
+        # --- failed/load_failed retry (rule 8a) ---
+        failed = load_failed_downloads()
+        ...
+
+    This runs BEFORE the ``load_failed_downloads()`` retry because
+    unprocessed links have no metadata row at all — they must be
+    processed first to produce metadata rows, then the failed-download
+    retry can recover any that still failed.
 
 8c. Download helper argument order — the curl_cffi and browser download
     helpers have DIFFERENT argument orders (lint-enforced):
@@ -462,6 +492,13 @@ does inline extraction only (no ``load_discovered_links()`` call).
        gate ``TimeoutError`` (or any raise inside ``process_document``)
        propagates through ``asyncio.gather`` and kills the whole run
        before the retry phase can recover the row.
+    FORBIDDEN: asyncio.wait_for(asyncio.gather(...), timeout=N) — a global
+    timeout around the worker gather kills the run before all discovered
+    links are processed. Workers MUST drain the asyncio.Queue to completion
+    via bare ``await asyncio.gather(...)``. If a per-document timeout is
+    needed, apply it inside the worker's try/except (each process_document
+    call already has its own asyncio.wait_for(timeout=180)); never wrap
+    the gather itself.
     d) Inside the per-document task, extract ALL per-PDF data (href,
        title, language badge, name text) with
        ``extract_fields(tab, FIELD_SPECS)`` / ``extract_links(tab, ...)``

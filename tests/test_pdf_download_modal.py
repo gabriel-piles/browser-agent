@@ -23,9 +23,10 @@ with download_status="downloaded" and the downloaded filename.\
 """
 
 
-def test_pdf_download_modal(fixture_server):
+def test_pdf_download_modal(fixture_server, capsys):
     """Step 0 handles modal PDF download: 5 records, 5 PDFs."""
-    result = run_generation_pipeline("pdf_download_modal", PROMPT, fixture_server)
+    with capsys.disabled():
+        result = run_generation_pipeline("pdf_download_modal", PROMPT, fixture_server)
     assert_driver_success(result)
     assert_min_records(result, 5)
     assert_pdf_count(result, 5)

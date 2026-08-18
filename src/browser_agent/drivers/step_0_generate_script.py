@@ -215,9 +215,10 @@ class GenerateScriptDriver:
             repairs = 0
             while not self_check.success and repairs < _MAX_PROCESSING_REPAIRS:
                 logger.warning(
-                    "processing self-check FAILED — {v} violation(s); running repair turn {r}",
+                    "processing self-check FAILED — {v} violation(s); running repair turn {r}\n{output}",
                     v=len(self_check.violations),
                     r=repairs + 1,
+                    output=self_check.output,
                 )
                 new_proc = await self._generator.repair_processing(
                     processing_uc,
@@ -242,9 +243,10 @@ class GenerateScriptDriver:
             )
             if not self_check.success:
                 logger.error(
-                    "processing self-check FAILED after {r} repair turns — {v} violation(s) remain; refusing to deliver",
+                    "processing self-check FAILED after {r} repair turns — {v} violation(s) remain; refusing to deliver\n{output}",
                     r=repairs,
                     v=len(self_check.violations),
+                    output=self_check.output,
                 )
                 await self._generator.close_all(explorer_uc)
                 self._cleanup_emit_artifacts(emit_results)

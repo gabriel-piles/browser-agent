@@ -368,7 +368,61 @@ def _check_retry_phase(python_code: str) -> list[LintFinding]:
                 line=1,
             )
         )
+    _check_unprocessed_drain(python_code, out)
     return out
+
+
+def _check_unprocessed_drain(python_code: str, out: list[LintFinding]) -> None:
+    """Rule 8a: multi-link scripts must re-call load_discovered_links() after gather.
+
+    When the worker pool is interrupted (global timeout, crash, queue
+    starvation), links still ``status='discovered'`` have no metadata row,
+    so ``load_failed_downloads()`` cannot find them. The retry phase must
+    call ``load_discovered_links()`` after the gather (and before
+    ``browser.stop()``) and re-process any remaining links. Single-tab
+    serial scripts (no gather, no worker) are exempt — their serial loop
+    has no interruptible pool.
+    """
+    if "load_discovered_links" not in python_code:
+        return
+    has_gather = "asyncio.gather(" in python_code
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return
+    has_worker = any(isinstance(node, ast.AsyncFunctionDef) and "worker" in node.name for node in ast.walk(tree))
+    if not (has_gather or has_worker):
+        return
+    gather_match = None
+    for m in re.finditer(r"asyncio\.gather\s*\(", python_code):
+        gather_match = m
+    if gather_match is None:
+        return
+    stop_after = re.search(r"browser\.stop\s*\(", python_code[gather_match.end() :])
+    if stop_after is None:
+        return
+    span_start = gather_match.end()
+    span_end = gather_match.end() + stop_after.start()
+    span = python_code[span_start:span_end]
+    if re.search(r"\bload_discovered_links\s*\(", span):
+        return
+    out.append(
+        LintFinding(
+            rule="8a",
+            severity="error",
+            message=(
+                "retry phase does not re-check load_discovered_links() — "
+                "when the worker pool is interrupted, links still "
+                "status='discovered' have no metadata row so "
+                "load_failed_downloads() cannot find them. After the "
+                "gather, call load_discovered_links() and re-process any "
+                "remaining links serially on browser.main_tab (rule 8a "
+                "unprocessed-drain), then run the load_failed_downloads "
+                "retry."
+            ),
+            line=_line_of(python_code, gather_match.start()),
+        )
+    )
 
 
 def _check_gate_lock(python_code: str) -> list[LintFinding]:
@@ -486,6 +540,64 @@ def _check_fanout(python_code: str) -> list[LintFinding]:
                     "gate in each per-document task."
                 ),
                 line=None,
+            )
+        )
+    return out
+
+
+def _check_global_gather_timeout(python_code: str) -> list[LintFinding]:
+    """Rule 15c: forbid asyncio.wait_for(asyncio.gather(...), timeout=N).
+
+    A global timeout around the worker gather kills the run before all
+    discovered links are processed, leaving the rest unprocessed with no
+    metadata rows. The gather call may be nested inside a Starred splat
+    (``asyncio.gather(*(worker(...) for ...))``), so we walk all nodes
+    under each wait_for argument recursively.
+    """
+    out: list[LintFinding] = []
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return out
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr != "wait_for":
+            continue
+        obj = node.func.value
+        if not (isinstance(obj, ast.Name) and obj.id == "asyncio"):
+            continue
+        has_gather = False
+        for arg in node.args:
+            for sub in ast.walk(arg):
+                if (
+                    isinstance(sub, ast.Call)
+                    and isinstance(sub.func, ast.Attribute)
+                    and sub.func.attr == "gather"
+                    and isinstance(sub.func.value, ast.Name)
+                    and sub.func.value.id == "asyncio"
+                ):
+                    has_gather = True
+                    break
+            if has_gather:
+                break
+        if not has_gather:
+            continue
+        out.append(
+            LintFinding(
+                rule="15c",
+                severity="error",
+                message=(
+                    "FORBIDDEN: asyncio.wait_for(asyncio.gather(...), timeout=N) — "
+                    "the global timeout kills the worker pool before all "
+                    "discovered links are processed, leaving the rest "
+                    "unprocessed with no metadata rows. Use bare "
+                    "`await asyncio.gather(...)` (workers drain the queue to "
+                    "completion); if a timeout is needed, apply it "
+                    "per-document inside the worker's try/except (rule 15c), "
+                    "not around the gather."
+                ),
+                line=node.lineno,
             )
         )
     return out
@@ -1105,7 +1217,8 @@ class EmittedScriptLinter:
             _check_self_contained,
             _check_script_tools_package_import,
             _check_direct_zendriver_import,
-            _check_fanout,
+            _check_global_gather_timeout,
+            _check_retry_phase,
             _check_gate_lock,
             _check_handwritten_discovery,
             _check_handwritten_extraction,

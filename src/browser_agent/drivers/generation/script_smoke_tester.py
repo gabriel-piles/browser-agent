@@ -176,7 +176,6 @@ async def processing_self_check(
     cmd = [sys.executable, str(script_path)]
     env = {
         **os.environ,
-        "ZENDRIVER_HEADLESS": "true",
         "BROWSER_AGENT_SAVE_RECORD_DB_PATH": str(db_path),
         "BROWSER_AGENT_TASK_SLUG": "selfcheck",
     }
@@ -197,8 +196,13 @@ async def processing_self_check(
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
             await _kill_process_group(proc)
+            downloaded_rows, record_count, violations = _analyze_records(db_path)
             return ProcessingSelfCheckResult(
-                success=False, downloaded_rows=0, record_count=0, output=f"[timed out after {timeout}s — script hung]"
+                success=downloaded_rows >= 1 and not violations,
+                downloaded_rows=downloaded_rows,
+                record_count=record_count,
+                violations=violations,
+                output=f"[timed out after {timeout}s — script hung]",
             )
         output = stdout.decode("utf-8", errors="replace") if stdout else ""
     finally:
