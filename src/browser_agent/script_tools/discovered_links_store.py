@@ -58,15 +58,27 @@ def _ensure_schema(conn) -> None:
 
 
 def save_discovered_link(url: str, filter_label: str = "") -> None:
-    """Insert a discovered link URL into ``discovered_links`` (idempotent)."""
+    """Insert a discovered link as ``status='discovered'`` (idempotent).
+
+    A pre-seeded ``status='sample'`` row (explorer validation seed) is
+    upgraded to ``status='discovered'`` so the processing script sees it
+    via :func:`load_discovered_links`. An already-``processed`` row is
+    left untouched (idempotent re-run — do not rewind work). A
+    ``discovered`` row is refreshed with the new ``filter_label``.
+    """
     canon = _canonical_url(url)
     now = datetime.datetime.now().isoformat(timespec="seconds")
     conn = sqlite3.connect(_resolve_db_path(), timeout=5)
     try:
         _ensure_schema(conn)
         conn.execute(
-            "INSERT OR IGNORE INTO discovered_links (url, filter_label, status, discovered_at) "
-            "VALUES (?, ?, 'discovered', ?)",
+            "INSERT INTO discovered_links (url, filter_label, status, discovered_at) "
+            "VALUES (?, ?, 'discovered', ?) "
+            "ON CONFLICT(url) DO UPDATE SET "
+            "  filter_label=excluded.filter_label, "
+            "  status='discovered', "
+            "  discovered_at=excluded.discovered_at "
+            "WHERE discovered_links.status != 'processed'",
             (canon, filter_label, now),
         )
         conn.commit()
