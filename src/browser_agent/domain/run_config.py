@@ -68,3 +68,7 @@ class RunConfig(BaseModel):
             "worker pool fed by an asyncio.Queue. Capped at 8 to stay "
         ),
     )
+    source_urls: list[str] = Field(
+        default_factory=list,
+        description="Page URLs the scraper must capture in metadata.db; verified by step 2.",
+    )

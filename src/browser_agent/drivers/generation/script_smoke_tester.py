@@ -196,9 +196,10 @@ async def processing_self_check(
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
             await _kill_process_group(proc)
-            downloaded_rows, record_count, violations = _analyze_records(db_path)
+            downloaded_rows, record_count, violations, has_download_intent = _analyze_records(db_path)
+            ok = _self_check_ok(downloaded_rows, record_count, violations, has_download_intent)
             return ProcessingSelfCheckResult(
-                success=downloaded_rows >= 1 and not violations,
+                success=ok,
                 downloaded_rows=downloaded_rows,
                 record_count=record_count,
                 violations=violations,
@@ -207,9 +208,10 @@ async def processing_self_check(
         output = stdout.decode("utf-8", errors="replace") if stdout else ""
     finally:
         _restore_run_config(run_config_path, original_run_config)
-    downloaded_rows, record_count, violations = _analyze_records(db_path)
+    downloaded_rows, record_count, violations, has_download_intent = _analyze_records(db_path)
+    ok = _self_check_ok(downloaded_rows, record_count, violations, has_download_intent)
     return ProcessingSelfCheckResult(
-        success=downloaded_rows >= 1 and not violations,
+        success=ok,
         downloaded_rows=downloaded_rows,
         record_count=record_count,
         violations=violations,
@@ -217,24 +219,29 @@ async def processing_self_check(
     )
 
 
-def _analyze_records(db_path: Path) -> tuple[int, int, list[str]]:
-    """Return (downloaded_rows, total_rows, violations) from the scratch metadata table.
+def _analyze_records(db_path: Path) -> tuple[int, int, list[str], bool]:
+    """Return (downloaded_rows, total_rows, violations, has_download_intent) from the scratch metadata table.
 
     Violations are deterministic correctness bugs, one human-readable line each:
       - canonical_filename: a downloaded row's pdf_filename != pdf_id_for(file_url)+".pdf"
-      - failed_download: a row with file_url but download_status != "downloaded" or empty pdf_filename
+      - failed_download: a row with file_url/pdf_url but download_status != "downloaded" or empty pdf_filename
       - load_failed: a row with download_status == "load_failed" (metadata gate never rendered)
+    ``has_download_intent`` is true when any row carries a ``file_url``,
+    ``pdf_url``, ``pdf_filename``, ``supporting_filename``, or a non-trivial
+    ``download_status`` — the task attempts downloads; extract-only tasks
+    never set these and pass on ``record_count >= 1`` alone.
     """
     if not db_path.exists():
-        return 0, 0, []
+        return 0, 0, [], False
     conn = sqlite3.connect(str(db_path), timeout=5)
     try:
         rows = conn.execute("SELECT data FROM metadata").fetchall()
     except sqlite3.OperationalError:
-        return 0, 0, []
+        return 0, 0, [], False
     finally:
         conn.close()
     downloaded = 0
+    has_download_intent = False
     violations: list[str] = []
     for (raw,) in rows:
         try:
@@ -244,18 +251,35 @@ def _analyze_records(db_path: Path) -> tuple[int, int, list[str]]:
         fu = data.get("file_url")
         pf = data.get("pdf_filename")
         sf = data.get("supporting_filename")
+        pu = data.get("pdf_url")
         status = data.get("download_status")
+        if fu or pf or sf or pu or (status and status != "no_files"):
+            has_download_intent = True
         if status == "downloaded" and (pf or sf):
             downloaded += 1
             if fu and pf and pf != pdf_id_for(fu) + ".pdf":
                 violations.append(f"canonical_filename: {pf!r} != {pdf_id_for(fu) + '.pdf'!r} (file_url={fu})")
         elif status == "load_failed":
             violations.append(f"load_failed: source_page_url={data.get('source_page_url')!r}")
-        elif fu:
-            violations.append(f"failed_download: status={status!r} pdf_filename={pf!r} (file_url={fu})")
+        elif fu or pu:
+            violations.append(f"failed_download: status={status!r} pdf_filename={pf!r} (file_url={fu!r} pdf_url={pu!r})")
     if len(rows) == 0:
         violations.append("zero_records: script ran but saved no metadata rows")
-    return downloaded, len(rows), violations
+    return downloaded, len(rows), violations, has_download_intent
+
+
+def _self_check_ok(downloaded_rows: int, record_count: int, violations: list[str], has_download_intent: bool) -> bool:
+    """True when the self-check passes, tolerating extract-only (no-download) tasks.
+
+    Download tasks (any row carries a download field) require at least one
+    downloaded row; extract-only tasks pass on ``record_count >= 1``.
+    Violations always fail.
+    """
+    if violations:
+        return False
+    if has_download_intent:
+        return downloaded_rows >= 1
+    return record_count >= 1
 
 
 def _scratch_dir(script_path: Path) -> Path:

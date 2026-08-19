@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from browser_agent.domain.missing_coverage import MissingCoverage
 from browser_agent.domain.pdf_check_result import PdfCheckResult
+from browser_agent.domain.probe_result import ProbeResult
 
 
 class VerificationReport(BaseModel):
@@ -45,4 +46,8 @@ class VerificationReport(BaseModel):
     )
     recommendations: str = Field(
         description="Short step-0 handoff summary referencing missing_coverage.",
+    )
+    probe_results: list[ProbeResult] = Field(
+        default_factory=list,
+        description="Deterministic probe-corpus outcomes; empty when no verification_probes.yaml.",
     )

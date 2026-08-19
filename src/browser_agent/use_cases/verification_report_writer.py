@@ -15,7 +15,9 @@ from loguru import logger
 
 from browser_agent.domain.missing_coverage import MissingCoverage
 from browser_agent.domain.pdf_check_result import PdfCheckResult
+from browser_agent.domain.probe_verification_report import ProbeVerificationReport
 from browser_agent.domain.verification_report import VerificationReport
+from browser_agent.use_cases.probe_verification_report_writer import ProbeVerificationReportWriter
 
 _REPORT_FILENAME = "verification_report.md"
 _REPORT_JSON_FILENAME = "verification_report.json"
@@ -51,10 +53,18 @@ class VerificationReportWriter:
             self._summary(report),
             self._table(report),
             self._missing_coverage(report),
+            self._probe_section(report),
             self._section("Overall Assessment", report.overall_assessment),
             self._section("Recommendations", report.recommendations),
         ]
-        return "\n\n".join(lines)
+        return "\n\n".join(line for line in lines if line)
+
+    def _probe_section(self, report: VerificationReport) -> str:
+        """Return the probe section markdown, or ``""`` when no probes."""
+        if not report.probe_results:
+            return ""
+        probe_report = ProbeVerificationReport(results=report.probe_results)
+        return ProbeVerificationReportWriter(self._run_path).render_section(probe_report)
 
     def _header(self) -> str:
         """Return the report header with timestamp."""

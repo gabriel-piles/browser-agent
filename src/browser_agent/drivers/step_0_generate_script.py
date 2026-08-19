@@ -199,7 +199,7 @@ class GenerateScriptDriver:
         if not smoke_result.success:
             script_set = await self._smoke_repair_loop(processing_uc, script_set, smoke_result)
             logger.info("re-emitting scripts after smoke-test repair")
-            self._cleanup_emit_artifacts(emit_results)
+            self._cleanup_emit_artifacts(emit_results, keep_final=False)
             emit_results.clear()
             discovery_emit = self._emit_script(task, script_set.discovery_script(), emitter, run_path, context, emit_results)
             processing_emit = self._emit_script(
@@ -209,7 +209,7 @@ class GenerateScriptDriver:
             smoke_result = await self._smoke_test_with_sidecar(processing_emit, emitter, attempt=2)
             if not smoke_result.success:
                 await self._generator.close_all(explorer_uc)
-                self._cleanup_emit_artifacts(emit_results)
+                self._cleanup_emit_artifacts(emit_results, keep_final=False)
                 return EXIT_SMOKE_FAILED
         # 9b. Processing behavioral self-check — correctness gate.
         if split.sample_document_urls:
@@ -227,7 +227,7 @@ class GenerateScriptDriver:
                     format_processing_self_check_repair(self_check.output, self_check.violations),
                 )
                 script_set = script_set.replace_processing(new_proc)
-                self._cleanup_emit_artifacts(emit_results)
+                self._cleanup_emit_artifacts(emit_results, keep_final=False)
                 emit_results.clear()
                 self._emit_script(task, script_set.discovery_script(), emitter, run_path, context, emit_results)
                 processing_emit = self._emit_script(
@@ -251,7 +251,7 @@ class GenerateScriptDriver:
                     output=self_check.output,
                 )
                 await self._generator.close_all(explorer_uc)
-                self._cleanup_emit_artifacts(emit_results)
+                self._cleanup_emit_artifacts(emit_results, keep_final=False)
                 return EXIT_SELF_CHECK_FAILED
         else:
             logger.warning("processing self-check SKIPPED — no sample_document_urls from explorer")
@@ -320,7 +320,7 @@ class GenerateScriptDriver:
                 discovery_uc, format_discovery_repair("\n".join(failures) or result.output)
             )
             current_script_set = current_script_set.replace_discovery(new_discovery)
-            self._cleanup_emit_artifacts(emit_results)
+            self._cleanup_emit_artifacts(emit_results, keep_final=False)
             emit_results.clear()
             new_disc_emit = self._emit_script(
                 task, current_script_set.discovery_script(), emitter, run_path, context, emit_results
@@ -386,7 +386,7 @@ class GenerateScriptDriver:
         logger.warning("discovery audit found discrepancies — running repair turn")
         new_discovery = await self._generator.repair_discovery(discovery_uc, format_discovery_repair(outcome.report))
         new_script_set = script_set.replace_discovery(new_discovery)
-        self._cleanup_emit_artifacts(emit_results)
+        self._cleanup_emit_artifacts(emit_results, keep_final=False)
         emit_results.clear()
         new_disc_emit = self._emit_script(task, new_script_set.discovery_script(), emitter, run_path, context, emit_results)
         self._emit_script(task, new_script_set.processing_script(), emitter, run_path, context, emit_results)
@@ -430,15 +430,20 @@ class GenerateScriptDriver:
         return int(count)
 
     @staticmethod
-    def _cleanup_emit_artifacts(emit_results: list[EmitResult]) -> None:
-        """Keep only the final .py of each kind; remove .raw.py, .json, and earlier .py files."""
+    def _cleanup_emit_artifacts(emit_results: list[EmitResult], keep_final: bool = True) -> None:
+        """Keep only the final .py of each kind; remove .raw.py, .json, and earlier .py files.
+
+        ``keep_final=False`` removes every ``.py`` too — used before a re-emit
+        round so the replaced scripts do not linger as orphans after the
+        results list is cleared.
+        """
         if not emit_results:
             return
         by_kind: dict[str, Path] = {}
         for emit_result in emit_results:
             kind = "discovery" if "__discover__" in emit_result.script_path.name else "processing"
             by_kind[kind] = emit_result.script_path
-        keepers: set[Path] = set(by_kind.values())
+        keepers: set[Path] = set(by_kind.values()) if keep_final else set()
         for emit_result in emit_results:
             for path in (emit_result.script_path, emit_result.raw_code_path, emit_result.sidecar_path):
                 if path not in keepers and path.is_file():

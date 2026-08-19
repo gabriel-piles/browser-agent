@@ -39,13 +39,17 @@ from browser_agent.configuration import (
     ZENDRIVER_HEADLESS,
 )
 from browser_agent.domain.corpus_finding import CorpusFinding
-from browser_agent.domain.reconciled_pdf import ReconciledPdf
+from browser_agent.domain.probe_result import ProbeResult, ProbeVerdict
+from browser_agent.domain.probe_verification_report import ProbeVerificationReport
+from browser_agent.domain.run_config import RunConfig
 from browser_agent.domain.verification_request import VerificationRequest
 from browser_agent.domain.verification_report import VerificationReport
 from browser_agent.logging_config import configure_logging
 from browser_agent.use_cases.metadata_db import parse_row_data, query_rows
 from browser_agent.use_cases.reconcile_downloads_use_case import ReconcileDownloadsUseCase
 from browser_agent.use_cases.reconciler_report_writer import ReconcilerReportWriter
+from browser_agent.use_cases.probe_corpus_verifier import ProbeCorpusVerifier
+from browser_agent.use_cases.probe_verification_report_writer import ProbeVerificationReportWriter
 from browser_agent.use_cases.scraping_gap_map_builder import ScrapingGapMapBuilder
 from browser_agent.use_cases.verification_agent_deps import VerificationAgentDeps
 from browser_agent.use_cases.verification_report_writer import VerificationReportWriter
@@ -92,6 +96,10 @@ class VerifyDownloadsDriver:
         except Exception as exc:
             logger.error("verification could not run: {exc}", exc=exc)
             return 2
+        probe_report = self._run_probe_verification(run, run_path)
+        if probe_report is not None:
+            report.probe_results = probe_report.results
+            ProbeVerificationReportWriter(run_path).write_json(probe_report)
         path = VerificationReportWriter(run_path).write(report)
         self._append_metadata_sample(run_path, path)
         self._print_summary(report, per_row, findings)
@@ -109,10 +117,19 @@ class VerifyDownloadsDriver:
         section = ReconcilerReportWriter(run_path).render_section(per_row, findings)
         return section, per_row, findings
 
+    def _run_probe_verification(self, run: RunConfig, run_path: Path) -> ProbeVerificationReport | None:
+        """Verify ``run.source_urls`` against the DB; None when no source_urls declared."""
+        if not run.source_urls:
+            logger.info("no source_urls in prompt; skipping probe verification")
+            return None
+        return ProbeCorpusVerifier(run_path / "metadata.db").verify(run.source_urls)
+
     @staticmethod
     def _exit_code(report: VerificationReport) -> int:
         """0 clean, 1 gaps found, 2 could not run."""
         if report.missing_count > 0 or report.missing_coverage:
+            return 1
+        if any(r.verdict is not ProbeVerdict.CAPTURED for r in report.probe_results):
             return 1
         return 0
 
@@ -180,6 +197,8 @@ class VerifyDownloadsDriver:
         _log_inventory(per_row, findings)
         _log_spot_checks(report)
         _log_coverage(report)
+        if report.probe_results:
+            _log_probes(report.probe_results)
 
     def _append_metadata_sample(self, run_path: Path, report_path: Path) -> None:
         """Append the first N metadata.db rows as a sample section to the report."""
@@ -254,6 +273,22 @@ def _log_coverage(report: VerificationReport) -> None:
         report.coverage_complete,
         len(report.missing_coverage),
     )
+
+
+def _log_probes(results: list[ProbeResult]) -> None:
+    """Log the probe corpus summary + per-failure detail (capped at 20)."""
+    total = len(results)
+    captured = sum(1 for r in results if r.verdict is ProbeVerdict.CAPTURED)
+    logger.info("Probe corpus: total={} captured={} failed={}", total, captured, total - captured)
+    logged = 0
+    for r in results:
+        if r.verdict is ProbeVerdict.CAPTURED:
+            continue
+        if logged >= 20:
+            logger.info("  ... {} more probe failures omitted", total - captured - logged)
+            break
+        logger.info("  probe FAIL {url} {verdict} {notes}", url=r.source_url, verdict=r.verdict.value, notes=r.notes)
+        logged += 1
 
 
 def _finding_count(findings: list[CorpusFinding], kind: str) -> int:

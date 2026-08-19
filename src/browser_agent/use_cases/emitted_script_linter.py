@@ -792,9 +792,9 @@ def _check_script_tools_package_import(python_code: str) -> list[LintFinding]:
             if submod not in valid_modules:
                 out.append(
                     LintFinding(
-                        rule="0",
+                        rule="5c",
                         severity="error",
-                        message=f"script_tools.{submod} does not exist. Valid modules: {', '.join(sorted(valid_modules))}. Use 'from script_tools.page_wait import prepare_page_wait' (module=page_wait), not 'from script_tools.prepare_page_wait import ...'.",
+                        message=f"script_tools.{submod} does not exist (extract_links is a function in extract_fields, not a module). Valid modules: {', '.join(sorted(valid_modules))}. Use 'from script_tools.page_wait import prepare_page_wait' (module=page_wait), not 'from script_tools.prepare_page_wait import ...'.",
                         line=node.lineno,
                     )
                 )
@@ -822,7 +822,7 @@ def _check_direct_zendriver_import(python_code: str) -> list[LintFinding]:
             if root and root.split(".")[0] == "zendriver":
                 out.append(
                     LintFinding(
-                        rule="0",
+                        rule="5d",
                         severity="error",
                         message="never import zendriver directly; use 'from script_tools.start_browser import start_browser' and other script_tools helpers",
                         line=node.lineno,
@@ -845,7 +845,8 @@ _ZENDRIVER_RULES: frozenset[str] = frozenset(
         "11",  # await save_record (sync)
         "13",  # file_size vs size key
         "9",  # tab.evaluate returns a dict/list, not a slicable string
-        "8c",  # download_*_curl_cffi called with tab as first arg (wrong order)
+        "5c",  # script_tools.X module does not exist
+        "5d",  # direct zendriver import instead of script_tools.start_browser
     }
 )
 
@@ -862,6 +863,8 @@ _ZENDRIVER_RULE_NAMES: dict[str, str] = {
     "11": "save_record — awaited a synchronous helper (TypeError at runtime)",
     "13": "result shape — uses file_size key instead of size",
     "8c": "download helper args — called download_pdf_curl_cffi/download_file_curl_cffi with tab first; curl_cffi variants take (url, save_path, tab), browser variants take (tab, url, save_path)",
+    "5c": "script_tools module — imported a non-existent script_tools.X module (extract_links is a function in extract_fields, not a module)",
+    "5d": "zendriver import — imported zendriver directly instead of using script_tools.start_browser",
 }
 
 
