@@ -118,11 +118,11 @@ class VerifyDownloadsDriver:
         return section, per_row, findings
 
     def _run_probe_verification(self, run: RunConfig, run_path: Path) -> ProbeVerificationReport | None:
-        """Verify ``run.source_urls`` against the DB; None when no source_urls declared."""
-        if not run.source_urls:
-            logger.info("no source_urls in prompt; skipping probe verification")
+        """Verify ``run.expected_source_urls`` against the DB; None when none declared."""
+        if not run.expected_source_urls:
+            logger.info("no expected_source_urls in prompt; skipping probe verification")
             return None
-        return ProbeCorpusVerifier(run_path / "metadata.db").verify(run.source_urls)
+        return ProbeCorpusVerifier(run_path / "metadata.db").verify(run.expected_source_urls)
 
     @staticmethod
     def _exit_code(report: VerificationReport) -> int:
