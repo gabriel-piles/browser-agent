@@ -560,6 +560,39 @@ does inline extraction only (no ``load_discovered_links()`` call).
       sites the gate passes in <1s so the lock is a near-no-op. Omit the
       lock and ``bring_to_front`` for single-tab scripts (rule 1).
 
+   i) Tab recycling — Chromium renderer processes accumulate memory
+      across navigations on the same tab (DOM snapshots, lazy-loaded
+      image caches, framework internal state) and do NOT return it to
+      the OS between navigations. After ~10–15 document navigations per
+      tab the renderer bloats to 200+ MB and CDP calls start timing out
+      with empty exception strings, eventually hanging the whole browser.
+      Recycle each worker tab every 8 documents: close it
+      (``await wtab.close()``) and open a fresh one
+      (``await browser.get(WARMUP_URL, new_tab=True)`` +
+      ``prepare_page_wait`` + ``wait_for_challenge_clear``) AFTER a
+      successful ``process_document`` + ``mark_link_processed``, never
+      mid-document. Extract the open-tab sequence into a helper
+      (``_open_worker_tab``) so the initial open and recycle use the
+      same code. The stealth JS injected by ``start_browser`` via
+      ``add_script_to_evaluate_on_new_document`` applies to every new
+      tab automatically — no re-injection needed. Use a counter in the
+      worker coroutine::
+
+          async def worker(tab_id, wtab):
+              done = 0
+              while True:
+                  ... get idx, url from queue ...
+                  await process_document(wtab, url, ...)
+                  mark_link_processed(url)
+                  done += 1
+                  if done >= _TAB_RECYCLE_EVERY:
+                      await wtab.close()
+                      wtab = await _open_worker_tab(browser, tab_id)
+                      done = 0
+
+      Set ``_TAB_RECYCLE_EVERY = 8``. Do NOT recycle on failure — the
+      retry phase (rule 8a) handles failed documents on ``main_tab``.
+
 16. Per-sub-page selector verification — when the task enumerates
     multiple peer sub-pages (e.g. "Admissibilities, Inadmissibilities,
     Friendly Settlements, Merits, Archive"), a selector that works on

@@ -479,6 +479,38 @@ def _check_gate_lock(python_code: str) -> list[LintFinding]:
     return out
 
 
+def _check_tab_recycling(python_code: str) -> list[LintFinding]:
+    """Rule 15i: multi-tab scripts must recycle worker tabs to prevent renderer memory bloat."""
+    out: list[LintFinding] = []
+    if "asyncio.gather(" not in python_code:
+        return out
+    if "new_tab=True" not in python_code:
+        return out
+    has_close = re.search(r"\.close\s*\(\s*\)", python_code) is not None
+    has_recycle_const = re.search(r"_TAB_RECYCLE_EVERY", python_code) is not None
+    if has_close and has_recycle_const:
+        return out
+    out.append(
+        LintFinding(
+            rule="15i",
+            severity="warning",
+            message=(
+                "multi-tab script does not recycle worker tabs — Chromium "
+                "renderer processes accumulate memory across navigations on "
+                "the same tab and do not return it to the OS; after ~10-15 "
+                "documents per tab the renderer bloats and CDP calls time out "
+                "with empty exception strings, hanging the browser. Close and "
+                "reopen each worker tab every 8 documents (await wtab.close() "
+                "+ browser.get(WARMUP_URL, new_tab=True) + prepare_page_wait + "
+                "wait_for_challenge_clear) after a successful process_document + "
+                "mark_link_processed. Define _TAB_RECYCLE_EVERY = 8."
+            ),
+            line=None,
+        )
+    )
+    return out
+
+
 def _check_fanout(python_code: str) -> list[LintFinding]:
     out: list[LintFinding] = []
     if "asyncio.gather(" not in python_code:
@@ -1376,6 +1408,7 @@ class EmittedScriptLinter:
             _check_global_gather_timeout,
             _check_retry_phase,
             _check_gate_lock,
+            _check_tab_recycling,
             _check_handwritten_extraction,
             _check_case_sensitive_extension_selector,
             _check_rename_download,
