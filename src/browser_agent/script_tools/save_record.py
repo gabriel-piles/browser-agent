@@ -114,13 +114,13 @@ def save_record(source_url: str, data: dict) -> None:
     ``download_status="no_files"`` and ``pdf_filename=""`` — the retry
     queue skips ``no_files`` rows.
 
-    A row whose file is a non-PDF document (``.doc``/``.docx``/``.rtf``/…)
-    is a SUPPORTING row: set ``download_role="supporting"``, store the
-    on-disk basename as ``supporting_filename`` (never ``pdf_filename``),
-    keep ``file_url`` set to the file's URL, and follow the same
-    success/failure discipline (``download_status`` + ``download_error``).
-    Primary PDF rows omit ``download_role`` (default primary) and never
-    set ``supporting_filename``.
+    ``pdf_filename`` holds the downloaded file's on-disk basename for
+    EVERY downloaded file — PDF or non-PDF document (``.doc``/``.docx``/
+    ``.rtf``/…); there is no separate supporting role. Never set
+    ``download_role`` or ``supporting_filename``; the download helper
+    derives the basename (``Path(result["saved_path"]).name``) — store it
+    verbatim. "Whether a file is a PDF or a supporting document" is
+    decided later, at Uwazi upload time, from the file's extension.
 
     When the task also captures the source HTML of the page where each
     PDF was found (supporting file), store the HTML helper's basename

@@ -12,6 +12,8 @@ import hashlib
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit, unquote, quote
 
+from browser_agent.adapters.execution.file_ops import file_ext_for, file_filename_for
+
 
 def expected_pdf_filename(url: str) -> str:
     """Return ``pdf_<sha1(url)[:12]>.pdf``, the downloader's naming scheme.
@@ -76,10 +78,17 @@ class PdfUrlMatcher:
         that is not on disk; the downloader hashed the upgraded ``https``
         form. Trying both catches that false negative. ``normalized_name``
         is the one the downloader would have produced; ``original_name``
-        is what a naive hash of the stored URL gives.
+        is what a naive hash of the stored URL gives. Both names are
+        identical for a given ``url`` because each helper canonicalizes
+        the URL before hashing.
         """
-        normalized = PdfUrlMatcher.normalize(url)
-        return expected_pdf_filename(normalized), expected_pdf_filename(url)
+        name = file_filename_for(url) if file_ext_for(url) else expected_pdf_filename(url)
+        return name, name
+
+    @staticmethod
+    def is_document(url: str) -> bool:
+        """Return True when ``url`` names a supported non-PDF document extension."""
+        return bool(file_ext_for(url))
 
 
 def _sorted_query(query: str) -> str:

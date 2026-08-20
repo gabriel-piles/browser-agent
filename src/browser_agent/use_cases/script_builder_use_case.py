@@ -32,7 +32,7 @@ class ScriptBuilderUseCase:
             deps_type=AgentDeps,
             output_type=GeneratedScript,
             tools=[
-                Tool(explore_page, max_retries=3),
+                Tool(explore_page, max_retries=3, sequential=True),
                 Tool(run_validation_script, max_retries=3),
             ],
             capabilities=[ToolReturnCompactor()],

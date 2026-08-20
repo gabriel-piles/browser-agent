@@ -33,7 +33,7 @@ VERIFICATION_PDF_COUNT = 10
 
 # LLM connection — consumed by ``adapters/llm/opencode_zen_adapter.py``.
 OPENCODE_ZEN_BASE_URL = "https://opencode.ai/zen/v1"
-OPENCODE_ZEN_MODEL = "mimo-v2.5-free"
+OPENCODE_ZEN_MODEL = "deepseek-v4-flash"
 VERIFICATION_SCRIPT_RUN_LIMIT = 15
 VERIFICATION_QUERY_LIMIT = 10
 
@@ -82,11 +82,16 @@ COMPACT_INPUT_TOKEN_BUDGET = 28_000
 AGENT_INPUT_TOKEN_LIMIT = 15_000_000
 
 SNAPSHOT_MAX_CHARS = 50_000
+# Max link lines in the "# Page links" section of an untrimmed explore return.
+SNAPSHOT_LINK_LINES = 60
+# Max lines kept per link-bearing section when the compactor trims a return.
+COMPACT_KEEP_LINK_LINES = 30
+# Max lines kept per section by the aggressive (second-tier) trim.
+COMPACT_HARD_KEEP_LINES = 6
 COMPACT_KEEP_RECENT_VALIDATIONS = 1
 COMPACT_TRUNCATED_PLACEHOLDER = "[trimmed — see latest snapshot]"
 COMPACT_MIN_TRIM_CHARS = 1_000
 COMPACT_HEAD_LINES = 6
-COMPACT_MAX_EXTRACTED_LINES = 10
 
 # --- Analysis action limits ---
 # Maximum elements per category returned by ``explore_page(action='analyze')``

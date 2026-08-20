@@ -14,6 +14,33 @@ from typing import Any
 from pathlib import Path
 
 
+def ensure_metadata_schema(db_path: Path) -> None:
+    """Create the run's ``metadata.db`` with the fixed schema if absent.
+
+    Idempotent; called at flow start so verification can open the DB
+    read-only even when a subtask's script saved zero records (no
+    ``save_record`` call ever created the file). Keep the two DDLs in
+    sync with ``script_tools/save_record.py`` and
+    ``script_tools/discovered_links_store.py``.
+    """
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS metadata "
+            "(source_url TEXT PRIMARY KEY, task_slug TEXT NOT NULL, "
+            "scraped_at TEXT NOT NULL, data TEXT NOT NULL)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS discovered_links "
+            "(url TEXT PRIMARY KEY, filter_label TEXT NOT NULL DEFAULT '', "
+            "status TEXT NOT NULL DEFAULT 'discovered', discovered_at TEXT NOT NULL)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def query_rows(db_path: Path, run: str | None = None) -> list[tuple[str, str, str]]:
     """Return ``(source_url, task_slug, data_json)`` rows from ``metadata.db``.
 

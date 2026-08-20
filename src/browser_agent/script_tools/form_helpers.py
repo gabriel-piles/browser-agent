@@ -118,3 +118,21 @@ async def _confirm_value(tab, selector: str, value_str: str) -> bool:
     except Exception:
         return False
     return str(current) == value_str
+
+
+async def fill_text(tab, selector: str, value: str, event: str = "change") -> bool:
+    """Set ``selector`` value + dispatch ``event`` (rule 4a); null-guarded; returns bool."""
+    try:
+        js = (
+            "(()=>{const el=document.querySelector(" + json.dumps(selector) + ");"
+            "if(!el)return false;el.value=" + json.dumps(value) + ";"
+            "el.dispatchEvent(new Event(" + json.dumps(event) + ",{bubbles:true}));"
+            "return true;})()"
+        )
+        if not await tab.evaluate(js):
+            return False
+        await tab.sleep(0.4)
+        return True
+    except Exception as e:
+        print(f"  [fill_text] {selector} failed: {type(e).__name__}: {e}")
+        return False

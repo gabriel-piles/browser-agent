@@ -13,15 +13,15 @@ import time
 import asyncio
 from typing import Any
 
-from pydantic_ai import Agent, UsageLimits
-from pydantic_ai.exceptions import UnexpectedModelBehavior
+from pydantic_ai import Agent, Tool, UsageLimits
 from pydantic_ai.models import Model
-from pydantic_ai.usage import UsageLimitExceeded
+from websockets.exceptions import ConnectionClosedError as _BrowserConnectionClosed
 
 from browser_agent.agent_logging import agent_logger
 from browser_agent.configuration import AGENT_INPUT_TOKEN_LIMIT, MAX_LLM_CALLS, MAX_OUTPUT_TOKENS
 from browser_agent.domain.verification_report import VerificationReport
 from browser_agent.domain.verification_request import VerificationRequest
+from browser_agent.use_cases.agent_run_with_overflow_recovery import run_agent_with_recovery
 from browser_agent.use_cases.check_pdf_tool import check_pdf
 from browser_agent.use_cases.declare_paths_tool import declare_paths
 from browser_agent.use_cases.query_db_tool import query_db
@@ -45,7 +45,7 @@ class VerifyDownloadsUseCase:
             system_prompt=VERIFICATION_SYSTEM_PROMPT,
             deps_type=VerificationAgentDeps,
             output_type=VerificationReport,
-            tools=[declare_paths, explore_page, check_pdf, query_db, run_read_script],
+            tools=[declare_paths, Tool(explore_page, sequential=True), check_pdf, query_db, run_read_script],
             capabilities=[ToolReturnCompactor()],
             model_settings={"max_tokens": MAX_OUTPUT_TOKENS},
         )
@@ -126,32 +126,49 @@ def _truncate(value: str, limit: int) -> str:
 
 _AGENT_RUN_RETRIES = 2
 _AGENT_RUN_RETRY_DELAY_S = 5.0
+_BROWSER_RESTARTS = 1
 
 
 async def _run_with_retry(agent: Agent, prompt: str, **kwargs: Any) -> Any:
     """Run the agent, retrying transient model errors up to twice.
 
-    Overflow exceptions (``UnexpectedModelBehavior``,
-    ``UsageLimitExceeded``) get a single fresh-start retry with no
-    ``message_history`` — the verification agent has no prior history
-    to truncate.  A second overflow propagates.  Transient errors
-    keep the existing retry-with-delay behavior.
+    Context overflow is handled inside
+    :func:`run_agent_with_recovery`, which preserves partial history
+    and retries once with a finalize directive; a second overflow
+    propagates. Lost CDP connections recycle the browser session once
+    and rerun. Transient errors keep the existing retry-with-delay
+    behavior.
     """
     last_exc: Exception | None = None
-    overflow_retried = False
+    restarts = 0
     for attempt in range(_AGENT_RUN_RETRIES + 1):
         try:
-            return await agent.run(prompt, **kwargs)
-        except (UnexpectedModelBehavior, UsageLimitExceeded) as exc:
-            if not overflow_retried:
-                overflow_retried = True
-                agent_logger.warning(
-                    "Context overflow, retrying with fresh history: {exc}",
-                    exc=exc,
-                )
-                kwargs.pop("message_history", None)
-                continue
-            raise
+            return await run_agent_with_recovery(
+                agent,
+                prompt,
+                deps=kwargs.get("deps"),
+                usage_limits=kwargs.get("usage_limits"),
+                message_history=kwargs.get("message_history"),
+            )
+        except _BrowserConnectionClosed as exc:
+            last_exc = exc
+            deps = kwargs.get("deps")
+            browser = getattr(deps, "browser_session", None) if deps is not None else None
+            if browser is None or restarts >= _BROWSER_RESTARTS:
+                raise
+            restarts += 1
+            agent_logger.warning(
+                "browser CDP connection lost (restart {n}/{max}); recycling browser session: {exc}",
+                n=restarts,
+                max=_BROWSER_RESTARTS,
+                exc=exc,
+            )
+            try:
+                await browser.close()
+            except Exception as close_exc:  # noqa: BLE001 — recovery best-effort
+                agent_logger.warning("browser close during recovery failed: {exc}", exc=close_exc)
+            await browser.start()
+            continue
         except Exception as exc:  # noqa: BLE001 — transient model errors
             last_exc = exc
             if attempt < _AGENT_RUN_RETRIES:

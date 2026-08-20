@@ -40,6 +40,28 @@ class PdfIntegrityValidator:
         )
 
     @staticmethod
+    def validate_document(file_path: Path) -> PdfIntegrityResult:
+        """Return the presence verdict for a non-PDF document (existence + size).
+
+        Documents have no ``%PDF`` magic: validity means the file exists
+        and is non-empty, with ``is_suspiciously_small`` flagging a tiny
+        file. Never ``corrupt_file`` for a present document.
+        """
+        if not file_path.is_file():
+            return PdfIntegrityResult(notes="file missing")
+        size = file_path.stat().st_size
+        valid = size > 0
+        suspicious = valid and size <= _SUSPICIOUS_SIZE
+        return PdfIntegrityResult(
+            file_size=size,
+            has_pdf_magic=False,
+            has_eof_marker=False,
+            is_valid=valid,
+            is_suspiciously_small=suspicious,
+            notes=("doc present" if valid else "doc missing") + f" ({size} bytes)",
+        )
+
+    @staticmethod
     def _has_magic(file_path: Path) -> bool:
         with file_path.open("rb") as fh:
             return fh.read(5).startswith(_PDF_MAGIC)

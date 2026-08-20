@@ -33,6 +33,7 @@ from browser_agent.ports.llm_port import LlmPort
 from browser_agent.use_cases.llm_draft_assembler import LlmDraftAssembler
 from browser_agent.use_cases.mapping_fallback_filler import MappingFallbackFiller
 from browser_agent.use_cases.propose_prompt_renderer import ProposePromptRenderer
+from browser_agent.use_cases.tool_return_compactor import ToolReturnCompactor
 from browser_agent.use_cases.uwazi_mappers import to_template, to_thesauri_snapshot
 from uwazi_api.client import UwaziClient
 
@@ -112,6 +113,7 @@ class ProposeMappingUseCase:
             model=model,
             system_prompt=ProposePromptRenderer.SYSTEM_PROMPT,
             output_type=LlmMappingDraft,
+            capabilities=[ToolReturnCompactor()],
             retries=2,
         )
 

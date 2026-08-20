@@ -20,7 +20,7 @@ For discovery scripts:
   from script_tools.page_wait import wait_for_page_ready, prepare_page_wait, goto_ready, is_challenge, wait_for_challenge_clear
   from script_tools.start_browser import start_browser
   from script_tools.dom_helpers import get_text, get_attr, trusted_click
-  from script_tools.form_helpers import select_filter_value
+  from script_tools.form_helpers import select_filter_value, fill_text
   from script_tools.discover_links import discover_links
   from script_tools.discovered_links_store import save_discovered_link, load_discovered_links, mark_link_processed
 
@@ -31,7 +31,7 @@ For processing scripts:
   from script_tools.page_wait import wait_for_page_ready, wait_for_anchors, prepare_page_wait, goto_ready, is_challenge, wait_for_challenge_clear
   from script_tools.start_browser import start_browser
   from script_tools.dom_helpers import get_text, get_attr, trusted_click
-  from script_tools.form_helpers import select_filter_value
+  from script_tools.form_helpers import select_filter_value, fill_text
   from script_tools.discovered_links_store import load_discovered_links, mark_link_processed
   from script_tools._file_utils import pdf_id_for, doc_id_for
   from script_tools.extract_fields import extract_fields, extract_links, extract_rows
@@ -103,7 +103,7 @@ Your script's ONLY output is rows in the ``discovered_links`` table via
       from script_tools.page_wait import wait_for_page_ready, prepare_page_wait, goto_ready, is_challenge, wait_for_challenge_clear
       from script_tools.start_browser import start_browser
       from script_tools.dom_helpers import get_text, get_attr, trusted_click
-      from script_tools.form_helpers import select_filter_value
+      from script_tools.form_helpers import select_filter_value, fill_text
       from script_tools.discover_links import discover_links
       from script_tools.discovered_links_store import save_discovered_link, load_discovered_links, mark_link_processed
    NEVER write ``from script_tools import X`` — ``script_tools`` is a
@@ -122,6 +122,7 @@ Your script's ONLY output is rows in the ``discovered_links`` table via
       async def get_attr(el, name: str) -> str
       async def trusted_click(tab, selector: str) -> bool
       async def select_filter_value(tab, selector: str, value) -> bool
+      async def fill_text(tab, selector: str, value: str, event: str = "change") -> bool
       async def discover_links(tab, link_selector: str, load_more_selector: str = "", advertised: int = 0, base_url: str = "", scroll_js: str = "", max_rounds: int = 12) -> list[str]
       def save_discovered_link(url: str, filter_label: str = "") -> None          # SYNC — do NOT await
       def load_discovered_links() -> list[tuple[str, str]]                        # SYNC — returns [(url, filter_label)]
@@ -211,17 +212,19 @@ Your script's ONLY output is rows in the ``discovered_links`` table via
    and check non-empty. Wrap attribute reads in try/except, default "".
    Use ``get_text``/"get_attr" (rule 0) instead of bare ``.text``/
    ``.get_attribute`` — they handle the priority and misses.
+   ``el.text`` / ``el.text_all`` / ``el.attrs`` / ``el.id`` are SYNC
+   properties (plain str/dict) — NEVER write ``await el.text``; awaiting
+   a sync value raises ``TypeError: object str can't be used in 'await'
+   expression``. Await only ``async def`` helpers (rule 0) and
+   ``await el.apply(...)``.
 
-4a. Null-guard DOM-mutating ``tab.evaluate`` — ``querySelector`` returns
-    ``null`` when the element is not in the DOM. Null-check inside the
-    JS and no-op on miss::
-
-       await tab.evaluate(
-           "(function(){var s=document.querySelector('#x');"
-           "if(!s){return false;}s.value='2025';"
-           "s.dispatchEvent(new Event('change',{bubbles:true}));"
-           "return true;})()"
-       )
+4a. Set input values with ``await fill_text(tab, selector, value)`` (rule 0)
+    instead of a hand-written ``tab.evaluate`` IIFE. ``fill_text`` null-guards
+    the ``querySelector`` (returns ``null`` when the element is absent), sets
+    ``.value``, and dispatches the ``change`` event; it returns ``True`` iff
+    the element was present and the value was set. For inputs whose handler
+    listens on React's ``input`` event, pass ``event="input"``. A hand-written
+    value-set IIFE is FORBIDDEN by the linter (rule 4a) — always use the helper.
 
 4b. Iterated <select> — when the loop selects many values through one
     ``<select>``, use ``select_filter_value`` (rule 0). It encapsulates
@@ -439,7 +442,7 @@ does inline extraction only (no ``load_discovered_links()`` call).
       from script_tools.page_wait import wait_for_page_ready, wait_for_anchors, prepare_page_wait, goto_ready, is_challenge, wait_for_challenge_clear
       from script_tools.start_browser import start_browser
       from script_tools.dom_helpers import get_text, get_attr, trusted_click
-      from script_tools.form_helpers import select_filter_value
+      from script_tools.form_helpers import select_filter_value, fill_text
       from script_tools.discovered_links_store import load_discovered_links, mark_link_processed
       from script_tools._file_utils import pdf_id_for, doc_id_for
       from script_tools.extract_fields import extract_fields, extract_links, extract_rows
@@ -465,6 +468,7 @@ does inline extraction only (no ``load_discovered_links()`` call).
       async def get_attr(el, name: str) -> str
       async def trusted_click(tab, selector: str) -> bool
       async def select_filter_value(tab, selector: str, value) -> bool
+      async def fill_text(tab, selector: str, value: str, event: str = "change") -> bool
       async def extract_fields(tab, specs: list[dict]) -> dict[str, str | list[str]]
       async def extract_links(tab, selector: str, base_url: str = "") -> list[str]
       async def extract_rows(tab, row_selector: str, cell_specs: list[dict], include_html: bool = False) -> list[dict]
@@ -515,17 +519,19 @@ does inline extraction only (no ``load_discovered_links()`` call).
    and check non-empty. Wrap attribute reads in try/except, default "".
    Use ``get_text``/"get_attr" (rule 0) instead of bare ``.text``/
    ``.get_attribute`` — they handle the priority and misses.
+   ``el.text`` / ``el.text_all`` / ``el.attrs`` / ``el.id`` are SYNC
+   properties (plain str/dict) — NEVER write ``await el.text``; awaiting
+   a sync value raises ``TypeError: object str can't be used in 'await'
+   expression``. Await only ``async def`` helpers (rule 0) and
+   ``await el.apply(...)``.
 
-4a. Null-guard DOM-mutating ``tab.evaluate`` — ``querySelector`` returns
-    ``null`` when the element is not in the DOM. Null-check inside the
-    JS and no-op on miss::
-
-       await tab.evaluate(
-           "(function(){var s=document.querySelector('#x');"
-           "if(!s){return false;}s.value='2025';"
-           "s.dispatchEvent(new Event('change',{bubbles:true}));"
-           "return true;})()"
-       )
+4a. Set input values with ``await fill_text(tab, selector, value)`` (rule 0)
+    instead of a hand-written ``tab.evaluate`` IIFE. ``fill_text`` null-guards
+    the ``querySelector`` (returns ``null`` when the element is absent), sets
+    ``.value``, and dispatches the ``change`` event; it returns ``True`` iff
+    the element was present and the value was set. For inputs whose handler
+    listens on React's ``input`` event, pass ``event="input"``. A hand-written
+    value-set IIFE is FORBIDDEN by the linter (rule 4a) — always use the helper.
 
 4b. Iterated <select> — when the loop selects many values through one
     ``<select>``, use ``select_filter_value`` (rule 0). It encapsulates
@@ -612,11 +618,10 @@ does inline extraction only (no ``load_discovered_links()`` call).
 8a. Retry failed downloads — before downloading NEW files, call
     ``load_failed_downloads()`` (rule 0); it returns ``[]`` on a fresh
     run (importing it without calling it is a lint FAILURE). Re-attempt
-    PRIMARY rows with the PDF helper and SUPPORTING rows
-    (``download_role="supporting"``) with ``download_file_*``; on
-    success update ``pdf_filename``/"supporting_filename" and
-    ``download_status="downloaded"``. Skip rows with no ``file_url``
-    (metadata-only ``no_files`` rows).
+    every downloaded file with its matching helper (``download_pdf_*`` for
+    PDFs, ``download_file_*`` for DOC/DOCX/RTF/…); on success update
+    ``pdf_filename`` and ``download_status="downloaded"``. Skip rows with
+    no ``file_url`` (metadata-only ``no_files`` rows).
     Failed-document retry (MANDATORY) — ``main()`` MUST contain a retry
     phase AFTER the worker ``gather`` and BEFORE ``browser.stop()``.
     ``load_failed_downloads()`` also returns rows with
@@ -725,28 +730,17 @@ does inline extraction only (no ``load_discovered_links()`` call).
     it as the DB key, the stored ``pdf_id``, and the filename stem —
     never inline ``hashlib`` (the helper percent-canonicalizes; the
     inline hash does not). ``source_url`` MUST be content-stable, never
-    a position index. Row roles — every downloaded file is a row of
-    exactly one role. PRIMARY (PDF, default): record
-    ``pdf_filename``/"pdf_id"/"file_url" and key the row
-    ``f"{page_url}/pdf/{pdf_id}"``. SUPPORTING (non-PDF document): use
-    ``download_file_*``, set ``download_role="supporting"``,
-    ``supporting_filename=Path(result["saved_path"]).name``,
-    ``file_url=<absolute percent-encoded URL>``, the label/format in
-    ``pdf_name``/"pdf_type", ``source_page_url``, and key the row
-    ``f"{page_url}/doc/{doc_id}"``. A supporting row NEVER sets
-    ``pdf_filename``; on failure set ``supporting_filename=""``,
-    ``download_status="failed"``, ``download_error``. Skip links that
-    are neither PDF nor in the supported document-extension set.
-    ``file_url`` MUST be a percent-encoded absolute URL with no raw
-    spaces — build it with ``urljoin(base, quote(href, safe="/%?=&"))``
-    (``from urllib.parse import urljoin, quote`` — ``urllib.parse`` is
-    the ONLY ``urllib`` submodule the linter permits; the ``safe`` set
-    includes ``?`` and ``=`` so query strings are not double-encoded),
-    never bare-concatenate a host onto an href. The validation script MUST
-    NEVER rename the downloaded file (os.rename / os.replace / shutil.move) — store
-    Path(result["saved_path"]).name verbatim as pdf_filename / supporting_filename.
-    The canonical name is what the step-2 reconciler recomputes from file_url;
-    renaming breaks the DB-vs-disk diff.
+    a position index. Every downloaded file is one row. Store the
+    downloaded file's basename (``Path(result["saved_path"]).name``) in
+    ``pdf_filename`` for BOTH PDFs and non-PDF documents
+    (``.doc``/``.docx``/``.rtf``/…) — there is no separate supporting
+    role. Use ``download_pdf_*`` for PDFs and ``download_file_*`` for
+    other documents; on success set
+    ``pdf_filename=Path(result["saved_path"]).name``,
+    ``download_status="downloaded"``; on failure set ``pdf_filename=""``,
+    ``download_status="failed"``, ``download_error``. ``file_url`` MUST be
+    a percent-encoded absolute URL. NEVER rename the downloaded file;
+    store ``Path(result["saved_path"]).name`` verbatim as ``pdf_filename``.
 
 14. HTML capture — when the task downloads PDFs, also save the HTML of
     the page where each PDF was found via
@@ -1057,7 +1051,7 @@ does inline extraction only (no ``load_discovered_links()`` call).
        prompt.
     d) For each (document, language, format) variant: download via
        ``download_pdf_*`` (PDF) or ``download_file_*`` (DOC/DOCX,
-       ``download_role="supporting"``), then ``save_record`` with keys:
+       etc.), then ``save_record`` with keys:
        ``document_ref``, ``document_status`` (``"Draft"`` if ``"L"`` in
        ``document_ref`` else ``"Adopted"``), ``language``
        (``"English"``/``"Spanish"``), ``file_type``
@@ -1065,8 +1059,8 @@ does inline extraction only (no ``load_discovered_links()`` call).
        percent-encoded per rule 13), ``title``, ``date``,
        ``source_html``, ``source_page_url`` (the listing-page URL),
        plus the existing download-discipline keys
-       (``pdf_filename``/``supporting_filename``/``download_status``/
-       ``download_error``). ``source_url`` (PK) =
+       (``pdf_filename``/``download_status``/``download_error``).
+       ``source_url`` (PK) =
        ``f"{listing_url}/{document_ref}/{language}/{file_type}"``
        (content-stable; never a position index — rule 13).
     e) Missing-translation: if a language variant is absent, SKIP it

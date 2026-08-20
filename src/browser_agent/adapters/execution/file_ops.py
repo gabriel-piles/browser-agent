@@ -41,6 +41,27 @@ def pdf_filename_for(url: str) -> str:
     return f"{pdf_id_for(url)}.pdf"
 
 
+_DOC_EXTENSIONS = frozenset({".doc", ".docx", ".rtf", ".odt", ".odp", ".ods", ".xls", ".xlsx", ".ppt", ".pptx"})
+
+
+def doc_id_for(url: str) -> str:
+    """``doc_<sha1(canonical_url)[:12]>`` — the supporting-file id stem."""
+    return f"doc_{hashlib.sha1(_canonical_url(url).encode()).hexdigest()[:12]}"
+
+
+def file_ext_for(url) -> str:
+    """Lowercased URL-path suffix if it is a supported document extension, else ``""``."""
+    if not isinstance(url, str) or not url:
+        return ""
+    suffix = Path(unquote(urlsplit(url.strip()).path)).suffix.lower()
+    return suffix if suffix in _DOC_EXTENSIONS else ""
+
+
+def file_filename_for(url: str) -> str:
+    """``doc_<sha1(canonical_url)[:12]><ext>`` (``.bin`` when the URL has no extension)."""
+    return f"{doc_id_for(url)}{file_ext_for(url) or '.bin'}"
+
+
 def html_filename_for(url: str) -> str:
     """Deterministic, collision-safe on-disk filename for a page URL."""
     return f"html_{hashlib.sha1(_canonical_url(url).encode()).hexdigest()[:12]}.html"

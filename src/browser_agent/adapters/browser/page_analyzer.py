@@ -9,6 +9,7 @@ buttons, inputs, headings, tables, pagination, and filters.
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup, Tag
 
@@ -39,10 +40,12 @@ class PageAnalyzer:
         tables = self._extract_tables(soup, ANALYZE_MAX_TABLES)
         pagination, filters = self._classify_interactive(soup, links, buttons)
         patterns = self._group_link_patterns(links)
+        link_total = len(soup.find_all("a", href=True))
         return PageStructure(
             url=url,
             title=title,
             links=links,
+            link_total=link_total,
             buttons=buttons,
             inputs=inputs,
             headings=headings,
@@ -272,3 +275,26 @@ def _selector_for(key: str) -> str:
     if prefix == "path":
         return f"a[href*={value!r}]"
     return f"a[href$={value!r}]"
+
+
+def anchor_hrefs(raw_html: str, base_url: str, limit: int) -> list[tuple[str, str]]:
+    """Harvest absolute ``(href, text)`` anchor pairs from raw HTML.
+
+    Skips empty, fragment, ``javascript:``, and ``mailto:`` hrefs,
+    absolutizes the rest against ``base_url``, dedupes by absolute href
+    (first occurrence wins), and caps the result at ``limit`` pairs.
+    """
+    seen: set[str] = set()
+    out: list[tuple[str, str]] = []
+    for a in BeautifulSoup(raw_html, "html.parser").find_all("a", href=True):
+        href = a["href"].strip()
+        if not href or href.startswith(("#", "javascript:", "mailto:")):
+            continue
+        absolute = urljoin(base_url, href)
+        if absolute in seen:
+            continue
+        seen.add(absolute)
+        out.append((absolute[:200], a.get_text(strip=True)[:80]))
+        if len(out) >= limit:
+            break
+    return out

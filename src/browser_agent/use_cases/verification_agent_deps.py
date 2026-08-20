@@ -6,10 +6,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from browser_agent.configuration import (
+    MAX_EXPLORE_CALLS,
     VERIFICATION_PDF_COUNT,
     VERIFICATION_QUERY_LIMIT,
     VERIFICATION_SCRIPT_RUN_LIMIT,
 )
+from browser_agent.domain.explore_duplicate_guard import ExploreDuplicateGuard
 from browser_agent.domain.expected_path import ExpectedPath
 from browser_agent.domain.pdf_check_result import PdfCheckResult
 from browser_agent.ports.browser_session_port import BrowserSessionPort
@@ -41,3 +43,8 @@ class VerificationAgentDeps:
     query_db_limit: int = VERIFICATION_QUERY_LIMIT
     pdf_results: list[PdfCheckResult] = field(default_factory=list)
     declared_paths: list[ExpectedPath] = field(default_factory=list)
+    explore_calls: int = 0
+    explore_limit: int = MAX_EXPLORE_CALLS
+    empty_result_streak: int = 0
+    last_analyze_selectors: list[str] = field(default_factory=list)
+    explore_guard: ExploreDuplicateGuard = field(default_factory=ExploreDuplicateGuard)

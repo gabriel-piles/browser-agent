@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import shutil
 from pathlib import Path
 
 from browser_agent.domain.subtask_record import SubtaskRecord
@@ -38,11 +37,9 @@ class SubtaskPipeline:
 
         for attempt in range(_MAX_SUBTASK_ATTEMPTS):
             record.attempts = attempt + 1
-            fresh_session = attempt == 0
-            if fresh_session and profile_dir.exists():
-                shutil.rmtree(profile_dir)
-
-            bsession, builder = await self._build_session(profile_dir)
+            # ``ZendriverBrowserSession.start`` resets (wipes + re-seeds) the
+            # profile dir on every launch, so no upfront cleanup is needed.
+            bsession, builder = await self._build_session(profile_dir, subtask.subtask_id)
             result = await self._attempt(subtask, context, record, bsession, builder, attempt)
             await bsession.close()
 
@@ -200,7 +197,7 @@ class SubtaskPipeline:
             return 0
         return int(count)
 
-    async def _build_session(self, profile_dir):
+    async def _build_session(self, profile_dir, task_slug):
         from browser_agent.adapters.browser.zendriver_browser_session import ZendriverBrowserSession
         from browser_agent.adapters.execution.in_process_script_runner_adapter import (
             InProcessScriptRunnerAdapter,
@@ -221,7 +218,11 @@ class SubtaskPipeline:
         deps = AgentDeps(
             llm=OllamaAdapter(),
             browser_session=session,
-            script_runner=InProcessScriptRunnerAdapter(browser_session=session),
+            script_runner=InProcessScriptRunnerAdapter(
+                browser_session=session,
+                metadata_db_path=self._run_path / "metadata.db",
+                task_slug=task_slug,
+            ),
             pdf_downloader=CurlCffiPdfDownloaderAdapter(),
         )
         return session, ScriptBuilderUseCase(deps)

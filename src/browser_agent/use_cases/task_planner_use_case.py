@@ -29,7 +29,7 @@ class TaskPlannerUseCase:
             system_prompt=PLANNER_SYSTEM_PROMPT,
             deps_type=AgentDeps,
             output_type=ScrapePlan,
-            tools=[Tool(explore_page, max_retries=3), Tool(download_pdf, max_retries=3)],
+            tools=[Tool(explore_page, max_retries=3, sequential=True), Tool(download_pdf, max_retries=3)],
             capabilities=[ToolReturnCompactor()],
             model_settings={"max_tokens": MAX_OUTPUT_TOKENS},
             retries={"output": 3},
@@ -47,9 +47,13 @@ class TaskPlannerUseCase:
         self._log_plan(plan)
         return plan
 
-    async def replan(self, focus: str) -> ScrapePlan:
+    async def replan(self, focus: str, task: str, previous_plan: str) -> ScrapePlan:
+        # The planner's browser is started in execute() and closed after
+        # every plan; a replanning agent explores the site again, so the
+        # session must be (re)started here too. start() is idempotent.
+        await self._deps.browser_session.start()
         agent = self._build_agent(self._deps.llm.get_model())
-        prompt = f"The previous plan needs revision. Focus: {focus}"
+        prompt = self._replan_prompt(task, focus, previous_plan)
         run = await self._run_agent(agent, prompt, message_history=self._last_messages)
         self._last_messages = list(run.all_messages())
         plan = self._coerce_result(run)
@@ -71,6 +75,14 @@ class TaskPlannerUseCase:
             self._deps,
             usage_limits=_usage_limits(),
             message_history=message_history,
+        )
+
+    @staticmethod
+    def _replan_prompt(task: str, focus: str, previous_plan: str) -> str:
+        return (
+            f"ORIGINAL TASK (must still be satisfied, unchanged):\n{task}\n\n"
+            f"THE PREVIOUS PLAN NEEDS REVISION. Focus: {focus}\n\n"
+            f"PREVIOUS PLAN AND STATUS (revise it; keep what already works):\n{previous_plan}"
         )
 
     @staticmethod

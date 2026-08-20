@@ -19,6 +19,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from browser_agent.adapters.execution.file_ops import file_ext_for
 from browser_agent.domain.corpus_finding import CorpusFinding
 from browser_agent.domain.reconciled_pdf import ReconciledPdf
 from browser_agent.use_cases.metadata_db import parse_row_data
@@ -44,7 +45,13 @@ class ReconcileDownloadsUseCase:
 
     def reconcile(self) -> tuple[list[ReconciledPdf], list[CorpusFinding]]:
         """Return ``(per_row_inventory, corpus_findings)`` for the whole run."""
-        rows = self._read_rows()
+        try:
+            rows = self._read_rows()
+        except sqlite3.OperationalError:
+            # Missing DB = zero recorded rows (script saved nothing). Treat
+            # that as an empty inventory — a coverage gap for the verifier,
+            # not a crash — matching _discovered_unprocessed_findings.
+            rows = []
         disk_files = self._disk_pdf_basenames()
         per_row = [self._reconcile_row(row, disk_files) for row in rows]
         findings = self._corpus_findings(rows, disk_files, per_row)
@@ -136,23 +143,6 @@ class ReconcileDownloadsUseCase:
         data = parse_row_data(data_json)
         download_status = data.get("download_status", "") or ""
         file_url = data.get("file_url", "") or ""
-        if data.get("download_role") == "supporting":
-            filename = data.get("supporting_filename", "") or ""
-            on_disk = bool(filename) and (self._downloads_path / filename).is_file()
-            size = int((self._downloads_path / filename).stat().st_size) if on_disk else 0
-            return ReconciledPdf(
-                source_url=source_url,
-                file_url=file_url,
-                matched_filename=filename if on_disk else "",
-                match_mode="supporting" if on_disk else "missing",
-                file_exists=on_disk,
-                file_size_bytes=size,
-                verdict="present" if on_disk else "file_not_downloaded",
-                notes=(
-                    f"supporting file (non-PDF) on disk ({filename})" if on_disk else "supporting-file row: no file on disk"
-                ),
-                download_status=download_status,
-            )
         if not file_url:
             return ReconciledPdf(
                 source_url=source_url,
@@ -223,7 +213,10 @@ class ReconcileDownloadsUseCase:
         filename_mismatch: bool,
         download_status: str,
     ) -> ReconciledPdf:
-        integrity = PdfIntegrityValidator.validate(matched)
+        is_document = bool(file_ext_for(file_url))
+        integrity = (
+            PdfIntegrityValidator.validate_document(matched) if is_document else PdfIntegrityValidator.validate(matched)
+        )
         verdict = self._row_verdict(integrity)
         return ReconciledPdf(
             source_url=source_url,

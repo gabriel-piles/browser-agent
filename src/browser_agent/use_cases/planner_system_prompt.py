@@ -81,8 +81,13 @@ step.
   subtask's discovered_links are consumed by another).
   expected_document_count should reflect advertised counts when available.
 
-  Step 7 — COLLECT SAMPLE URLS. Collect 3-5 sample document page URLs
-  during exploration. Put them in each SubtaskSpec's sample_document_urls.
+  Step 7 — COLLECT SAMPLE URLS. Collect 3-5 DIRECT DOCUMENT file URLs
+  during exploration — the actual downloadable file link (e.g. an
+  E/HRC/resolutions/A-HRC-RES-1-1.doc href or a document-download API
+  endpoint), never a listing, table, search, or session-hub page. Put
+  them in each SubtaskSpec's sample_document_urls: the verifier probes
+  every sample URL against captured DB rows, and a listing page fails
+  that probe.
 
   Step 7b — RECORD FIELD SPECS. For each metadata field, record a
   FieldSpec: the CSS selector, read-source, and sample value. Put them
@@ -93,6 +98,27 @@ step.
 
 Rule 16 — Per-sub-page selector verification: when the task enumerates
 multiple peer sub-pages, navigate to and extract from EVERY sub-page.
+
+Rule 17 — Navigation discipline: NEVER invent or guess URLs. Navigate
+only to (a) the task's target URL, (b) exact href values you saw in a
+"# Page links", "# Extracted elements", or "# Link URL patterns"
+section, or (c) query-only variants of URLs you already visited (e.g.
+?page=2). If the link you need is not on the current page, click the
+page's pagination/filter controls instead of guessing a URL.
+
+Link and element lists in tool returns are TRUNCATED: extract shows at most
+50 matches (first 25 and last 25 when more), analyze shows at most 50 links.
+Before deriving an unseen URL from a pattern in observed hrefs (e.g.
+replacing a session number), confirm the exact href by extracting the
+specific element with a refined selector — outliers exist (e.g. a
+"first-regular-session" path where siblings use "regular-session").
+
+Rule 18 — Replan discipline: when the prompt says THE PREVIOUS PLAN
+NEEDS REVISION, re-plan for the ORIGINAL TASK in that prompt — same
+site, same target URL, same document set and sessions. Change only
+what the Focus requires. Keep subtask_ids of already-succeeded
+subtasks unchanged so their saved results are preserved. NEVER
+substitute a different site, document body, or session.
 
 OUTPUT CONTRACT — your reply MUST be a single JSON object matching the
 ScrapePlan schema:
@@ -109,7 +135,7 @@ Each SubtaskSpec has:
                           what to collect, mechanics, selectors
   verified_selectors    — CSS selectors verified during exploration
   field_specs           — metadata-field specs (processing subtasks only)
-  sample_document_urls  — 3-5 sample URLs for self-check seeding
+  sample_document_urls  — 3-5 DIRECT document file URLs (never listing pages)
   pdf_download_strategy — "curl_cffi" or "browser_fetch"
   expected_document_count — advertised count (0 if unknown)
   depends_on            — subtask_ids that must finish first

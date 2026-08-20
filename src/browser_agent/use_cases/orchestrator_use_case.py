@@ -13,6 +13,7 @@ from browser_agent.configuration import (
 )
 from browser_agent.domain.orchestrator_decision import OrchestratorDecision
 from browser_agent.use_cases.orchestrator_system_prompt import ORCHESTRATOR_SYSTEM_PROMPT
+from browser_agent.use_cases.tool_return_compactor import ToolReturnCompactor
 
 
 class OrchestratorUseCase:
@@ -28,6 +29,7 @@ class OrchestratorUseCase:
             model=self._model,
             system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,
             output_type=OrchestratorDecision,
+            capabilities=[ToolReturnCompactor()],
             model_settings={"max_tokens": MAX_OUTPUT_TOKENS},
             retries={"output": 3},
         )

@@ -51,8 +51,8 @@ from browser_agent.domain.processing_self_check_result import ProcessingSelfChec
 from browser_agent.domain.smoke_test_result import SmokeTestResult
 
 from browser_agent.script_tools.discovered_links_store import preseed_sample_links
-from browser_agent.script_tools._file_utils import pdf_id_for
 
+from browser_agent.use_cases.pdf_url_matcher import PdfUrlMatcher
 from browser_agent.use_cases.zendriver_error_patterns import ZD_RUNTIME_ERROR_PATTERNS
 
 # Short window: we only want to catch *immediate* failures (syntax
@@ -223,13 +223,15 @@ def _analyze_records(db_path: Path) -> tuple[int, int, list[str], bool]:
     """Return (downloaded_rows, total_rows, violations, has_download_intent) from the scratch metadata table.
 
     Violations are deterministic correctness bugs, one human-readable line each:
-      - canonical_filename: a downloaded row's pdf_filename != pdf_id_for(file_url)+".pdf"
+      - canonical_filename: a downloaded row's pdf_filename != the type-aware
+        expected basename (pdf_id_for(file_url)+".pdf" for PDFs, doc_<hash><ext>
+        for documents) derived from file_url
       - failed_download: a row with file_url/pdf_url but download_status != "downloaded" or empty pdf_filename
       - load_failed: a row with download_status == "load_failed" (metadata gate never rendered)
     ``has_download_intent`` is true when any row carries a ``file_url``,
-    ``pdf_url``, ``pdf_filename``, ``supporting_filename``, or a non-trivial
-    ``download_status`` — the task attempts downloads; extract-only tasks
-    never set these and pass on ``record_count >= 1`` alone.
+    ``pdf_url``, ``pdf_filename``, or a non-trivial ``download_status`` —
+    the task attempts downloads; extract-only tasks never set these and
+    pass on ``record_count >= 1`` alone.
     """
     if not db_path.exists():
         return 0, 0, [], False
@@ -250,15 +252,16 @@ def _analyze_records(db_path: Path) -> tuple[int, int, list[str], bool]:
             continue
         fu = data.get("file_url")
         pf = data.get("pdf_filename")
-        sf = data.get("supporting_filename")
         pu = data.get("pdf_url")
         status = data.get("download_status")
-        if fu or pf or sf or pu or (status and status != "no_files"):
+        if fu or pf or pu or (status and status != "no_files"):
             has_download_intent = True
-        if status == "downloaded" and (pf or sf):
+        if status == "downloaded" and pf:
             downloaded += 1
-            if fu and pf and pf != pdf_id_for(fu) + ".pdf":
-                violations.append(f"canonical_filename: {pf!r} != {pdf_id_for(fu) + '.pdf'!r} (file_url={fu})")
+            if fu and pf:
+                expected = PdfUrlMatcher.expected_filenames_for(fu)[0]
+                if pf != expected:
+                    violations.append(f"canonical_filename: {pf!r} != {expected!r} (file_url={fu})")
         elif status == "load_failed":
             violations.append(f"load_failed: source_page_url={data.get('source_page_url')!r}")
         elif fu or pu:

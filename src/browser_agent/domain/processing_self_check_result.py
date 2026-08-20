@@ -9,7 +9,7 @@ class ProcessingSelfCheckResult(BaseModel):
     The self-check seeds the scratch DB with the explorer's
     ``sample_document_urls`` as ``status='discovered'`` links, runs the
     processing script, and counts rows whose ``download_status == "downloaded"``
-    with a non-empty ``pdf_filename`` or ``supporting_filename``. ``success``
+    with a non-empty ``pdf_filename``. ``success``
     is true when the script saved at least one row with no correctness
     violations: download tasks require at least one downloaded row, while
     extract-only tasks (no ``file_url`` in any row) pass on ``record_count``

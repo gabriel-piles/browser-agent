@@ -55,3 +55,15 @@ class VerificationReport(BaseModel):
         default_factory=list,
         description="Actionable script_tools improvements derived by the verify agent.",
     )
+    html_required: bool = Field(
+        default=False,
+        description="True when the run requires a saved HTML file per downloaded document (registry/related-document flow).",
+    )
+    html_capture_complete: bool = Field(
+        default=True,
+        description="True when every downloaded-document record has its required HTML capture; trivially true when html_required is False.",
+    )
+    html_missing_records: list[str] = Field(
+        default_factory=list,
+        description="source_urls of records that downloaded a document but missed the required HTML capture (html_filename empty or the referenced file missing from downloads/).",
+    )

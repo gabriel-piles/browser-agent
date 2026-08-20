@@ -35,6 +35,10 @@ class PageStructure(BaseModel):
         default_factory=list,
         description="All <a> elements with an href attribute.",
     )
+    link_total: int = Field(
+        default=0,
+        description="Total number of <a> elements with an href attribute on the page (may exceed links).",
+    )
     buttons: list[ElementInfo] = Field(
         default_factory=list,
         description="Buttons: <button>, input[type=submit], input[type=button].",

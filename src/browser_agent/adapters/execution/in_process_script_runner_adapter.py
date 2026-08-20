@@ -34,6 +34,7 @@ import os
 import sys
 import traceback
 import types
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -112,6 +113,7 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
                     _shim_modules(namespace["start_browser"]),
                     _env_vars_for(self._metadata_db_path, self._task_slug),
                     _sys_path_insert(self._metadata_db_path),
+                    _restore_warning_filters(),
                 ):
                     compiled = compile(code, "<validation_script>", "exec")
                     exec(compiled, namespace)
@@ -155,10 +157,11 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
         import start_browser`` binds it. Every other ``script_tools.*``
         import resolves to the real copied helpers via ``sys.path[0]``.
 
-        ``__file__`` points inside the runner's ``scripts/`` directory
-        so ``save_record``'s ``__main__.__file__`` fallback stays inside
-        the runner folder. The DB path and task slug are set via env
-        vars (``_env_vars``) rather than namespace globals.
+        ``__file__`` points inside the runner's ``scripts/`` directory.
+        The DB path and task slug are set via env vars (``_env_vars``)
+        rather than namespace globals — unlike the exec namespace's
+        ``__file__``, ``save_record`` reads the real ``__main__``
+        module's ``__file__``, so only the env var is load-bearing.
         """
         real_browser = _unwrap_browser(self._session)
         wrapper = _ValidationBrowser(real_browser, tab)
@@ -295,19 +298,50 @@ def _env_vars_for(metadata_db_path: Path | None, task_slug: str):
 
 @contextlib.contextmanager
 def _sys_path_insert(metadata_db_path: Path | None):
-    """Insert the run's ``scripts/`` dir at ``sys.path[0]`` for the exec duration."""
-    if metadata_db_path is None:
-        yield
-        return
-    scripts_dir = metadata_db_path.parent / "scripts"
-    sys.path.insert(0, str(scripts_dir))
+    """Insert the run's ``scripts/`` dir at ``sys.path[0]`` for the exec duration.
+
+    The source ``script_tools/`` package (``src/browser_agent/script_tools``)
+    is also inserted as a lower-priority fallback so ``script_tools.*``
+    imports resolve even when the emit-time copy beside the run is absent
+    (e.g. validation runs before ``ScriptToolsCopier`` has emitted). Runs'
+    copied helpers are inserted on top and take precedence; both entries are
+    removed in ``finally``.
+    """
+    source_dir = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(source_dir))
+    if metadata_db_path is not None:
+        scripts_dir = metadata_db_path.parent / "scripts"
+        sys.path.insert(0, str(scripts_dir))
     try:
         yield
     finally:
-        try:
-            sys.path.remove(str(scripts_dir))
-        except ValueError:
-            pass
+        for entry in (str(source_dir), str(scripts_dir) if metadata_db_path is not None else None):
+            if entry is None:
+                continue
+            try:
+                sys.path.remove(entry)
+            except ValueError:
+                pass
+
+
+@contextlib.contextmanager
+def _restore_warning_filters():
+    """Snapshot ``warnings.filters`` on entry and restore it in ``finally``.
+
+    LLM-authored validation code may call ``warnings.simplefilter`` /
+    ``warnings.filterwarnings``; those mutate the process-global
+    ``warnings.filters`` list in place. Without restoration the mutation
+    leaks into later validation runs, repair loops, and the driver
+    process (e.g. a ``simplefilter("always")`` would make every
+    subsequent run emit ResourceWarning noise and slow down execution).
+    The list is restored by slice assignment so any reference held by
+    ``warnings`` internals stays valid.
+    """
+    saved_filters = list(warnings.filters)
+    try:
+        yield
+    finally:
+        warnings.filters[:] = saved_filters
 
 
 @contextlib.contextmanager

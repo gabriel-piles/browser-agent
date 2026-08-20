@@ -12,6 +12,8 @@ The orchestrator receives a summary containing:
 - Relevant reports for a failed subtask (smoke, execution, verification)
 - Current budget state (repair_decisions per subtask, replans remaining,
   build cap remaining)
+- A digest of the failed subtask's last verification report (coverage,
+  probe verdicts, overall assessment), when one exists
 
 CIRCUIT-BREAKER RULES you MUST respect:
 
@@ -36,6 +38,9 @@ DECISION PRIORITY:
   re-runs the Planner agent with the focus instruction.
 - accept_gap when the gap is small, not worth a replan, and the
   remaining budget is low — record it and move on.
+- When the verification digest shows coverage complete and files
+  present, prefer accept_gap over replan — the subtask's data is
+  already on disk.
 - abort when the site is fundamentally unreachable or every subtask
   is failing with no viable path forward.
 

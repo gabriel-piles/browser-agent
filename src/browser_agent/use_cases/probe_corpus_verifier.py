@@ -11,10 +11,25 @@ from pathlib import Path
 
 from browser_agent.domain.probe_result import ProbeResult, ProbeVerdict
 from browser_agent.domain.probe_verification_report import ProbeVerificationReport
-from browser_agent.use_cases.metadata_db import query_rows
+from browser_agent.use_cases.metadata_db import parse_row_data, query_rows
 from browser_agent.use_cases.pdf_url_matcher import PdfUrlMatcher
 
 _DbRow = tuple[str, str, str]
+
+
+def _row_document_urls(data_json: str) -> list[str]:
+    """Return the download URLs recorded in a row's data blob (deduped).
+
+    A row's ``source_url`` PK is often a synthesized page/ref/lang key;
+    the real document URL lives in ``data.file_url`` (legacy: ``pdf_url``).
+    """
+    data = parse_row_data(data_json)
+    urls: list[str] = []
+    for key in ("file_url", "pdf_url"):
+        url = data.get(key, "") or ""
+        if url and url not in urls:
+            urls.append(url)
+    return urls
 
 
 class ProbeCorpusVerifier:
@@ -39,9 +54,53 @@ class ProbeCorpusVerifier:
             matched_row_source_url=matched or "",
         )
 
+    @staticmethod
+    def _matches(
+        source_url: str,
+        row_source_url: str,
+        data_json: str,
+    ) -> bool:
+        """Return True when a candidate source_url counts as captured by a row.
+
+        Satisfaction is any of: an exact URL match on the row's
+        ``source_url``, an exact match on a document URL stored in the
+        row's ``data`` blob (``file_url`` / legacy ``pdf_url``), or a
+        prefix match against the row ``source_url`` (a listing page).
+        Only the row PK is prefix-matched — never ``file_url`` values.
+        """
+        if PdfUrlMatcher.match(source_url, row_source_url).matched:
+            return True
+        if any(PdfUrlMatcher.match(source_url, url).matched for url in _row_document_urls(data_json)):
+            return True
+        return _prefix_match(source_url, row_source_url)
+
     def _match_row(self, source_url: str, rows: list[_DbRow]) -> str | None:
-        """Return the matched row source_url, or ``None`` when no row matches."""
-        for row_source_url, _slug, _data_json in rows:
-            if PdfUrlMatcher.match(source_url, row_source_url).matched:
-                return row_source_url
+        """Return the matched row source_url, or ``None`` when no row matches.
+
+        A candidate counts as captured when it matches the row's
+        ``source_url`` OR the document URL stored in its ``data`` blob
+        (``file_url`` / legacy ``pdf_url``) — the same URL the reconciler
+        verifies against disk — or is a listing-page prefix of the row PK.
+        """
+        for row_source, _slug, data_json in rows:
+            if self._matches(source_url, row_source_url=row_source, data_json=data_json):
+                return row_source
         return None
+
+
+def _prefix_match(candidate: str, stored: str) -> bool:
+    """Return True when ``candidate`` (a listing page) prefixes a row's PK.
+
+    Processing rows are saved with ``source_url`` shaped as
+    ``f"{listing_url}/{document_ref}/{language}/{file_type}"`` (see the
+    builder's system prompt), so a listing-page probe URL is satisfied
+    when a row was captured from that page. Never prefix-match a bare
+    scheme/host or a short tail (``len(cand) > 8``), and require a
+    path/query boundary so ``file.doc`` cannot match ``file.docx``.
+    """
+    cand = PdfUrlMatcher.normalize(candidate).rstrip("/")
+    sto = PdfUrlMatcher.normalize(stored)
+    if not cand or len(cand) <= 8 or not sto.startswith(cand):
+        return False
+    rest = sto[len(cand) :]
+    return rest[:1] in ("", "/", "?")

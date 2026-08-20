@@ -16,6 +16,7 @@ retrying forever.
 
 from __future__ import annotations
 
+import ast
 import re
 
 from loguru import logger
@@ -30,6 +31,65 @@ from browser_agent.use_cases.zendriver_error_patterns import ZD_RUNTIME_ERROR_PA
 VALIDATION_TIMEOUT_S = 90.0
 _ERROR_HEAD_CHARS = 2000
 _TIMEOUT_NOTICE_RE = re.compile(r"\[TIMEOUT[^\]]*\]")
+
+# Environmental warning-noise lines that must never become the operator-log
+# tail. Python emits these around LLM-authored code (only visible when
+# ResourceWarning is enabled); they are not the script's own summary.
+# Substring match: the tracemalloc hint is often prefixed by
+# ``RuntimeWarning:``, and ``ResourceWarning:`` appears both at line start
+# and inline (``...: ResourceWarning: ...``).
+_WARNING_STUB_LINES: tuple[str, ...] = (
+    "Enable tracemalloc to get the object allocation traceback",
+    "ResourceWarning:",
+    ": ResourceWarning:",
+)
+
+
+def _is_warning_stub(line: str) -> bool:
+    """True when ``line`` is ResourceWarning/tracemalloc noise, not script output."""
+    stripped = line.strip()
+    return any(stub in stripped for stub in _WARNING_STUB_LINES)
+
+
+def _first_non_empty(lines: list[str]) -> str:
+    """Return the first non-empty line (fallback when every line is a stub)."""
+    for line in lines:
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
+_SYNC_ELEMENT_PROPERTIES: frozenset[str] = frozenset({"text", "text_all", "attrs", "id"})
+
+
+def _ast_static_check(python_code: str) -> str:
+    """AST anti-patterns the regex table can't express reliably; "" when clean."""
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return ""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and len(node.args) > 1:
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr == "evaluate":
+                return (
+                    "tab.evaluate(expr, ...) with a second positional argument — zendriver "
+                    "forwards no JS parameters (rule 10). Interpolate the value into the JS "
+                    "string with an f-string instead; await_promise/return_by_value may be "
+                    "passed as keywords only."
+                )
+        if isinstance(node, ast.Await):
+            value = node.value
+            if isinstance(value, ast.Attribute) and value.attr in _SYNC_ELEMENT_PROPERTIES:
+                return (
+                    "await el.<property> — el.text / el.text_all / el.attrs / el.id are SYNC "
+                    "properties returning plain str/dict; awaiting one raises TypeError: "
+                    "object str can't be used in 'await' expression. Use await "
+                    "get_text(el, tab) (rule 0) for text or await "
+                    "el.apply('(el) => el.textContent') for full subtree text."
+                )
+    return ""
 
 
 # Statically-detectable anti-patterns in the agent's python_code. Catching
@@ -52,7 +112,7 @@ _STATIC_CHECK_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     ),
     (
         re.compile(
-            r"(?s)^(?=.*\b(?:download_pdf_browser|download_pdf_curl_cffi)\s*\()"
+            r"(?s)^(?=.*\b(?:download_pdf_browser|download_pdf_curl_cffi|download_file_browser|download_file_curl_cffi)\s*\()"
             r"(?=.*\bsave_record\s*\()"
             r"(?!.*['\"]html_filename['\"])"
         ),
@@ -80,10 +140,6 @@ _STATIC_CHECK_PATTERNS: list[tuple[re.Pattern[str], str]] = [
         'tab.evaluate(() => ...) without trailing () — a bare arrow function is never invoked (rule 10). Wrap as an IIFE: tab.evaluate("(() => { ... })()").',
     ),
     (
-        re.compile(r"\btab\.evaluate\s*\([^,)]+,[^)]"),
-        "tab.evaluate(expr, ...) with a second positional argument — zendriver forwards no args (rule 4b/10). Interpolate the value into the JS string with an f-string instead.",
-    ),
-    (
         re.compile(r"\bresult\s*\[\s*['\"]file_size['\"]\s*\]"),
         "result['file_size'] — the dict has no file_size key (rule 0/13). Use result['size'] for bytes.",
     ),
@@ -93,7 +149,7 @@ _STATIC_CHECK_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     ),
     (
         re.compile(r"\bawait\s+\w+\.text_content\s*\("),
-        "await el.text_content(...) — zendriver elements have no text_content() method (rule 4b). Use await el.apply('(el) => el.textContent') or el.text.",
+        "await el.text_content(...) — zendriver elements have no text_content() method (rule 4b). Use await get_text(el, tab) (rule 0) or await el.apply('(el) => el.textContent'). Never await el.text — .text is a SYNC property (awaiting it raises TypeError).",
     ),
     (
         re.compile(
@@ -120,6 +176,9 @@ def _static_check(python_code: str) -> str:
     for pattern, fix in _STATIC_CHECK_PATTERNS:
         if pattern.search(python_code):
             return fix
+    ast_hit = _ast_static_check(python_code)
+    if ast_hit:
+        return ast_hit
     return ""
 
 
@@ -263,21 +322,25 @@ def _log_validation_result(result: ScriptExecutionResult, run_number: int, charg
     is logged so the operator knows what the validation proved.
     """
     lines = result.output.strip().split("\n")
-    tail_line = ""
-    for line in reversed(lines):
-        stripped = line.strip()
-        if stripped:
-            tail_line = stripped
-            break
     charge_note = "" if charged else " (NOT charged — pure timeout)"
     if result.success:
+        # Pick the last non-empty, non-warning-stub line so the operator
+        # sees the script's real summary, not a ResourceWarning hint.
+        tail_line = ""
+        for line in reversed(lines):
+            stripped = line.strip()
+            if stripped and not _is_warning_stub(stripped):
+                tail_line = stripped
+                break
+        if not tail_line:
+            tail_line = _first_non_empty(lines)
         logger.info(
             "validation run {n} PASSED — {tail}",
             n=run_number,
             tail=tail_line[:200],
         )
     else:
-        # On failure, find the actual error line (skip traceback noise)
+        # On failure, find the actual error line (skip traceback + warning noise)
         error_line = ""
         for line in reversed(lines):
             stripped = line.strip()
@@ -286,9 +349,12 @@ def _log_validation_result(result: ScriptExecutionResult, run_number: int, charg
                 and not stripped.startswith("Traceback")
                 and not stripped.startswith("File ")
                 and not stripped.startswith("  ")
+                and not _is_warning_stub(stripped)
             ):
                 error_line = stripped
                 break
+        if not error_line:
+            error_line = _first_non_empty(lines)
         summary = f" — {error_line}" if error_line else ""
         logger.warning(
             "validation run {n} FAILED{summary}{charge}",

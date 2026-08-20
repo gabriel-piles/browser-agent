@@ -20,10 +20,14 @@ Two consumers:
 from __future__ import annotations
 
 import asyncio
+import os
+import select
 import shutil
+import signal
 import socket
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import zendriver as zd
@@ -52,6 +56,15 @@ Object.defineProperty(window, 'outerHeight', {get: () => window.innerHeight});
 # Default Chromium binary. Override via env if needed.
 _CHROMIUM_BIN = "/usr/bin/chromium"
 
+# Bounded wait for Chromium's --remote-debugging-port to accept connections.
+_CHROMIUM_STARTUP_TIMEOUT_S = 10.0
+_PORT_POLL_INTERVAL_S = 0.1
+
+# Chromium singleton lockfiles. Never copied when seeding a profile: if the
+# real Chromium is running, its Live lock would make the seeded browser refuse
+# the directory ("Profile in use") and never open the debugging port.
+_SINGLETON_LOCKFILES = frozenset({"SingletonLock", "SingletonSocket", "SingletonCookie"})
+
 
 def free_port() -> int:
     """Return an available TCP port."""
@@ -65,8 +78,9 @@ def seed_profile_if_empty(profile_dir: Path) -> None:
 
     A fresh profile looks like a brand-new browser to Cloudflare.
     Seeding it with the real profile's cookies and local state gives
-    the browser a real-world fingerprint from the first run.
-    Subsequent runs reuse the now-warm profile.
+    the browser a real-world fingerprint from the first run. Singleton
+    lockfiles are never copied so a running Chromium's live lock cannot
+    poison the seed.
     """
     default_dir = profile_dir / "Default"
     if (default_dir / "Cookies").exists():
@@ -76,7 +90,28 @@ def seed_profile_if_empty(profile_dir: Path) -> None:
         logger.info("no real Chromium profile to seed from")
         return
     logger.info("seeding empty profile {} from real Chromium {}", profile_dir, real_profile)
-    shutil.copytree(real_profile, profile_dir, dirs_exist_ok=True, symlinks=True)
+    shutil.copytree(
+        real_profile,
+        profile_dir,
+        dirs_exist_ok=True,
+        symlinks=True,
+        ignore=lambda _dir, names: _SINGLETON_LOCKFILES & set(names),
+    )
+
+
+def reset_profile(profile_dir: Path) -> None:
+    """Wipe ``profile_dir`` and re-create it seeded from the real Chromium profile.
+
+    Called before every browser launch. Reusing a run's accumulated
+    profile across launches is fragile: a crashed Chromium leaves stale
+    ``SingletonLock`` entries and possibly-corrupt stores, and a
+    still-running previous instance holds the directory so the next
+    launch hands off to it and never opens its debug port. Starting each
+    browser from a freshly seeded directory makes launches deterministic.
+    """
+    shutil.rmtree(profile_dir, ignore_errors=True)
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    seed_profile_if_empty(profile_dir)
 
 
 def launch_chromium(
@@ -88,7 +123,10 @@ def launch_chromium(
 ) -> subprocess.Popen[bytes]:
     """Launch Chromium with minimal flags — only what a real user session has.
 
-    Returns the subprocess handle. The caller is responsible for
+    Returns the subprocess handle with stderr captured so a startup
+    failure (unusable profile, missing display, …) surfaces its real
+    message instead of zendriver's generic "Failed to connect to
+    browser" hint. The caller is responsible for
     ``process.terminate()`` / ``process.kill()`` on shutdown.
     """
     args = [
@@ -106,11 +144,107 @@ def launch_chromium(
         args.append(f"--load-extension={extension_dir}")
 
     logger.info("launching clean Chromium: {}", " ".join(args))
+    # ``start_new_session`` puts Chromium and its forked children in one
+    # process group so ``terminate_chromium`` can kill the whole tree
+    # (children inherit the stderr pipe; killing only the main process
+    # would leave them holding the write end).
     return subprocess.Popen(
         args,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
     )
+
+
+def _drain_chromium_stderr(process: subprocess.Popen[bytes]) -> str:
+    """Boundedly drain Chromium's captured stderr; never blocks indefinitely.
+
+    Chromium's forked children inherit the stderr pipe, so a plain
+    ``read()`` would block until every child dies. A select timeout caps
+    the wait and returns whatever stderr arrived.
+    """
+    if process.stderr is None:
+        return "<no stderr pipe>"
+    fd = process.stderr.fileno()
+    chunks: list[bytes] = []
+    deadline = time.monotonic() + 2.0
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            ready, _, _ = select.select([fd], [], [], remaining)
+            if not ready:
+                break
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except (OSError, ValueError):
+        pass
+    text = b"".join(chunks).decode("utf-8", errors="replace").strip()
+    return text or "<empty stderr>"
+
+
+def terminate_chromium(process: subprocess.Popen[bytes]) -> None:
+    """TERM (then KILL) the whole Chromium process group.
+
+    Chromium forks zygote/gpu/renderer children that inherit the stderr
+    pipe; terminating only the main process leaves them holding the
+    write end. ``launch_chromium`` starts Chromium in its own session,
+    so killing the process group reaps the entire tree and closes the
+    pipe.
+    """
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        process.wait(timeout=5)
+
+
+async def wait_for_devtools_port(
+    process: subprocess.Popen[bytes],
+    port: int,
+    host: str = "127.0.0.1",
+    timeout_s: float = _CHROMIUM_STARTUP_TIMEOUT_S,
+) -> None:
+    """Wait until Chromium opens its devtools port or raise its captured stderr.
+
+    Chromium commonly exits before binding when the profile directory is
+    unusable (locked by a live instance, stale SingletonLock, corrupt
+    store). Without this check ``zd.start`` blocks and eventually reports
+    only the generic "Failed to connect to browser" hint. On timeout the
+    process is terminated first so its stderr reaches EOF.
+    """
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    while True:
+        if process.poll() is not None:
+            raise RuntimeError(
+                f"Chromium exited with code {process.returncode} before opening the debugging port.\n"
+                f"stderr:\n{_drain_chromium_stderr(process)}"
+            )
+        try:
+            _reader, writer = await asyncio.open_connection(host, port)
+        except OSError:
+            pass
+        else:
+            writer.close()
+            await writer.wait_closed()
+            return
+        if asyncio.get_running_loop().time() >= deadline:
+            terminate_chromium(process)
+            raise RuntimeError(
+                f"Chromium timed out after {timeout_s:.0f}s before opening the debugging port.\n"
+                f"stderr:\n{_drain_chromium_stderr(process)}"
+            )
+        await asyncio.sleep(_PORT_POLL_INTERVAL_S)
 
 
 async def connect_and_prepare(
@@ -158,11 +292,7 @@ async def stop_browser(
         logger.exception("failed to stop zendriver browser")
 
     if process is not None:
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
+        terminate_chromium(process)
 
     if profile_dir is not None:
         shutil.rmtree(profile_dir, ignore_errors=True)

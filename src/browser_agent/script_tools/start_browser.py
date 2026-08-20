@@ -15,16 +15,19 @@ browser" traceback when re-running emitted scripts):
   ``no_sandbox=True`` hint.
 * We wait for the debugging port to accept a connection before calling
   ``zd.start``; if Chromium exits first, we raise its stderr.
-* Stale ``SingletonLock`` / ``SingletonCookie`` / ``SingletonSocket``
-  entries left behind by a crashed or Ctrl-C'd previous run are cleared
-  when their owner PID is dead, so re-running a script does not collide
-  with an orphaned Chromium holding the shared ``<run>/profile`` lock.
+* A persistent profile (the run's ``<run>/profile``) is deleted and
+  re-created from the real Chromium profile before every launch, so a
+  crashed or Ctrl-C'd previous run's stale ``SingletonLock``/corrupt
+  store can never block the next launch or hand it off to an orphaned
+  Chromium holding the shared profile lock.
 """
 
 from __future__ import annotations
 
 import os
+import select
 import shutil
+import signal
 import socket
 import subprocess
 import tempfile
@@ -59,8 +62,11 @@ _CHROMIUM_NO_SANDBOX = os.environ.get("CHROMIUM_NO_SANDBOX", "").lower() in {"1"
 # Bounded wait for Chromium's --remote-debugging-port to accept connections.
 _STARTUP_TIMEOUT_S = 10.0
 _POLL_INTERVAL_S = 0.1
-# Chromium lockfiles in the user-data-dir; a stale lock blocks the next launch.
-_LOCKFILES = ("SingletonLock", "SingletonCookie", "SingletonSocket")
+
+# Chromium singleton lockfiles. Never copied when seeding a profile: if the
+# real Chromium is running, its live lock would make the seeded browser
+# refuse the directory and never open the debugging port.
+_LOCKFILES = frozenset({"SingletonLock", "SingletonSocket", "SingletonCookie"})
 
 
 def _free_port():
@@ -74,9 +80,9 @@ def _seed_profile_if_empty(profile_dir):
 
     A fresh profile looks like a brand-new browser to Cloudflare.
     Seeding it with the real profile's cookies and local state gives
-    the browser a real-world fingerprint from the first run.
-    Subsequent runs reuse the now-warm profile. Mirrors
-    :meth:`ZendriverBrowserSession._seed_profile_if_empty`.
+    the browser a real-world fingerprint from the first run. Singleton
+    lockfiles are never copied so a running Chromium's live lock cannot
+    poison the seed.
     """
     default_dir = Path(profile_dir) / "Default"
     if (default_dir / "Cookies").exists():
@@ -89,87 +95,27 @@ def _seed_profile_if_empty(profile_dir):
             real_profile = alt_profile
         else:
             return
-    shutil.copytree(real_profile, profile_dir, dirs_exist_ok=True, symlinks=True)
+    shutil.copytree(
+        real_profile,
+        profile_dir,
+        dirs_exist_ok=True,
+        symlinks=True,
+        ignore=lambda _dir, names: _LOCKFILES & set(names),
+    )
 
 
-def _clear_stale_locks(profile_dir):
-    """Remove Chromium singleton lockfiles whose owner process is dead.
+def _reset_profile(profile_dir):
+    """Wipe a persistent profile and re-create it seeded from the real one.
 
-    A live Chromium holds ``SingletonLock`` (a symlink to ``hostname-PID``).
-    If that PID no longer exists, the lock is stale — left behind by a
-    crashed or killed previous run — and the next launch would refuse
-    the profile with "Profile directory is in use". Live locks are left
-    untouched so we never steal an in-use profile from a running Chromium.
-
-    Only ``SingletonLock`` carries a PID; ``SingletonCookie`` holds a
-    numeric cookie ID and ``SingletonSocket`` an absolute path. Neither
-    is PID-checkable, so we leave them in place (Chromium overwrites them
-    on the next launch once ``SingletonLock`` is gone).
+    Reusing a run's profile across launches accumulates stale singleton
+    locks and possibly-corrupt stores; the next Chromium then refuses
+    the directory ("Profile in use") or hands off to a still-running
+    prior instance and never opens its debug port. Start every browser
+    from a freshly seeded directory instead.
     """
-    for name in _LOCKFILES:
-        path = Path(profile_dir) / name
-        if not path.exists() and not path.is_symlink():
-            continue
-        if _lock_owner_alive(path):
-            continue
-        _safe_remove(path)
-
-
-def _lock_owner_alive(path):
-    """Return True if a lockfile points at a currently-running owner.
-
-    Only ``SingletonLock`` (``hostname-PID``) is PID-checkable. Other
-    lockfiles are treated as "owner unknown — leave untouched" so we
-    never crash on a non-PID numeric target (e.g. ``SingletonCookie``'s
-    cookie ID) and never steal a live Chromium's secondary locks.
-    """
-    if path.name != "SingletonLock":
-        return True
-    if not path.is_symlink():
-        return True
-    try:
-        target = os.readlink(path)
-    except OSError:
-        return True
-    pid = _parse_pid(target)
-    if pid is None:
-        return True
-    return _pid_alive(pid)
-
-
-def _parse_pid(target):
-    """Extract the trailing ``-<pid>`` from a Chromium SingletonLock target."""
-    tail = target.rsplit("-", 1)[-1]
-    try:
-        return int(tail)
-    except ValueError:
-        return None
-
-
-def _pid_alive(pid):
-    """Return True if ``pid`` is currently running on this host."""
-    # A Chromium SingletonLock can point at a bogus, out-of-range PID (e.g.
-    # a huge value left by a crash or a non-Linux host). ``os.kill`` raises
-    # OverflowError for those; treat them as dead so the stale lock is cleared.
-    if pid < 1 or pid > 4194304:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except (OverflowError, ValueError):
-        return False
-    return True
-
-
-def _safe_remove(path):
-    """Remove a file or symlink, ignoring missing-path errors."""
-    try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        pass
+    shutil.rmtree(profile_dir, ignore_errors=True)
+    Path(profile_dir).mkdir(parents=True, exist_ok=True)
+    _seed_profile_if_empty(profile_dir)
 
 
 def _build_chromium_args(port, profile, headless):
@@ -189,11 +135,18 @@ def _build_chromium_args(port, profile, headless):
 
 
 def _launch_chromium(args):
-    """Start Chromium with stderr captured so startup failures are visible."""
+    """Start Chromium with stderr captured so startup failures are visible.
+
+    ``start_new_session`` puts Chromium and its forked children in one
+    process group so ``_terminate`` can kill the whole tree — children
+    inherit the stderr pipe, so killing only the main process would leave
+    them holding the write end and block any later stderr read.
+    """
     return subprocess.Popen(
         args,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
+        start_new_session=True,
     )
 
 
@@ -225,12 +178,26 @@ def _wait_for_port(process, port, timeout_s):
 
 
 def _terminate(process):
-    """Terminate Chromium and wait briefly so its stderr pipe reaches EOF."""
-    process.terminate()
+    """TERM (then KILL) the whole Chromium process group.
+
+    Chromium forks zygote/gpu/renderer children that inherit the stderr
+    pipe; terminating only the main process leaves them holding the
+    write end. ``_launch_chromium`` starts Chromium in its own session,
+    so killing the process group reaps the whole tree and closes the
+    pipe (stderr reads then reach EOF).
+    """
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        pass
     try:
         process.wait(timeout=2)
     except subprocess.TimeoutExpired:
-        process.kill()
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        process.wait(timeout=5)
 
 
 def _chromium_died_error(process, timed_out=False):
@@ -241,14 +208,32 @@ def _chromium_died_error(process, timed_out=False):
 
 
 def _read_stderr(process):
-    """Drain and decode Chromium's stderr pipe, truncated for log safety."""
+    """Boundedly drain Chromium's stderr pipe, truncated for log safety.
+
+    Never blocks indefinitely: Chromium's forked children inherit the
+    pipe, so a plain ``read()`` would wait for every child to die. A
+    select timeout caps the wait and returns whatever stderr arrived.
+    """
     if process.stderr is None:
         return "<no stderr pipe>"
+    fd = process.stderr.fileno()
+    chunks = []
+    deadline = time.monotonic() + 2.0
     try:
-        raw = process.stderr.read()
-    except Exception:
-        return "<unreadable stderr>"
-    text = raw.decode("utf-8", errors="replace").strip()
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            ready, _, _ = select.select([fd], [], [], remaining)
+            if not ready:
+                break
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except (OSError, ValueError):
+        pass
+    text = b"".join(chunks).decode("utf-8", errors="replace").strip()
     return text or "<empty stderr>"
 
 
@@ -271,10 +256,11 @@ async def start_browser(headless=None, user_data_dir=None):
     * Chromium is launched with only ``--remote-debugging-port`` and
       ``--user-data-dir`` — no automation-flagging arguments.
     * The real Chromium profile is always copied into the profile
-      directory when it is empty (seeding from ``~/.config/chromium``
-      or ``~/.config/google-chrome``) — even for auto-created temp
+      directory (seeding from ``~/.config/chromium`` or
+      ``~/.config/google-chrome``) — even for auto-created temp
       profiles — so the script's browser fingerprint matches a real
-      user's installation from the first run.
+      user's installation from the first run. A persistent profile is
+      deleted and re-seeded on every launch (see ``_reset_profile``).
     * ``headless`` defaults to the ``ZENDRIVER_HEADLESS`` env var
     * The returned ``zd.Browser``'s ``.stop()`` is patched to also
       kill the Chromium process and clean up the auto-created
@@ -290,9 +276,14 @@ async def start_browser(headless=None, user_data_dir=None):
     owns_profile = user_data_dir is None and not PROFILE_PATH
     profile = user_data_dir or PROFILE_PATH or tempfile.mkdtemp(prefix="zd_script_")
 
-    Path(profile).mkdir(parents=True, exist_ok=True)
-    _seed_profile_if_empty(profile)
-    _clear_stale_locks(profile)
+    if owns_profile:
+        # Fresh temp directory — just seed it.
+        Path(profile).mkdir(parents=True, exist_ok=True)
+        _seed_profile_if_empty(profile)
+    else:
+        # Persistent profile — wipe and re-create seeded on every launch so
+        # stale locks/corrupt state from a prior run cannot block this one.
+        _reset_profile(profile)
 
     # Retry port allocation: _free_port() has a TOC/TOU race when multiple
     # scripts start concurrently; retry with a fresh port if the first

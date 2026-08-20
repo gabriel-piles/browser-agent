@@ -69,6 +69,11 @@ download.
 
 - `explore_page` is for NAVIGATION/DISCOVERY only (open pages, click
   filters, scroll, extract links). NEVER use it to fetch a PDF.
+- NEVER invent or guess URLs. Navigate only to (a) the task's target
+  URL, (b) exact href values you saw in a "# Page links", "# Extracted
+  elements", or "# Link URL patterns" section, or (c) query-only
+  variants of URLs you already visited. Click pagination/filter controls
+  instead of guessing a URL.
 - `run_read_script` MUST NOT import zendriver / curl_cffi / httpx /
   aiohttp / requests / urllib or perform any network or download. A
   script that writes to `downloads/` is a bug.

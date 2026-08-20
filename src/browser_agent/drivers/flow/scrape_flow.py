@@ -38,9 +38,16 @@ class ScrapeFlow:
         self._final_verifier = final_verifier
         self._start_time = time.monotonic()
         self._total_builds = 0
+        self._task = ""
 
     async def run(self, task: str) -> int:
         self._start_time = time.monotonic()
+        self._task = task
+        from browser_agent.use_cases.metadata_db import ensure_metadata_schema
+
+        # The run's metadata.db must exist even when a script saves zero
+        # records — verification (reconciler/probe/gap map) opens it read-only.
+        ensure_metadata_schema(self._run_path / "metadata.db")
         self._prior_index = self._build_prior_index()
         state = self._state_store.load()
 
@@ -197,11 +204,29 @@ class ScrapeFlow:
 
     async def _do_replan(self, state, focus: str):
         planner = self._planner_factory()
-        new_plan = await planner.replan(focus)
+        new_plan = await planner.replan(focus, task=self._task, previous_plan=self._replan_context(state))
         await planner.close()
         state.replans += 1
         state.plan_counter += 1
         self._state_store.write_plan(state.plan_counter, new_plan)
+        self._reset_records(state, new_plan)
+        self._state_store.save(state)
+        logger.info("replan complete — plan {n}", n=state.plan_counter)
+        return state
+
+    def _replan_context(self, state) -> str:
+        import json
+
+        succeeded = [r.subtask_id for r in state.records if r.status == "succeeded"]
+        return json.dumps(
+            {
+                "previous_plan": state.plan.model_dump(),
+                "succeeded_subtask_ids": succeeded,
+            },
+            indent=2,
+        )
+
+    def _reset_records(self, state, new_plan) -> None:
         # Keep succeeded records; reset others
         succeeded_ids = {r.subtask_id for r in state.records if r.status == "succeeded"}
         state.plan = new_plan
@@ -214,9 +239,6 @@ class ScrapeFlow:
                     existing.repair_decisions = 0
                     existing.script_hash = ""
                     existing.status = "pending"
-        self._state_store.save(state)
-        logger.info("replan complete — plan {n}", n=state.plan_counter)
-        return state
 
     def _deadline_check(self) -> None:
         elapsed = time.monotonic() - self._start_time
@@ -276,6 +298,27 @@ class ScrapeFlow:
             indent=2,
         )
 
+    def _verification_digest(self, subtask_id: str) -> dict:
+        import json
+
+        report_path = self._run_path / "flow" / "subtasks" / subtask_id / "verification_report.json"
+        if not report_path.exists():
+            return {}
+        try:
+            report = json.loads(report_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+        return {
+            "coverage_complete": report.get("coverage_complete"),
+            "missing_count": report.get("missing_count"),
+            "expected_pdf_total": report.get("expected_pdf_total"),
+            "observed_pdf_total": report.get("observed_pdf_total"),
+            "overall_assessment": report.get("overall_assessment", "")[:400],
+            "probe_verdicts": [
+                f"{r.get('verdict')}: {r.get('source_url', '')[:80]}" for r in report.get("probe_results", [])
+            ],
+        }
+
     def _failure_summary(self, state, subtask_id: str) -> str:
         import json
 
@@ -293,6 +336,7 @@ class ScrapeFlow:
                     "repair_decisions": record.repair_decisions if record else 0,
                     "repairs_remaining": _MAX_ORCHESTRATOR_REPAIRS_PER_SUBTASK - (record.repair_decisions if record else 0),
                     "attempts": record.attempts if record else 0,
+                    "verification": self._verification_digest(subtask_id),
                 },
                 "circuit_breakers": {
                     "repairs_per_subtask_cap": _MAX_ORCHESTRATOR_REPAIRS_PER_SUBTASK,

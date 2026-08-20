@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from browser_agent.adapters.execution.file_ops import pdf_filename_for
+from browser_agent.adapters.execution.file_ops import file_ext_for, file_filename_for, pdf_filename_for
 from browser_agent.domain.field_type import FieldType
 from browser_agent.domain.sync_plan import SyncAction, SyncPlan, SyncPlanRow
 from browser_agent.domain.uwazi_mapping import UwaziMapping
@@ -35,10 +35,14 @@ _ENTITY_BATCH = 200
 
 
 def resolve_pdf_filename(record: dict, source_url: str, downloads_dir: Path | None) -> str | None:
-    """Return the absolute local PDF path for one record, or ``None``."""
-    if record.get("download_role") == "supporting":
-        return None
+    """Return the absolute local PDF path for one record, or ``None``.
+
+    Non-PDF documents (``.doc``/``.docx``/``.rtf``/…) return ``None`` —
+    :func:`resolve_supporting_filename` owns them.
+    """
     raw = record.get("pdf_filename") or ""
+    if file_ext_for(raw) != ".pdf" and file_ext_for(raw) != "":
+        return None  # non-PDF document -> supporting path
     if raw and raw.strip() and not raw.startswith("no-pdf"):
         candidate = Path(raw)
         if not candidate.is_absolute() and downloads_dir is not None:
@@ -65,15 +69,29 @@ def resolve_html_filename(record: dict, downloads_dir: Path | None) -> str | Non
     return None
 
 
-def resolve_supporting_filename(record: dict, downloads_dir: Path | None) -> str | None:
-    """Return the absolute local supporting-file path for one record, or ``None``."""
-    raw = record.get("supporting_filename") or ""
-    if raw and raw.strip():
-        candidate = Path(raw)
-        if not candidate.is_absolute() and downloads_dir is not None:
-            candidate = downloads_dir / raw
-        if candidate.exists():
-            return str(candidate.resolve())
+def resolve_supporting_filename(record: dict, raw_filename: str, downloads_dir: Path | None) -> str | None:
+    """Return the absolute local supporting-file path for one record, or ``None``.
+
+    ``raw_filename`` is the original ``pdf_filename`` basename captured
+    before ``_build_plan_row`` mutates the record. Only non-PDF document
+    basenames are resolved here; PDF (or unknown/extensionless) basenames
+    belong to :func:`resolve_pdf_filename`.
+    """
+    raw = raw_filename or record.get("pdf_filename") or ""
+    if not raw or raw.startswith("no-pdf"):
+        return None
+    if file_ext_for(raw) in (".pdf", ""):
+        return None  # PDF (or unknown) -> resolve_pdf_filename owns it
+    candidate = Path(raw)
+    if not candidate.is_absolute() and downloads_dir is not None:
+        candidate = downloads_dir / raw
+    if candidate.exists():
+        return str(candidate.resolve())
+    file_url = record.get("file_url") or ""
+    if file_url and downloads_dir is not None:
+        cand2 = downloads_dir / file_filename_for(file_url)
+        if cand2.exists():
+            return str(cand2.resolve())
     return None
 
 
@@ -250,10 +268,11 @@ def _build_plan_row(
     primary_shared_id_for_key=None,
 ) -> SyncPlanRow:
     """Transform one record into one :class:`SyncPlanRow`."""
+    raw_filename = record.get("pdf_filename") or ""
     pdf_path = resolve_pdf_filename(record, source_url, downloads_dir)
     record["pdf_filename"] = pdf_path
     html_path = resolve_html_filename(record, downloads_dir)
-    supporting_path = resolve_supporting_filename(record, downloads_dir)
+    supporting_path = resolve_supporting_filename(record, raw_filename, downloads_dir)
     action, skip_reason = _row_action(
         record,
         source_url,

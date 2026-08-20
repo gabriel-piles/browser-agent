@@ -106,7 +106,10 @@ def _check_file(
             verdict="file_not_downloaded",
             notes=request.notes,
         )
-    integrity = PdfIntegrityValidator.validate(file_path)
+    is_document = PdfUrlMatcher.is_document(request.url)
+    integrity = (
+        PdfIntegrityValidator.validate_document(file_path) if is_document else PdfIntegrityValidator.validate(file_path)
+    )
     verdict = _verdict(integrity.is_valid, integrity.is_suspiciously_small)
     return PdfCheckResult(
         url=request.url,

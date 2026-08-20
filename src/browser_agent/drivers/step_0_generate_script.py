@@ -66,12 +66,16 @@ class GenerateScriptDriver:
 
         path_builder = ScriptPathBuilder(run_path)
         emitter = ScriptEmitter(path_builder)
-        linter = EmittedScriptLinter()
+        # Registry/related-document runs (scraper_registry_template set) require a
+        # saved HTML file per downloaded document, not just a source_html snippet.
+        require_html_files = bool(run.scraper_registry_template)
+        linter = EmittedScriptLinter(require_html_files=require_html_files)
         executor = SubtaskExecutor()
         verifier = SubtaskVerifierUseCase(
             db_path=run_path / "metadata.db",
             downloads_path=run_path / "downloads",
             run_path=run_path,
+            require_html_files=require_html_files,
         )
         pipeline = SubtaskPipeline(flow_paths, emitter, linter, state_store, executor, verifier)
         orchestrator = OrchestratorUseCase()
@@ -87,7 +91,7 @@ class GenerateScriptDriver:
             from browser_agent.adapters.execution.curl_cffi_pdf_downloader_adapter import (
                 CurlCffiPdfDownloaderAdapter,
             )
-            from browser_agent.adapters.llm.ollama_adapter import OllamaAdapter
+            from browser_agent.adapters.llm.opencode_zen_adapter import OpenCodeZenAdapter
             from browser_agent.configuration import ZENDRIVER_HEADLESS
 
             session = ZendriverBrowserSession(
@@ -95,9 +99,13 @@ class GenerateScriptDriver:
                 user_data_dir=run_path / "profile",
             )
             deps = AgentDeps(
-                llm=OllamaAdapter(),
+                llm=OpenCodeZenAdapter(),
                 browser_session=session,
-                script_runner=InProcessScriptRunnerAdapter(browser_session=session),
+                script_runner=InProcessScriptRunnerAdapter(
+                    browser_session=session,
+                    metadata_db_path=run_path / "metadata.db",
+                    task_slug=run.name,
+                ),
                 pdf_downloader=CurlCffiPdfDownloaderAdapter(),
             )
             return TaskPlannerUseCase(deps)

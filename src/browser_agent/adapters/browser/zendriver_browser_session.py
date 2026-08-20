@@ -24,6 +24,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 
 from loguru import logger
 
@@ -35,8 +36,10 @@ from browser_agent.adapters.browser.clean_browser_launcher import (
     connect_and_prepare,
     free_port,
     launch_chromium,
-    seed_profile_if_empty,
+    reset_profile,
     stop_browser,
+    terminate_chromium,
+    wait_for_devtools_port,
 )
 from browser_agent.adapters.cdp_page_tracker import CdpPageTracker
 from browser_agent.adapters.browser.page_analyzer import PageAnalyzer
@@ -69,6 +72,7 @@ _DEFAULT_SETTLE_SECONDS = 3.0
 _DEFAULT_WAIT_SECONDS = 1.0
 _DEFAULT_INSPECT_CONTEXT = 2000
 _EXTRACT_MAX_ELEMENTS = 50
+_EXTRACT_TAIL_ELEMENTS = 25
 
 _SELECT_MAX_OPTIONS = 60
 _NON_HTML_EXTENSIONS = (".js", ".css", ".json", ".xml", ".txt", ".svg")
@@ -114,8 +118,12 @@ class ZendriverBrowserSession(BrowserSessionPort):
 
             if not _prepared:
                 if self._user_data_dir is not None:
-                    self._user_data_dir.mkdir(parents=True, exist_ok=True)
-                    seed_profile_if_empty(self._user_data_dir)
+                    # Fresh profile per launch: wipe accumulated locks/corrupt
+                    # state and re-seed from the real Chromium profile. A
+                    # reused profile — stale SingletonLock, a live prior
+                    # instance holding the dir — makes the new Chromium hand
+                    # off to it and never open its own debug port.
+                    reset_profile(self._user_data_dir)
                     user_data_dir = str(self._user_data_dir)
                     logger.info(
                         "launching clean Chromium (headless={}, profile={})",
@@ -137,22 +145,24 @@ class ZendriverBrowserSession(BrowserSessionPort):
             )
 
             try:
+                await wait_for_devtools_port(self._process, self._port)
                 self._browser, self._tab = await connect_and_prepare(port=self._port)
             except Exception as exc:
                 logger.warning(
-                    "port {} busy or connection failed (attempt {}/{}): {}",
+                    "Chromium on port {} did not become ready (attempt {}/{}): {}",
                     self._port,
                     attempt + 1,
                     _max_port_retries,
                     exc,
                 )
-                # The subprocess likely failed to bind — clean it up.
+                # The subprocess failed to bind (or died) — clean it up.
                 if self._process is not None:
-                    self._process.kill()
-                    try:
-                        self._process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        pass
+                    terminate_chromium(self._process)
+                    if self._process.stderr is not None:
+                        try:
+                            self._process.stderr.close()
+                        except OSError:
+                            pass
                     self._process = None
                 self._port = None
                 continue
@@ -275,6 +285,13 @@ class ZendriverBrowserSession(BrowserSessionPort):
         await self._navigate(url)
         await self._settle(_DEFAULT_SETTLE_SECONDS)
         snapshot = await self._snapshot(f"navigated to {url}")
+        status = self._tracker.main_document_status
+        if status is not None and status >= 400:
+            snapshot.summary = (
+                f"WARNING: HTTP {status} for {url} — this URL likely does not exist. "
+                f"Do NOT generalize a URL pattern; go back and extract the exact link "
+                f"from the listing page." + (("\n" + snapshot.summary) if snapshot.summary else "")
+            )
         return await self._annotate_challenge(snapshot)
 
     @staticmethod
@@ -337,17 +354,26 @@ class ZendriverBrowserSession(BrowserSessionPort):
     async def _do_scroll(self, action: PageAction) -> PageSnapshot:
         pre_url = self._tab.url or ""
         pre_height = await self._scroll_height()
+        pre_y = int(await self._tab.evaluate("window.scrollY") or 0)
         pixels = action.scroll_pixels
         if pixels is not None:
-            await self._tab.evaluate(f"window.scrollTo(0, {pixels})")
+            # Relative scroll so consecutive calls descend the page. The old
+            # absolute ``window.scrollTo(0, pixels)`` re-pinned to the same
+            # offset every call, so the page never progressed past ``pixels``
+            # and the scroll loop ran until MAX_EXPLORE_CALLS.
+            await self._tab.evaluate(f"window.scrollBy(0, {pixels})")
             desc = f"scrolled {pixels}px"
         else:
             await self._tab.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             desc = "scrolled to bottom"
         await self._settle(_DEFAULT_SETTLE_SECONDS)
         post_height = await self._scroll_height()
-        # State-aware: scroll-to-bottom with no height change → brief return
-        if pixels is None and post_height <= pre_height and pre_height > 0:
+        post_y = int(await self._tab.evaluate("window.scrollY") or 0)
+        # State-aware termination for BOTH scroll modes: stop once the page
+        # cannot scroll further AND no new content loaded. The old guard
+        # required ``pixels is None``, so a fixed-pixel scroll never emitted the
+        # "scroll height unchanged" signal the planner loops on.
+        if post_y == pre_y and post_height <= pre_height and pre_height > 0:
             return PageSnapshot(
                 url=self._tab.url or "",
                 action_performed=desc,
@@ -445,17 +471,19 @@ class ZendriverBrowserSession(BrowserSessionPort):
         selector = action.selector or ""
         if not selector:
             return self._error_snapshot("extract requires selector")
-        elements = await self._query_all(selector)
-        extracted = self._build_extracted(elements)
         snippet = await self._build_snippet()
+        elements = await self._query_all(selector)
+        visible, note = self._visible_elements(elements)
+        extracted = self._build_extracted(visible, snippet.url)
+        summary = snippet.summary + (("\n" + note) if note else "")
         return PageSnapshot(
             url=snippet.url,
             title=await self._tab_title(),
-            summary=snippet.summary,
+            summary=summary,
             cleaned_html=snippet.cleaned_html,
-            action_performed=f"extracted {len(extracted)} elements with {selector!r}",
+            action_performed=f"extracted {len(elements)} elements with {selector!r}",
             extracted=extracted,
-            extracted_count=len(extracted),
+            extracted_count=len(elements),
             scroll_height=await self._scroll_height(),
             previous_url=snippet.url,
             url_changed=False,
@@ -631,14 +659,27 @@ class ZendriverBrowserSession(BrowserSessionPort):
             return ""
 
     @staticmethod
-    def _build_extracted(elements: list[Any]) -> list[ExtractedElement]:
+    def _visible_elements(elements: list[Any]) -> tuple[list[Any], str]:
+        """Return (visible slice, summary note) for an extract match list."""
+        if len(elements) <= _EXTRACT_MAX_ELEMENTS:
+            return elements, ""
+        return (
+            elements[:_EXTRACT_TAIL_ELEMENTS] + elements[-_EXTRACT_TAIL_ELEMENTS:],
+            f"showing first {_EXTRACT_TAIL_ELEMENTS} and last {_EXTRACT_TAIL_ELEMENTS} "
+            f"of {len(elements)} matches (DOM order); {len(elements) - 2 * _EXTRACT_TAIL_ELEMENTS} hidden — "
+            f"refine the selector (attribute filters, :nth-last-*) to see them",
+        )
+
+    @staticmethod
+    def _build_extracted(elements: list[Any], base_url: str) -> list[ExtractedElement]:
         results: list[ExtractedElement] = []
         for el in elements[:_EXTRACT_MAX_ELEMENTS]:
             tag = getattr(el, "tag_name", "") or ""
             text = (getattr(el, "text", None) or "").strip()[:500]
             href = ""
             try:
-                href = el.attrs.get("href", "") or ""
+                raw = el.attrs.get("href", "") or ""
+                href = urljoin(base_url, raw) if raw else ""
             except Exception:
                 pass
             results.append(ExtractedElement(tag=tag, text=text, href=href))

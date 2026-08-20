@@ -96,39 +96,13 @@ def _check_download_status(python_code: str) -> list[LintFinding]:
     return out
 
 
-def _check_supporting_status(python_code: str) -> list[LintFinding]:
-    out: list[LintFinding] = []
-    for match in re.finditer(r"\bsave_record\s*\(", python_code):
-        call_text = _call_args(python_code, match.end() - 1)
-        has_supporting = '"supporting_filename"' in call_text or "'supporting_filename'" in call_text
-        if not has_supporting:
-            continue
-        has_dl = '"download_status"' in call_text or "'download_status'" in call_text
-        has_role = '"download_role"' in call_text or "'download_role'" in call_text
-        has_pdf = '"pdf_filename"' in call_text or "'pdf_filename'" in call_text
-        if not has_dl or not has_role or has_pdf:
-            out.append(
-                LintFinding(
-                    rule="14",
-                    severity="error",
-                    message=(
-                        "save_record with supporting_filename must set download_status + "
-                        'download_role="supporting" and must NOT set pdf_filename '
-                        "(roles are mutually exclusive)"
-                    ),
-                    line=_line_of(python_code, match.start()),
-                )
-            )
-    return out
-
-
 _HTML_CAPTURE_MSG = (
     "processing script downloads documents but never captures page HTML "
     "(rule 14). Either: (a) call result = await save_page_html(tab, out_dir, "
     "page_url) for the page where each PDF/doc was found and store "
     "Path(result['saved_path']).name as 'html_filename' (and the page URL "
     "as 'source_page_url') in EVERY save_record data dict that has a "
-    "pdf_filename or supporting_filename — use this for per-document-page "
+    "pdf_filename — use this for per-document-page "
     "tasks; or (b) for listing-page-walk tasks where metadata lives in table "
     "rows and whole-page HTML is the wrong granularity, call "
     "extract_rows(tab, row_selector, cell_specs, include_html=True) and "
@@ -137,14 +111,29 @@ _HTML_CAPTURE_MSG = (
     "metadata element. Set 'html_filename': '' only when no HTML was captured "
     "for that row."
 )
+_HTML_CAPTURE_REQUIRES_FILE_MSG = (
+    "this task requires a saved HTML file per downloaded document (registry/"
+    "related-document flow), so a bare 'source_html' row snippet is NOT "
+    "sufficient (rule 14). You MUST call result = await save_page_html(tab, "
+    "out_dir, page_url) for the page/table where each PDF/doc was found and "
+    "store Path(result['saved_path']).name as 'html_filename' (and the page "
+    "URL as 'source_page_url') in EVERY save_record data dict that has a "
+    "pdf_filename. On SPA pages pass ready_selector naming the late-bound "
+    "metadata element."
+)
 
 
-def _check_html_capture(python_code: str) -> list[LintFinding]:
+def _check_html_capture(python_code: str, require_files: bool = False) -> list[LintFinding]:
     """Rule 14: a script that downloads documents must also capture page HTML.
 
     Accepts either ``save_page_html`` + ``html_filename`` key (per-document-page
     shape) or a ``source_html`` key (listing-page-walk shape, populated via
     ``extract_rows(include_html=True)``).
+
+    When ``require_files`` is True (registry/related-document flows need an
+    on-disk HTML file per document), the ``source_html`` row snippet alone
+    does NOT satisfy the rule — the script must call ``save_page_html`` and
+    set ``html_filename``.
     """
     download = re.search(
         r"\b(?:download_pdf_browser|download_pdf_curl_cffi|download_file_browser|download_file_curl_cffi)\s*\(",
@@ -156,14 +145,17 @@ def _check_html_capture(python_code: str) -> list[LintFinding]:
         return []
     has_html_call = re.search(r"\bsave_page_html\s*\(", python_code) is not None
     has_html_key = re.search(r"['\"]html_filename['\"]", python_code) is not None
-    has_source_html_key = re.search(r"['\"]source_html['\"]", python_code) is not None
-    if (has_html_call and has_html_key) or has_source_html_key:
+    if has_html_call and has_html_key:
         return []
+    has_source_html_key = re.search(r"['\"]source_html['\"]", python_code) is not None
+    if not require_files and has_source_html_key:
+        return []
+    message = _HTML_CAPTURE_REQUIRES_FILE_MSG if require_files else _HTML_CAPTURE_MSG
     return [
         LintFinding(
             rule="14",
             severity="error",
-            message=_HTML_CAPTURE_MSG,
+            message=message,
             line=_line_of(python_code, download.start()),
         )
     ]
@@ -255,6 +247,33 @@ def _check_el_text_content(python_code: str) -> list[LintFinding]:
                 severity="error",
                 message="el.text_content() does not exist in zendriver; use get_text from script_tools.dom_helpers",
                 line=_line_of(python_code, match.start()),
+            )
+        )
+    return out
+
+
+_SYNC_ELEMENT_PROPERTIES: frozenset[str] = frozenset({"text", "text_all", "attrs", "id"})
+
+
+def _check_await_sync_property(python_code: str) -> list[LintFinding]:
+    """Rule 4b: flag ``await el.text``/``el.text_all``/``el.attrs``/``el.id`` — zendriver element properties are SYNC."""
+    out: list[LintFinding] = []
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return out
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Await):
+            continue
+        value = node.value
+        if not isinstance(value, ast.Attribute) or value.attr not in _SYNC_ELEMENT_PROPERTIES:
+            continue
+        out.append(
+            LintFinding(
+                rule="4b",
+                severity="error",
+                message="await el.<property> — el.text/el.text_all/el.attrs/el.id are SYNC properties; awaiting a str/dict raises TypeError. Use await get_text(el, tab) (rule 0) or await el.apply('(el) => el.textContent')",
+                line=value.lineno,
             )
         )
     return out
@@ -857,7 +876,7 @@ def _is_zendriver_rule(rule: str) -> bool:
 
 _ZENDRIVER_RULE_NAMES: dict[str, str] = {
     "0": "browser launcher — uses zd.start() instead of start_browser()",
-    "4b": "element handle — used el.text_content() which is not a zendriver method (use get_text)",
+    "4b": "element handle — used el.text_content() or awaited a sync property (el.text/el.attrs); use get_text/get_attr",
     "7": "selectors — uses Playwright-only pseudo-selectors rejected by CDP",
     "8": "HTTP client — uses raw HTTP lib instead of zendriver tab.get()",
     "11": "save_record — awaited a synchronous helper (TypeError at runtime)",
@@ -1001,6 +1020,41 @@ def _check_handwritten_extraction(python_code: str) -> list[LintFinding]:
                             "hand-written DOM extraction forbidden — use "
                             "extract_fields(tab, FIELD_SPECS) for metadata and "
                             "extract_links(tab, selector) for hrefs (rule 14)"
+                        ),
+                        line=node.lineno,
+                    )
+                )
+    return out
+
+
+def _check_handwritten_input_set(python_code: str) -> list[LintFinding]:
+    """Rule 4a: flag a hand-written ``tab.evaluate`` that sets a value.
+
+    Any ``tab.evaluate`` whose first string argument assigns to ``.value``
+    is a hand-written input-set IIFE — input values must go through
+    ``fill_text`` from ``script_tools.form_helpers``.
+    """
+    out: list[LintFinding] = []
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return out
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr != "evaluate" or not node.args:
+            continue
+        first = node.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            if re.search(r"\.value\s*=", first.value):
+                out.append(
+                    LintFinding(
+                        rule="4a",
+                        severity="error",
+                        message=(
+                            "hand-written input value set forbidden — use "
+                            "fill_text(tab, selector, value) from "
+                            "script_tools.form_helpers (rule 4a)"
                         ),
                         line=node.lineno,
                     )
@@ -1335,7 +1389,7 @@ def _check_rename_download(python_code: str) -> list[LintFinding]:
                     message=(
                         "never rename a downloaded file — the download helper already derives "
                         "the canonical name; store Path(result['saved_path']).name verbatim as "
-                        "pdf_filename/supporting_filename"
+                        "pdf_filename"
                     ),
                     line=_line_of(python_code, match.start()),
                 )
@@ -1367,13 +1421,15 @@ def _check_empty_file_url(python_code: str) -> list[LintFinding]:
 class EmittedScriptLinter:
     """Lint the RAW LLM python_code (before emit transforms)."""
 
-    def __init__(self) -> None:
+    def __init__(self, require_html_files: bool = False) -> None:
+        self._require_html_files = require_html_files
         self._DISCOVERY_CHECKS = (
             _check_syntax,
             _check_skeleton,
             _check_http_imports,
             _check_playwright_selectors,
             _check_el_text_content,
+            _check_await_sync_property,
             _check_script_tools_package_import,
             _check_direct_zendriver_import,
             _check_evaluate_iife,
@@ -1385,7 +1441,7 @@ class EmittedScriptLinter:
             _check_tab_select_misuse,
             _check_discovery_manifest,
             _check_unscoped_compound_selector,
-            _check_unawaited_async_call,
+            _check_handwritten_input_set,
         )
         self._PROCESSING_CHECKS = (
             _check_syntax,
@@ -1394,11 +1450,11 @@ class EmittedScriptLinter:
             _check_save_record,
             _check_tab_select_misuse,
             _check_download_status,
-            _check_supporting_status,
             _check_html_capture,
             _check_http_imports,
             _check_playwright_selectors,
             _check_el_text_content,
+            _check_await_sync_property,
             _check_evaluate_iife,
             _check_evaluate_args,
             _check_evaluate_slice,
@@ -1416,7 +1472,7 @@ class EmittedScriptLinter:
             _check_case_sensitive_extension_selector,
             _check_rename_download,
             _check_empty_file_url,
-            _check_unawaited_async_call,
+            _check_handwritten_input_set,
             _check_hardcoded_row_filter,
         )
 
@@ -1424,7 +1480,10 @@ class EmittedScriptLinter:
         findings: list[LintFinding] = []
         checks = self._DISCOVERY_CHECKS if kind == "discovery" else self._PROCESSING_CHECKS
         for check in checks:
-            findings.extend(check(python_code))
+            if check is _check_html_capture:
+                findings.extend(check(python_code, require_files=self._require_html_files))
+            else:
+                findings.extend(check(python_code))
         return findings
 
     @staticmethod

@@ -14,16 +14,33 @@ explore the page's behaviour before writing any validation script.
 
 from __future__ import annotations
 
+from typing import Protocol
+
 from loguru import logger
 from pydantic_ai import RunContext
+from browser_agent.adapters.browser.page_analyzer import anchor_hrefs
 from browser_agent.agent_logging import traced_tool
-from browser_agent.configuration import MAX_EMPTY_EXPLORE_RESULTS
+from browser_agent.configuration import MAX_EMPTY_EXPLORE_RESULTS, SNAPSHOT_LINK_LINES
 from browser_agent.domain.element_info import ElementInfo
 from browser_agent.domain.link_pattern import LinkPattern
 from browser_agent.domain.page_action import PageAction
 from browser_agent.domain.page_structure import PageStructure
 from browser_agent.domain.page_snapshot import PageSnapshot
 from browser_agent.use_cases.agent_deps import AgentDeps
+from browser_agent.use_cases.explore_duplicate_guard import action_key, suppression_message
+
+
+class ExploreBudget(Protocol):
+    """Budget/state attributes the explore-loop guards read from deps.
+
+    Both :class:`AgentDeps` and :class:`VerificationAgentDeps` carry these,
+    so the loop-guard helpers are shared across agents instead of duplicated.
+    """
+
+    explore_calls: int
+    explore_limit: int
+    empty_result_streak: int
+    last_analyze_selectors: list[str]
 
 
 def _action_summary(action: PageAction) -> str:
@@ -90,6 +107,11 @@ async def explore_page(ctx: RunContext[AgentDeps], action: PageAction) -> str:
         return _explore_limit_reached(deps)
     session = deps.browser_session
     summary = _action_summary(action)
+    key = action_key(action)
+    if deps.explore_guard.check(key):
+        deps.explore_guard.suppressed += 1
+        return suppression_message()
+    deps.explore_guard.remember(key)
     async with traced_tool("explore_page", summary=summary):
         snapshot: PageSnapshot = await session.perform(action)
     if snapshot.error:
@@ -133,11 +155,17 @@ def _format_snapshot(snapshot: PageSnapshot) -> str:
         return "\n".join(_format_structure(snapshot.structure, lines))
     if snapshot.extracted:
         lines.append("")
-        lines.append(f"# Extracted elements ({snapshot.extracted_count} total):")
+        lines.append(f"# Extracted elements ({snapshot.extracted_count} total, {len(snapshot.extracted)} shown):")
         for el in snapshot.extracted:
             href_part = f" href={el.href!r}" if el.href else ""
             lines.append(f"  <{el.tag}>{href_part} text={el.text!r}")
     if snapshot.cleaned_html:
+        if not snapshot.structure and not snapshot.extracted:
+            links = anchor_hrefs(snapshot.cleaned_html, snapshot.url, SNAPSHOT_LINK_LINES)
+            if links:
+                lines.append("")
+                lines.append(f"# Page links ({len(links)} shown):")
+                lines.extend(f"  href={href!r} text={text!r}" for href, text in links)
         lines.append("")
         lines.append(snapshot.cleaned_html)
     return "\n".join(lines)
@@ -146,7 +174,13 @@ def _format_snapshot(snapshot: PageSnapshot) -> str:
 def _format_structure(structure: PageStructure, lines: list[str]) -> list[str]:
     """Append structured analysis sections to ``lines`` and return it."""
     _append_link_patterns(lines, structure.link_patterns)
-    _append_section(lines, "# Links", structure.links, _fmt_link)
+    links_header = "# Links"
+    if structure.link_total > len(structure.links):
+        links_header = (
+            f"# Links ({len(structure.links)} of {structure.link_total} anchors on page — "
+            "refine the selector to see the rest)"
+        )
+    _append_section(lines, links_header, structure.links, _fmt_link)
     _append_section(lines, "# Buttons", structure.buttons, _fmt_element)
     _append_section(lines, "# Form inputs", structure.inputs, _fmt_input)
     _append_section(lines, "# Headings", structure.headings, _fmt_heading)
@@ -215,7 +249,7 @@ def _fmt_table(lines: list[str], el: ElementInfo) -> None:
     lines.append(f"  <table{_selector_suffix(el)}> {rows} rows{suffix}")
 
 
-def _budget_footer(deps: AgentDeps) -> str:
+def _budget_footer(deps: ExploreBudget) -> str:
     """Return a pacing footer telling the model how many explore calls remain."""
     remaining = deps.explore_limit - deps.explore_calls
     return f"\n# exploration call {deps.explore_calls}; {remaining} explore calls remain before you must emit."
@@ -230,7 +264,7 @@ def _is_empty_result(action: PageAction, snapshot: PageSnapshot) -> bool:
     return False
 
 
-def _available_selectors(deps: AgentDeps) -> list[str]:
+def _available_selectors(deps: ExploreBudget) -> list[str]:
     """Return the cached link-pattern selectors from the last analyze, else [].
 
     ``link_patterns`` selectors are guaranteed to match at least 2 links
@@ -240,7 +274,7 @@ def _available_selectors(deps: AgentDeps) -> list[str]:
     return deps.last_analyze_selectors
 
 
-def _empty_result_hint(deps: AgentDeps) -> str:
+def _empty_result_hint(deps: ExploreBudget) -> str:
     """Append the analyze oracle after a dead selector, before the streak hard-stop."""
     selectors = _available_selectors(deps)
     if not selectors:
@@ -257,7 +291,7 @@ def _empty_result_hint(deps: AgentDeps) -> str:
     return "\n".join(lines)
 
 
-def _empty_result_directive(deps: AgentDeps) -> str:
+def _empty_result_directive(deps: ExploreBudget) -> str:
     """Refuse further blind probing and offer the analyze oracle."""
     selectors = _available_selectors(deps)
     lines = [
@@ -277,7 +311,7 @@ def _empty_result_directive(deps: AgentDeps) -> str:
     return "\n".join(lines)
 
 
-def _explore_limit_reached(deps: AgentDeps) -> str:
+def _explore_limit_reached(deps: ExploreBudget) -> str:
     return (
         f"# explore_page limit reached ({deps.explore_limit}/{deps.explore_limit}).\n"
         "You have used all your exploration calls. STOP calling this tool.\n"

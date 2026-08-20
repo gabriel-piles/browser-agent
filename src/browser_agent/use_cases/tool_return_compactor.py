@@ -42,10 +42,11 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, Thin
 from pydantic_ai.models import ModelRequestContext
 from browser_agent.configuration import (
     COMPACT_HEAD_LINES,
+    COMPACT_HARD_KEEP_LINES,
     COMPACT_INPUT_TOKEN_BUDGET,
+    COMPACT_KEEP_LINK_LINES,
     COMPACT_KEEP_RECENT_VALIDATIONS,
     COMPACT_MAX_ANALYZE_LINES,
-    COMPACT_MAX_EXTRACTED_LINES,
     COMPACT_MIN_TRIM_CHARS,
     COMPACT_TRUNCATED_PLACEHOLDER,
 )
@@ -156,7 +157,7 @@ def _aggressive_actions(
     others: set[int],
 ) -> list[tuple[int, str, _Summariser]]:
     actions: list[tuple[int, str, _Summariser]] = []
-    actions += _aggressive_bucket(snaps, _EXPLORE_TOOL, _summarise_explore)
+    actions += _aggressive_bucket(snaps, _EXPLORE_TOOL, _summarise_explore_hard)
     actions += _aggressive_bucket(vals, _VALIDATION_TOOL, _summarise_generic)
     actions += _aggressive_bucket(others, None, _summarise_generic)
     return actions
@@ -295,6 +296,21 @@ def _summarise_explore(content: str) -> str:
     return "\n".join(kept)
 
 
+def _summarise_explore_hard(content: str) -> str:
+    """Second-tier trim: headers only for analyze, capped links otherwise."""
+    if _is_analyze_return(content):
+        kept = [line for line in content.splitlines() if line.startswith("#")]
+        kept.append(COMPACT_TRUNCATED_PLACEHOLDER)
+        return "\n".join(kept)
+    kept: list[str] = []
+    state = _ExploreState(cap=COMPACT_HARD_KEEP_LINES)
+    for line in content.splitlines():
+        if state.step(line, kept):
+            break
+    kept.append(COMPACT_TRUNCATED_PLACEHOLDER)
+    return "\n".join(kept)
+
+
 def _flush_analyze_placeholder(kept, seen, trimmed):
     """Emit a ``[{n} more trimmed]`` line when a section was capped."""
     if trimmed:
@@ -314,12 +330,17 @@ def _summarise_analyze(content: str) -> str:
     kept: list[str] = []
     section_seen = 0
     section_trimmed = 0
+    keep_section = False
     for line in content.splitlines():
         if line.startswith("#"):
+            keep_section = line.startswith("# Link URL patterns")
             _flush_analyze_placeholder(kept, section_seen, section_trimmed)
             kept.append(line)
             section_seen = 0
             section_trimmed = 0
+            continue
+        if line.startswith("  ") and keep_section:
+            kept.append(line)
             continue
         if line.startswith("  "):
             if section_seen < COMPACT_MAX_ANALYZE_LINES:
@@ -329,6 +350,7 @@ def _summarise_analyze(content: str) -> str:
                 section_trimmed += 1
             continue
         if line.strip():
+            keep_section = False
             _flush_analyze_placeholder(kept, section_seen, section_trimmed)
             kept.append(line)
             section_seen = 0
@@ -359,28 +381,33 @@ def _summarise_generic(content: str) -> str:
 
 
 class _ExploreState:
-    """Parses one explore_page output, keeping headers + extracted elements.
+    """Parses one explore_page output, keeping headers + link lines.
 
     The output has three sections: metadata headers (``#`` lines),
-    an optional extracted-elements block (``# Extracted elements``
-    header + ``  <`` element lines), and the HTML body.  We keep the
-    first two and stop at the HTML body.
+    optional extracted-elements (``# Extracted elements`` header +
+    ``  <`` lines) and page-links (``# Page links`` header + ``  href=``
+    lines) blocks, and the HTML body.  We keep the headers and the link
+    blocks (each capped), stopping at the HTML body.
     """
 
     _METADATA = "metadata"
     _EXTRACTED = "extracted"
+    _LINKS = "links"
 
-    __slots__ = ("phase", "extracted_count")
+    __slots__ = ("phase", "count", "cap")
 
-    def __init__(self) -> None:
+    def __init__(self, cap: int = COMPACT_KEEP_LINK_LINES) -> None:
         self.phase = self._METADATA
-        self.extracted_count = 0
+        self.count = 0
+        self.cap = cap
 
     def step(self, line: str, kept: list[str]) -> bool:
         """Process one line. Return True when the reader must stop."""
         if self.phase == self._METADATA:
             return self._step_metadata(line, kept)
-        return self._step_extracted(line, kept)
+        if self.phase == self._EXTRACTED:
+            return self._step_extracted(line, kept)
+        return self._step_links(line, kept)
 
     def _step_metadata(self, line: str, kept: list[str]) -> bool:
         if not line.strip():
@@ -388,6 +415,12 @@ class _ExploreState:
         if line.startswith("# Extracted elements"):
             kept.append(line)
             self.phase = self._EXTRACTED
+            self.count = 0
+            return False
+        if line.startswith("# Page links"):
+            kept.append(line)
+            self.phase = self._LINKS
+            self.count = 0
             return False
         if line.startswith("#"):
             kept.append(line)
@@ -399,8 +432,19 @@ class _ExploreState:
             return False
         if not line.startswith("  <"):
             return True
-        if self.extracted_count >= COMPACT_MAX_EXTRACTED_LINES:
+        if self.count >= self.cap:
             return True
         kept.append(line)
-        self.extracted_count += 1
+        self.count += 1
+        return False
+
+    def _step_links(self, line: str, kept: list[str]) -> bool:
+        if not line.strip():
+            return False
+        if not line.startswith("  "):
+            return True
+        if self.count >= self.cap:
+            return True
+        kept.append(line)
+        self.count += 1
         return False

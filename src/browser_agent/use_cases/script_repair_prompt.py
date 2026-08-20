@@ -96,7 +96,7 @@ def format_verification_repair(report) -> str:
     if report.missing_coverage:
         parts.append("\nMissing coverage:\n")
         for mc in report.missing_coverage:
-            parts.append(f"- {mc.path}: {mc.step_0_fix}")
+            parts.append(f"- {mc.navigation_path}: {mc.step_0_fix}")
     parts.append(f"\n```\n{report.overall_assessment}\n```\n")
     parts.append("\nEmit the full corrected GeneratedScript now.")
     return "".join(parts)

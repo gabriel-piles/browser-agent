@@ -23,6 +23,11 @@ ZD_RUNTIME_ERROR_PATTERNS: list[tuple[str, str, str]] = [
         'tab.evaluate called without an expression argument. Fix: pass a JS expression string as the first argument, e.g. await tab.evaluate("document.title").',
     ),
     (
+        "can't be used in 'await' expression",
+        "awaited sync value",
+        "You awaited a synchronous VALUE instead of a coroutine. zendriver element properties (el.text, el.text_all, el.attrs, el.id) and the SYNC helpers save_record/load_discovered_links/mark_link_processed return plain values — never await them (rule 4/11). Fix: await get_text(el, tab) (rule 0) for text, read attributes without await via el.attrs.get('href'), and use await el.apply('(el) => el.textContent') for full subtree text.",
+    ),
+    (
         "TypeError: object NoneType can't be used in 'await' expression",
         "save_record sync",
         "save_record is synchronous (rule 11) — awaiting None raises TypeError. Fix: call it bare: save_record(url, {...}), never await save_record(...).",
@@ -85,12 +90,12 @@ ZD_RUNTIME_ERROR_PATTERNS: list[tuple[str, str, str]] = [
     (
         "AttributeError: '",
         "AttributeError",
-        "Wrong method/property on a zendriver element. Fix: use el.attrs.get('href'), el.text (first text node only — rule 4b), or await el.apply('(el) => el.textContent') for full text.",
+        "Wrong method/property on a zendriver element. Fix: read attributes with el.attrs.get('href') (sync dict — never await it) and full text with await el.apply('(el) => el.textContent'); use the get_text/get_attr helpers (rule 0) instead of hand-rolling, and NEVER el.text_content().",
     ),
     (
         "TypeError: ",
         "TypeError",
-        "Wrong argument type. Fix: check rule 4b — never pass a second positional to tab.evaluate; interpolate values into the JS string with f-strings instead.",
+        "Wrong argument type — read the last traceback line: it names the exact object/argument that was wrong. Common zendriver causes are awaited sync values (see the \"can't be used in 'await' expression\" diagnosis) or a wrong positional/keyword. Fix the exact call named in the traceback.",
     ),
     (
         "asyncio.run() cannot be called from a running event loop",
