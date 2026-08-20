@@ -73,9 +73,9 @@ class SubtaskVerifierUseCase:
         self._require_html_files = require_html_files
 
     async def verify(self, subtask: SubtaskSpec, state_store) -> VerificationReport:
-        from browser_agent.configuration import VERIFICATION_MODEL, ZENDRIVER_HEADLESS
+        from browser_agent.configuration import ZENDRIVER_HEADLESS
         from browser_agent.adapters.browser.zendriver_browser_session import ZendriverBrowserSession
-        from browser_agent.adapters.llm.ollama_adapter import OllamaAdapter
+        from browser_agent.adapters.llm.opencode_zen_adapter import OpenCodeZenAdapter
         from browser_agent.adapters.execution.subprocess_read_script_runner import SubprocessReadScriptRunner
         from browser_agent.use_cases.reconcile_downloads_use_case import ReconcileDownloadsUseCase
         from browser_agent.use_cases.verify_downloads_use_case import VerifyDownloadsUseCase
@@ -113,7 +113,7 @@ class SubtaskVerifierUseCase:
             headless=ZENDRIVER_HEADLESS,
             user_data_dir=self._run_path / "profile_builder",
         )
-        model = OllamaAdapter(model=VERIFICATION_MODEL).get_model()
+        model = OpenCodeZenAdapter().get_model()
         deps = VerificationAgentDeps(
             browser_session=session,
             db_path=self._db_path,

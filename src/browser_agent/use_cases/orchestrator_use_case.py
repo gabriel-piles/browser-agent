@@ -9,7 +9,6 @@ from browser_agent.configuration import (
     AGENT_INPUT_TOKEN_LIMIT,
     MAX_OUTPUT_TOKENS,
     ORCHESTRATOR_MAX_LLM_CALLS,
-    ORCHESTRATOR_MODEL,
 )
 from browser_agent.domain.orchestrator_decision import OrchestratorDecision
 from browser_agent.use_cases.orchestrator_system_prompt import ORCHESTRATOR_SYSTEM_PROMPT
@@ -20,9 +19,9 @@ class OrchestratorUseCase:
     """LLM-only judgment agent — no AgentDeps, no tools, no browser."""
 
     def __init__(self) -> None:
-        from browser_agent.adapters.llm.ollama_adapter import OllamaAdapter
+        from browser_agent.adapters.llm.opencode_zen_adapter import OpenCodeZenAdapter
 
-        self._model = OllamaAdapter(model=ORCHESTRATOR_MODEL).get_model()
+        self._model = OpenCodeZenAdapter().get_model()
 
     def _build_agent(self) -> Agent[None, OrchestratorDecision]:
         return Agent(
