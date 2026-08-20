@@ -26,7 +26,7 @@ from loguru import logger
 from browser_agent.configuration import PROMPTS_PATH, RUNS_FILE
 from browser_agent.domain.robustness_scenario import RobustnessScenario
 from browser_agent.domain.scenario_result import ScenarioResult
-from browser_agent.drivers.step_0_generate_script import GenerateScriptDriver
+from browser_agent.drivers.step_0_run_prompt import GenerateScriptDriver
 
 # Import verify_output from the scripts dir (added to sys.path by the caller).
 sys.path.insert(0, str(Path(__file__).parent))

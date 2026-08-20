@@ -27,6 +27,7 @@ from browser_agent.domain.script_execution_result import ScriptExecutionResult
 from browser_agent.ports.script_runner_port import ScriptRunnerPort
 from browser_agent.use_cases.agent_deps import AgentDeps
 from browser_agent.use_cases.zendriver_error_patterns import ZD_RUNTIME_ERROR_PATTERNS
+from browser_agent.use_cases.script_precheck import precheck
 
 VALIDATION_TIMEOUT_S = 90.0
 _ERROR_HEAD_CHARS = 2000
@@ -179,6 +180,9 @@ def _static_check(python_code: str) -> str:
     ast_hit = _ast_static_check(python_code)
     if ast_hit:
         return ast_hit
+    pre = precheck(python_code)
+    if pre:
+        return pre
     return ""
 
 

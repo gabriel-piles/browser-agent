@@ -15,10 +15,11 @@ from pathlib import Path
 
 from pydantic_ai import RunContext
 
-from browser_agent.agent_logging import traced_tool
+from browser_agent.agent_logging import agent_logger, traced_tool
 from browser_agent.use_cases.verification_agent_deps import VerificationAgentDeps
 
 _MAX_ROWS = 200
+_SQL_ERROR_PREFIX = "# query_db: SQL error"
 _SCHEMA_REMINDER = (
     "Schema: metadata(source_url TEXT PRIMARY KEY, task_slug TEXT, scraped_at TEXT, data TEXT); "
     "discovered_links(url TEXT PRIMARY KEY, filter_label TEXT, status TEXT, discovered_at TEXT). "
@@ -45,9 +46,17 @@ async def query_db(ctx: RunContext[VerificationAgentDeps], sql_query: str) -> st
         guard = _guard(sql_query)
         if guard is not None:
             return guard
-        rows, columns = _run_select(deps.db_path, sql_query)
+        try:
+            rows, columns = _run_select(deps.db_path, sql_query)
+        except sqlite3.Error as exc:
+            agent_logger.bind(tool="query_db").warning(f"{_SQL_ERROR_PREFIX}: {exc}")
+            return _sql_error(exc, sql_query)
         deps.query_db_calls += 1
     return _format(rows, columns, deps.db_path)
+
+
+def _sql_error(exc: sqlite3.Error, sql_query: str) -> str:
+    return f"{_SQL_ERROR_PREFIX} — {exc}\nQuery was: {sql_query}\n{_SCHEMA_REMINDER}"
 
 
 def _guard(sql_query: str) -> str | None:

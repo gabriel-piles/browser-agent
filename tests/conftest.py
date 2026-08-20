@@ -110,7 +110,7 @@ def run_generation_pipeline(scenario_name: str, prompt: str, fixture_port: int, 
         shutil.rmtree(run_path)
 
     # Run the generation driver
-    from browser_agent.drivers.step_0_generate_script import GenerateScriptDriver
+    from browser_agent.drivers.step_0_run_prompt import GenerateScriptDriver
 
     driver = GenerateScriptDriver()
     try:

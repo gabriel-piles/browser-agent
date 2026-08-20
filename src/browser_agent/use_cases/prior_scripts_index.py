@@ -105,10 +105,14 @@ class PriorScriptsIndex:
             elif metadata and kind == "processing":
                 desc = _first_sentence(metadata.get("processing_prompt", desc))
 
+            try:
+                rel_script_path = str(script_path.relative_to(run_dir))
+            except ValueError:
+                rel_script_path = str(script_path)
             summaries.append(
                 PriorScriptSummary(
                     run_name=run_name,
-                    script_path=str(script_path),
+                    script_path=rel_script_path,
                     kind=kind,
                     task_summary=_truncate(metadata.get("task_summary", ""), _MAX_SUMMARY_CHARS) if metadata else "",
                     subtask_description=_truncate(desc, _MAX_SUMMARY_CHARS),

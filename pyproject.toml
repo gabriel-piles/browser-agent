@@ -15,6 +15,7 @@ dependencies = [
     "pyyaml>=6.0.3",
     "uwazi-api",
     "zendriver>=0.15.5",
+    "pyflakes>=3.3",
 ]
 
 

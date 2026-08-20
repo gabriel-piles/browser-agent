@@ -84,6 +84,10 @@ class SubtaskPipeline:
                 break
 
         exec_report = await self._executor.run(subtask.subtask_id, emit_result.script_path)
+        try:
+            exec_report.script_path = str(Path(exec_report.script_path).relative_to(self._run_path))
+        except ValueError:
+            exec_report.script_path = str(Path(exec_report.script_path))
         self._state_store.write_report(subtask.subtask_id, "execution_report", exec_report)
         if exec_report.exit_code != 0:
             from browser_agent.use_cases.script_repair_prompt import format_execution_repair
@@ -107,6 +111,10 @@ class SubtaskPipeline:
                 return "repair_noop"
             smoke, record = await self._smoke(subtask, record, emit_result)
             exec_report = await self._executor.run(subtask.subtask_id, emit_result.script_path)
+            try:
+                exec_report.script_path = str(Path(exec_report.script_path).relative_to(self._run_path))
+            except ValueError:
+                exec_report.script_path = str(Path(exec_report.script_path))
 
         record.status = "verification_failed"
         return record.status
@@ -126,7 +134,10 @@ class SubtaskPipeline:
             script,
             self._run_path,
         )
-        record.script_path = str(emit_result.script_path)
+        try:
+            record.script_path = str(emit_result.script_path.relative_to(self._run_path))
+        except ValueError:
+            record.script_path = str(emit_result.script_path)
         self._state_store.write_report(subtask.subtask_id, "subtask", subtask)
 
         code = emit_result.script_path.read_text(encoding="utf-8")

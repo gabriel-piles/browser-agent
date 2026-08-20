@@ -9,7 +9,7 @@ class PriorScriptSummary(BaseModel):
     """Compact summary of one script from a prior run."""
 
     run_name: str = Field(description="Run directory name (e.g. 'HRC_resolutions_1_11')")
-    script_path: str = Field(description="Absolute path to the .py file")
+    script_path: str = Field(description="Path relative to the run directory (e.g. 'scripts/2026_08_20__slug.py')")
     kind: str = Field(description='"discovery" or "processing"')
     task_summary: str = Field(description="What the parent plan/task was about")
     subtask_description: str = Field(description="What this specific script does")

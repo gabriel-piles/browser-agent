@@ -86,9 +86,15 @@ class ScriptEmitter:
     ) -> Path:
         """Write a sidecar JSON with explanation, strategy, lint findings."""
         sidecar = script_path.with_suffix(".json")
+        try:
+            rel_script = str(script_path.relative_to(run_path))
+            rel_raw = str(self._raw_path(script_path).relative_to(run_path))
+        except ValueError:
+            rel_script = str(script_path)
+            rel_raw = str(self._raw_path(script_path))
         payload = {
-            "script_path": str(script_path),
-            "raw_code_path": str(self._raw_path(script_path)),
+            "script_path": rel_script,
+            "raw_code_path": rel_raw,
             "metadata_db_path": str(run_path / "metadata.db"),
             "explanation": script.explanation,
             "dependencies": script.dependency_names(),
@@ -127,6 +133,9 @@ class ScriptEmitter:
     def _print_payload(self, script: GeneratedScript, script_path: Path, run_path: Path) -> None:
         """Print the structured payload as JSON, WITHOUT ``python_code``."""
         payload = script.model_dump(exclude={"python_code"})
-        payload["script_path"] = str(script_path)
+        try:
+            payload["script_path"] = str(script_path.relative_to(run_path))
+        except ValueError:
+            payload["script_path"] = str(script_path)
         payload["metadata_db_path"] = str(run_path / "metadata.db")
         print(json.dumps(payload, indent=2, ensure_ascii=False))
