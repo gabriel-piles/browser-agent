@@ -13,10 +13,11 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 # LLM connection — consumed by ``adapters/llm/ollama_adapter.py``.
 OLLAMA_BASE_URL = "https://ollama.com/v1"
-ORCHESTRATOR_MODEL = "glm-5.2:cloud"
+ORCHESTRATOR_MODEL = "deepseek-v4-flash:0731-cloud"
 MAX_LLM_CALLS = 70
 EXPLORER_MAX_LLM_CALLS = 30
 WRITER_MAX_LLM_CALLS = 40
+ORCHESTRATOR_MAX_LLM_CALLS = 15
 # Output token budget sent to the provider on every LLM request. Without an
 # explicit `max_tokens`, reasoning models (deepseek-v4-flash) can spend the
 # provider's default budget entirely on thinking and return `finish_reason='length'`

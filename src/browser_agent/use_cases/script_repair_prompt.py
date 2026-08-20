@@ -70,3 +70,33 @@ def format_processing_self_check_repair(output: str, violations: list[str] | Non
         parts.append("\n".join(f"- {v}" for v in violations))
     parts.append(f"\n\n```\n{output}\n```\n\nEmit the full corrected GeneratedScript now.")
     return "".join(parts)
+
+
+_EXECUTION_HEADER = (
+    "The emitted script FAILED during execution against the real site "
+    "(a full run with the actual subprocess). This is NOT a validation "
+    "attempt. Fix the crash below and emit the corrected GeneratedScript.\n\n"
+)
+
+_VERIFY_HEADER = (
+    "The verification agent found gaps between what was downloaded and what "
+    "the site advertises. Missing documents, corrupted files, or incomplete "
+    "coverage. Fix the gaps below and emit the full corrected GeneratedScript.\n\n"
+)
+
+
+def format_execution_repair(output_tail: str) -> str:
+    """Format an execution failure as a repair prompt."""
+    return f"{_EXECUTION_HEADER}```\n{output_tail}\n```\n\nEmit the full corrected GeneratedScript now."
+
+
+def format_verification_repair(report) -> str:
+    """Format a verification failure as a repair prompt."""
+    parts = [_VERIFY_HEADER]
+    if report.missing_coverage:
+        parts.append("\nMissing coverage:\n")
+        for mc in report.missing_coverage:
+            parts.append(f"- {mc.path}: {mc.step_0_fix}")
+    parts.append(f"\n```\n{report.overall_assessment}\n```\n")
+    parts.append("\nEmit the full corrected GeneratedScript now.")
+    return "".join(parts)

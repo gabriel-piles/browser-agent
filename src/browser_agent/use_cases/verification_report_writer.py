@@ -26,12 +26,13 @@ _REPORT_JSON_FILENAME = "verification_report.json"
 class VerificationReportWriter:
     """Write :class:`VerificationReport` as markdown + JSON."""
 
-    def __init__(self, run_path: Path) -> None:
+    def __init__(self, run_path: Path, output_dir: Path | None = None) -> None:
         self._run_path = run_path
+        self._output_dir = output_dir or run_path
 
     def write(self, report: VerificationReport) -> Path:
         """Write both artifacts and return the markdown path written."""
-        path = self._run_path / _REPORT_FILENAME
+        path = self._output_dir / _REPORT_FILENAME
         _ = path.write_text(self._render(report), encoding="utf-8")
         self._write_json(report)
         logger.info("verification report written to {path}", path=path)
@@ -39,7 +40,7 @@ class VerificationReportWriter:
 
     def _write_json(self, report: VerificationReport) -> None:
         """Write the machine-readable JSON handoff beside the markdown."""
-        json_path = self._run_path / _REPORT_JSON_FILENAME
+        json_path = self._output_dir / _REPORT_JSON_FILENAME
         _ = json_path.write_text(
             json.dumps(report.model_dump(mode="json"), indent=2),
             encoding="utf-8",

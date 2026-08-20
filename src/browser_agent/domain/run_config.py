@@ -70,5 +70,5 @@ class RunConfig(BaseModel):
     )
     expected_source_urls: list[str] = Field(
         default_factory=list,
-        description="Page URLs the scraper must capture in metadata.db; verified by step 2.",
+        description="Page URLs the scraper must capture in metadata.db; verified by step_1_verify_expected_sources.py.",
     )

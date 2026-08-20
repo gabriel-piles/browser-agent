@@ -19,10 +19,13 @@ class ScriptPathBuilder:
     def __init__(self, run_path: Path) -> None:
         self._run_path = run_path
 
-    def build(self, task: str) -> Path:
-        """Return the path the script for ``task`` is written to today."""
+    def build(self, name: str) -> Path:
+        """Return the path the script for ``name`` is written to today.
+
+        ``name`` is used directly as the slug (e.g. a subtask_id).
+        """
         today = self._today()
-        slug = self._slug(task)
+        slug = self._slug(name)
         scripts_dir = self._scripts_dir()
         base = scripts_dir / f"{today}__{slug}.py"
         return self._unique(base)

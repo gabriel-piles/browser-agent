@@ -51,3 +51,7 @@ class VerificationReport(BaseModel):
         default_factory=list,
         description="Deterministic probe-corpus outcomes; empty when no verification_probes.yaml.",
     )
+    script_tools_improvements: list[str] = Field(
+        default_factory=list,
+        description="Actionable script_tools improvements derived by the verify agent.",
+    )

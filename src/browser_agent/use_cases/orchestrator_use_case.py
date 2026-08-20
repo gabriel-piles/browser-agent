@@ -1,0 +1,52 @@
+"""Orchestrator agent: LLM judgment point, no browser, no tools."""
+
+from __future__ import annotations
+
+from pydantic_ai import Agent, UsageLimits
+
+from browser_agent.agent_logging import agent_logger
+from browser_agent.configuration import (
+    AGENT_INPUT_TOKEN_LIMIT,
+    MAX_OUTPUT_TOKENS,
+    ORCHESTRATOR_MAX_LLM_CALLS,
+    ORCHESTRATOR_MODEL,
+)
+from browser_agent.domain.orchestrator_decision import OrchestratorDecision
+from browser_agent.use_cases.orchestrator_system_prompt import ORCHESTRATOR_SYSTEM_PROMPT
+
+
+class OrchestratorUseCase:
+    """LLM-only judgment agent — no AgentDeps, no tools, no browser."""
+
+    def __init__(self) -> None:
+        from browser_agent.adapters.llm.ollama_adapter import OllamaAdapter
+
+        self._model = OllamaAdapter(model=ORCHESTRATOR_MODEL).get_model()
+
+    def _build_agent(self) -> Agent[None, OrchestratorDecision]:
+        return Agent(
+            model=self._model,
+            system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,
+            output_type=OrchestratorDecision,
+            model_settings={"max_tokens": MAX_OUTPUT_TOKENS},
+            retries={"output": 3},
+        )
+
+    async def decide(self, summary: str) -> OrchestratorDecision:
+        agent = self._build_agent()
+        agent_logger.info(
+            "orchestrator deciding summary_tokens={t}",
+            t=len(summary) // 4,
+        )
+        run = await agent.run(summary, usage_limits=_usage_limits())
+        output = getattr(run, "output", None)
+        if isinstance(output, OrchestratorDecision):
+            return output
+        raise RuntimeError(f"Orchestrator returned unsupported type: {type(output).__name__}")
+
+
+def _usage_limits() -> UsageLimits:
+    return UsageLimits(
+        request_limit=ORCHESTRATOR_MAX_LLM_CALLS,
+        total_tokens_limit=AGENT_INPUT_TOKEN_LIMIT,
+    )

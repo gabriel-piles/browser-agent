@@ -29,9 +29,9 @@ FAILURES_LOG = Path(__file__).parent / "failures_log.jsonl"
 _SRC = Path(__file__).resolve().parent.parent / "src" / "browser_agent"
 
 _ALLOWED_FILES = [
-    "use_cases/explorer_system_prompt.py",
-    "use_cases/discovery_writer_system_prompt.py",
-    "use_cases/processing_writer_system_prompt.py",
+    "use_cases/planner_system_prompt.py",
+    "use_cases/builder_system_prompt.py",
+    "use_cases/orchestrator_system_prompt.py",
     "use_cases/emitted_script_linter.py",
     "use_cases/zendriver_error_patterns.py",
     "use_cases/script_repair_prompt.py",

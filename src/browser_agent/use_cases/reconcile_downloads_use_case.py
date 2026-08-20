@@ -37,9 +37,10 @@ _MAX_FINDING_ITEMS = 20
 class ReconcileDownloadsUseCase:
     """Build the exhaustive N-row inventory for one run directory."""
 
-    def __init__(self, db_path: Path, downloads_path: Path) -> None:
+    def __init__(self, db_path: Path, downloads_path: Path, task_slug: str | None = None) -> None:
         self._db_path = db_path
         self._downloads_path = downloads_path
+        self._task_slug = task_slug
 
     def reconcile(self) -> tuple[list[ReconciledPdf], list[CorpusFinding]]:
         """Return ``(per_row_inventory, corpus_findings)`` for the whole run."""
@@ -54,6 +55,11 @@ class ReconcileDownloadsUseCase:
         uri = f"file:{self._db_path.as_posix()}?mode=ro"
         conn = sqlite3.connect(uri, uri=True)
         try:
+            if self._task_slug is not None:
+                return conn.execute(
+                    "SELECT source_url, task_slug, data FROM metadata WHERE task_slug = ?",
+                    (self._task_slug,),
+                ).fetchall()
             return conn.execute(
                 "SELECT source_url, task_slug, data FROM metadata",
             ).fetchall()
