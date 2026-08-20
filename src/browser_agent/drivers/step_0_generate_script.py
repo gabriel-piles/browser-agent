@@ -106,10 +106,11 @@ class GenerateScriptDriver:
         run_path = RunsConfigLoader.load_active_path()
         # Delete the run's previous browser profile so every run starts
         # from a clean, freshly-seeded profile.
-        profile_dir = run_path / "profile"
-        if profile_dir.exists():
-            shutil.rmtree(profile_dir)
-            logger.info("removed stale browser profile {path}", path=profile_dir)
+        for name in ("profile", "profile_discovery", "profile_processing"):
+            profile_dir = run_path / name
+            if profile_dir.exists():
+                shutil.rmtree(profile_dir)
+                logger.info("removed stale browser profile {path}", path=profile_dir)
         path_builder = ScriptPathBuilder(run_path)
         emitter = ScriptEmitter(path_builder)
         ScriptToolsCopier().copy(run_path)
@@ -150,32 +151,24 @@ class GenerateScriptDriver:
         concurrency: str = "",
     ) -> int:
         """Run the 3-agent pipeline: explore → discover → process → lint → emit → smoke → repair."""
-        # 1. Explorer — produces the TaskSplit
-        split, explorer_uc = await self._generator.generate_split(task, run_path, context)
+        split = await self._generator.generate_split(task, run_path, context)
         # 2. Persist task_split.json
         self._persist_split(split, run_path)
         # 3. Pre-seed discovered_links with sample URLs
         preseed_sample_links(split.sample_document_urls, str(run_path / "metadata.db"))
-        # 4. Discovery Writer (Agent 2) — only when the task needs discovery
-        discovery_script: GeneratedScript | None = None
-        discovery_uc: GenerateDiscoveryScriptUseCase | None = None
-        if split.needs_discovery:
-            discovery_script, discovery_uc = await self._generator.generate_discovery(split, run_path)
-        # 5. Processing Writer (Agent 3)
-        processing_script, processing_uc = await self._generator.generate_processing(
-            split,
-            run_path,
-            concurrency=concurrency,
+        # 4. Discovery + Processing Writers (Agents 2 & 3) — concurrent
+        discovery_script, discovery_uc, processing_script, processing_uc = await self._generator.generate_writers_concurrent(
+            split, run_path, concurrency=concurrency
         )
-        # 6. Assemble into GeneratedScriptSet
+        # 5. Assemble into GeneratedScriptSet
         script_set = GeneratedScriptSet.from_scripts(discovery_script, processing_script, split)
-        # 7. Lint repair — route findings by kind to the correct writer
+        # 6. Lint repair — route findings by kind to the correct writer
         script_set, discovery_uc, processing_uc = await self._lint_repair_loop(
             script_set,
             discovery_uc,
             processing_uc,
         )
-        # 7b. Lint gate — a script with remaining error-severity lint findings is
+        # 6b. Lint gate — a script with remaining error-severity lint findings is
         # deterministically broken; refuse to emit it.
         remaining = self._error_findings_by_kind(script_set)
         if remaining:
@@ -187,14 +180,14 @@ class GenerateScriptDriver:
                         rule=f.rule,
                         msg=f.message,
                     )
-            await self._generator.close_all(explorer_uc)
+            await self._generator.close_all()
             return EXIT_LINT_FAILED
-        # 8. Emit both scripts
+        # 7. Emit both scripts
         emit_results: list[EmitResult] = []
         discovery_emit = self._emit_script(task, script_set.discovery_script(), emitter, run_path, context, emit_results)
         processing_emit = self._emit_script(task, script_set.processing_script(), emitter, run_path, context, emit_results)
         assert processing_emit is not None
-        # 9. Smoke test processing script
+        # 8. Smoke test processing script
         smoke_result = await self._smoke_test_with_sidecar(processing_emit, emitter, attempt=1)
         if not smoke_result.success:
             script_set = await self._smoke_repair_loop(processing_uc, script_set, smoke_result)
@@ -208,10 +201,10 @@ class GenerateScriptDriver:
             assert processing_emit is not None
             smoke_result = await self._smoke_test_with_sidecar(processing_emit, emitter, attempt=2)
             if not smoke_result.success:
-                await self._generator.close_all(explorer_uc)
+                await self._generator.close_all()
                 self._cleanup_emit_artifacts(emit_results, keep_final=False)
                 return EXIT_SMOKE_FAILED
-        # 9b. Processing behavioral self-check — correctness gate.
+        # 8b. Processing behavioral self-check — correctness gate.
         if split.sample_document_urls:
             self_check = await processing_self_check(processing_emit.script_path, split.sample_document_urls)
             repairs = 0
@@ -250,16 +243,16 @@ class GenerateScriptDriver:
                     v=len(self_check.violations),
                     output=self_check.output,
                 )
-                await self._generator.close_all(explorer_uc)
+                await self._generator.close_all()
                 self._cleanup_emit_artifacts(emit_results, keep_final=False)
                 return EXIT_SELF_CHECK_FAILED
         else:
             logger.warning("processing self-check SKIPPED — no sample_document_urls from explorer")
-        # 10. Discovery self-check first — its repair turn reuses the shared browser session.
+        # 9. Discovery self-check first — its repair turn reuses the discovery session.
         if discovery_emit is not None and discovery_uc is not None:
             await self._discovery_self_check(task, script_set, discovery_uc, emitter, run_path, context, emit_results)
-        # 11. Close the shared browser session once the self-check is done.
-        await self._generator.close_all(explorer_uc)
+        # 10. Close both writer sessions once the self-check is done.
+        await self._generator.close_all()
         self._cleanup_emit_artifacts(emit_results)
         return 0
 
@@ -369,7 +362,7 @@ class GenerateScriptDriver:
         self_check_stdout: str,
     ) -> None:
         """Run the independent DiscoveryAuditor and repair once on discrepancies."""
-        session = self._generator._session
+        session = self._generator.discovery_session
         if session is None:
             logger.warning("discovery audit: shared browser session closed — skipping audit")
             return

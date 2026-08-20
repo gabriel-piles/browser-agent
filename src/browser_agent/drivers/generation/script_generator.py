@@ -1,15 +1,13 @@
-"""Build agent dependencies and orchestrate the three-agent script generation.
+"""Build agent deps and run the three-agent script generation.
 
-Wires the :class:`ZendriverBrowserSession` (shared with the
-:class:`InProcessScriptRunnerAdapter`), the
-:class:`OllamaAdapter` LLM, and the
-:class:`CurlCffiPdfDownloaderAdapter` PDF downloader into
-:class:`AgentDeps` instances for each agent. The Explorer starts the
-browser session; the Discovery Writer and Processing Writer reuse it.
-The session stays open until :meth:`close_all` tears it down.
+The Explorer runs first in its own browser session (closed after the
+split is produced). The Discovery Writer and Processing Writer then
+run concurrently, each with its own :class:`ZendriverBrowserSession`
+and profile dir so two Chromium instances don't contend on a single
+locked user-data-dir. :meth:`close_all` tears both writer sessions down.
 """
 
-from __future__ import annotations
+import asyncio
 
 from pathlib import Path
 
@@ -41,47 +39,72 @@ class ScriptGenerator:
     """Build deps + run the three-agent script-generation pipeline for one task."""
 
     def __init__(self) -> None:
-        self._session: ZendriverBrowserSession | None = None
+        self._discovery_session: ZendriverBrowserSession | None = None
+        self._processing_session: ZendriverBrowserSession | None = None
 
     async def generate_split(
         self,
         task: str,
         run_path: Path,
         context: str = "",
-    ) -> tuple[TaskSplit, ExploreSiteUseCase]:
-        """Run the Explorer agent; return the split + live explorer use case."""
-        session = self._build_session(run_path)
-        self._session = session
+    ) -> TaskSplit:
+        """Run the Explorer agent; return the split (session closed immediately)."""
+        session = self._build_session(run_path / "profile")
         deps = self._build_deps(session, run_path, EXPLORER_MAX_LLM_CALLS)
         use_case = ExploreSiteUseCase(deps)
         prompt = f"{context}\n\n---\n\n{task}" if context else task
-        split = await use_case.execute(CodeGenerationRequest(task=prompt))
-        return split, use_case
+        try:
+            return await use_case.execute(CodeGenerationRequest(task=prompt))
+        finally:
+            await use_case.close()
 
-    async def generate_discovery(
+    async def generate_writers_concurrent(
+        self,
+        split: TaskSplit,
+        run_path: Path,
+        concurrency: str = "",
+    ) -> tuple[
+        GeneratedScript | None,
+        GenerateDiscoveryScriptUseCase | None,
+        GeneratedScript,
+        GenerateProcessingScriptUseCase,
+    ]:
+        """Run the Discovery and Processing writers concurrently with separate sessions."""
+        try:
+            async with asyncio.TaskGroup() as tg:
+                if split.needs_discovery:
+                    disc = tg.create_task(self._discovery_task(split, run_path))
+                proc = tg.create_task(self._processing_task(split, run_path, concurrency))
+            disc_result = disc.result() if split.needs_discovery else (None, None)
+            return (*disc_result, *proc.result())
+        except Exception:
+            await self.close_all()
+            raise
+
+    async def _discovery_task(
         self,
         split: TaskSplit,
         run_path: Path,
     ) -> tuple[GeneratedScript, GenerateDiscoveryScriptUseCase]:
-        """Run the Discovery Writer agent with the split's discovery prompt."""
-        assert self._session is not None
-        deps = self._build_deps(self._session, run_path, WRITER_MAX_LLM_CALLS)
+        """Build + run the Discovery Writer in its own browser session."""
+        self._discovery_session = self._build_session(run_path / "profile_discovery")
+        deps = self._build_deps(self._discovery_session, run_path, WRITER_MAX_LLM_CALLS)
         use_case = GenerateDiscoveryScriptUseCase(deps)
-        script = await use_case.execute(split)
-        return script, use_case
+        await self._discovery_session.start()
+        return await use_case.execute(split), use_case
 
-    async def generate_processing(
+    async def _processing_task(
         self,
         split: TaskSplit,
         run_path: Path,
         concurrency: str = "",
     ) -> tuple[GeneratedScript, GenerateProcessingScriptUseCase]:
-        """Run the Processing Writer agent with the split's processing prompt."""
-        assert self._session is not None
-        deps = self._build_deps(self._session, run_path, WRITER_MAX_LLM_CALLS)
+        """Build + run the Processing Writer in its own browser session."""
+        self._processing_session = self._build_session(run_path / "profile_processing")
+        deps = self._build_deps(self._processing_session, run_path, WRITER_MAX_LLM_CALLS)
         use_case = GenerateProcessingScriptUseCase(deps)
-        script = await use_case.execute(split, concurrency=concurrency)
-        return script, use_case
+        await self._processing_session.start()
+        return await use_case.execute(split, concurrency=concurrency), use_case
 
     @staticmethod
     async def repair_discovery(
@@ -99,16 +122,25 @@ class ScriptGenerator:
         """Run a repair turn on the processing writer with ``feedback``."""
         return await use_case.repair(feedback)
 
-    async def close_all(self, explorer_use_case: ExploreSiteUseCase) -> None:
-        """Close the shared browser session after all agents finish."""
-        await explorer_use_case.close()
-        self._session = None
+    async def close_all(self) -> None:
+        """Close both writer browser sessions; idempotent."""
+        if self._discovery_session is not None:
+            await self._discovery_session.close()
+            self._discovery_session = None
+        if self._processing_session is not None:
+            await self._processing_session.close()
+            self._processing_session = None
 
-    def _build_session(self, run_path: Path) -> ZendriverBrowserSession:
-        """Return a :class:`ZendriverBrowserSession` rooted in the run's profile dir."""
+    @property
+    def discovery_session(self) -> ZendriverBrowserSession | None:
+        """Return the live discovery writer's session (for the DiscoveryAuditor)."""
+        return self._discovery_session
+
+    def _build_session(self, profile_dir: Path) -> ZendriverBrowserSession:
+        """Return a :class:`ZendriverBrowserSession` rooted in ``profile_dir``."""
         return ZendriverBrowserSession(
             headless=ZENDRIVER_HEADLESS,
-            user_data_dir=run_path / "profile",
+            user_data_dir=profile_dir,
         )
 
     def _build_deps(

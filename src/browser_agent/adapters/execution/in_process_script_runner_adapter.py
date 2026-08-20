@@ -60,9 +60,16 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
     validation browser would kill the agent's session. Tabs opened
     for validation are NOT explicitly closed; the agent's session
     tears everything down on ``close()``.
+
+    A class-level :attr:`_validation_lock` serializes ``_exec_main``
+    across concurrent writer validations — two writers run in
+    parallel but only one validation script executes at a time,
+    preventing ``sys.modules`` / ``sys.stdout`` / ``os.environ``
+    clobbering. The slow LLM thinking runs unconstrained.
     """
 
     _DEFAULT_TIMEOUT = 120.0
+    _validation_lock = asyncio.Lock()
 
     def __init__(
         self,
@@ -80,15 +87,16 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
         namespace = self._build_namespace(tab)
         buffer = io.StringIO()
         try:
-            try:
-                return await asyncio.wait_for(
-                    self._exec_main(transformed, namespace, buffer),
-                    timeout=timeout,
-                )
-            except asyncio.TimeoutError:
-                partial = buffer.getvalue()
-                output = f"{partial}\n[TIMEOUT after {timeout:.0f}s — validation script cancelled]".strip()
-                return ScriptExecutionResult(exit_code=124, output=output, success=False)
+            async with self._validation_lock:
+                try:
+                    return await asyncio.wait_for(
+                        self._exec_main(transformed, namespace, buffer),
+                        timeout=timeout,
+                    )
+                except asyncio.TimeoutError:
+                    partial = buffer.getvalue()
+                    output = f"{partial}\n[TIMEOUT after {timeout:.0f}s — validation script cancelled]".strip()
+                    return ScriptExecutionResult(exit_code=124, output=output, success=False)
         finally:
             await _close_tab_silently(tab)
 
