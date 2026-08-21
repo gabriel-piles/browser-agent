@@ -51,7 +51,7 @@ class ScrapingGapMapBuilder:
         year_state: dict[tuple[str, str], int] = {}
         for source_url, _slug, data_json in rows:
             data = parse_row_data(data_json)
-            url = data.get("file_url")
+            url = data.get("core_file_url")
             if url:
                 file_urls.add(url)
             for field in _GAP_FIELDS:

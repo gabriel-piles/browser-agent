@@ -253,11 +253,11 @@ async def save_page_html(tab, save_path, source_url, filename=None, card_selecto
     No-op when the element does not exist.
 
     Returns a dict with ``saved_path`` so the caller can store the
-    exact ``html_filename`` in the DB row:
+    exact ``core_html_filename`` in the DB row:
 
         result = await save_page_html(tab, out_dir, page_url)
-        save_record(..., {"html_filename": Path(result["saved_path"]).name,
-                          "source_page_url": source_url, ...})
+        save_record(..., {"core_html_filename": Path(result["saved_path"]).name,
+                          "core_source_page_url": source_url, ...})
 
     For virtualized lists:
 

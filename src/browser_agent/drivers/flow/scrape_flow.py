@@ -28,6 +28,7 @@ class ScrapeFlow:
         orchestrator,
         pipeline,
         final_verifier,
+        refresh_flow,
     ) -> None:
         self._run_path = run_path
         self._flow_paths = flow_paths
@@ -36,9 +37,11 @@ class ScrapeFlow:
         self._orchestrator = orchestrator
         self._pipeline = pipeline
         self._final_verifier = final_verifier
+        self._refresh_flow = refresh_flow
         self._start_time = time.monotonic()
         self._total_builds = 0
         self._task = ""
+        self._last_logged_progress = None
 
     async def run(self, task: str) -> int:
         self._start_time = time.monotonic()
@@ -51,22 +54,33 @@ class ScrapeFlow:
         self._prior_index = self._build_prior_index()
         state = self._state_store.load()
 
+        if state is not None and state.finished:
+            logger.info("flow: run already finished — starting refresh pass")
+            return await self._refresh_flow.refresh(state, task)
         if state is None:
+            logger.info("flow: step 1 of 4 — planning")
             state = await self._plan(task)
             if state is None:
                 return 1
         else:
-            logger.info("resuming from persisted state (plan {n})", n=state.plan_counter)
+            logger.info("flow: step 2 of 4 — resuming plan {n}", n=state.plan_counter)
 
+        logger.info("flow: step 3 of 4 — subtask pipeline")
         state = await self._run_subtasks(state)
         if not state.finished:
             return 1
 
-        logger.info("flow: running final whole-run verification")
+        logger.info("flow: step 4 of 4 — final whole-run verification")
         await self._final_verifier.verify(task)
 
         state.finished = True
         self._state_store.save(state)
+        self._log_plan_progress(state)
+        logger.info(
+            "flow: step 4 of 4 complete — plan {done}/{total} subtasks",
+            done=sum(1 for r in state.records if self._is_terminal(state, r.subtask_id)),
+            total=len(state.plan.subtasks),
+        )
         logger.info("flow: finished successfully")
         return 0
 
@@ -76,10 +90,17 @@ class ScrapeFlow:
         logger.info("flow: running planner")
         replans = 0
         while replans <= _MAX_REPLANS:
+            logger.info(
+                "flow: plan attempt {attempt}/{max}",
+                attempt=replans + 1,
+                max=_MAX_REPLANS + 1,
+            )
             planner = self._planner_factory()
-            context = self._plan_context(task, replans)
-            plan = await planner.execute(task, context=context)
-            await planner.close()
+            try:
+                context = self._plan_context(task, replans)
+                plan = await planner.execute(task, context=context)
+            finally:
+                await planner.close()
 
             state = OrchestratorState(
                 plan=plan,
@@ -114,10 +135,20 @@ class ScrapeFlow:
             return state
         return state
 
+    def _log_plan_progress(self, state) -> None:
+        total = len(state.plan.subtasks)
+        done = sum(1 for r in state.records if self._is_terminal(state, r.subtask_id))
+        if (done, total) == self._last_logged_progress:
+            return
+        self._last_logged_progress = (done, total)
+        logger.info("flow: plan progress {done}/{total} subtasks", done=done, total=total)
+
     async def _run_subtasks(self, state):
 
         for spec in state.plan.subtasks:
             self._deadline_check()
+            self._log_plan_progress(state)
+            logger.info("flow: processing subtask {id}", id=spec.subtask_id)
             if self._total_builds >= _MAX_TOTAL_SUBTASK_BUILDS:
                 logger.error(
                     "build cap ({n}) reached — aborting flow. Remaining subtasks: {ids}",
@@ -131,6 +162,7 @@ class ScrapeFlow:
                 record.status = "aborted"
                 self._state_store.save(state)
                 logger.warning("subtask {id}: dependency failed — aborting", id=spec.subtask_id)
+                self._log_plan_progress(state)
                 continue
 
             if self._is_terminal(state, spec.subtask_id):
@@ -149,6 +181,7 @@ class ScrapeFlow:
 
             if record.status == "succeeded":
                 logger.info("subtask {id}: succeeded", id=spec.subtask_id)
+                self._log_plan_progress(state)
                 continue
 
             if record.status == "repair_noop":
@@ -156,6 +189,7 @@ class ScrapeFlow:
                 decision = await self._orchestrator.decide(self._failure_summary(state, spec.subtask_id))
                 self._state_store.log_decision(decision, f"repair_noop:{spec.subtask_id}")
                 state = await self._apply_decision(decision, state, spec.subtask_id)
+                self._log_plan_progress(state)
                 continue
 
             if record.repair_decisions >= _MAX_ORCHESTRATOR_REPAIRS_PER_SUBTASK:
@@ -169,12 +203,18 @@ class ScrapeFlow:
                     self._forced_accept_gap(spec.subtask_id),
                     f"repair_cap:{spec.subtask_id}",
                 )
+                self._log_plan_progress(state)
                 continue
 
             decision = await self._orchestrator.decide(self._failure_summary(state, spec.subtask_id))
             self._state_store.log_decision(decision, f"failure:{spec.subtask_id}")
             state = await self._apply_decision(decision, state, spec.subtask_id)
+            self._log_plan_progress(state)
 
+        statuses = {r.subtask_id: r.status for r in state.records}
+        if all(statuses.get(s.subtask_id) in ("succeeded", "accepted_gap") for s in state.plan.subtasks):
+            state.finished = True
+        self._log_plan_progress(state)
         return state
 
     async def _apply_decision(self, decision, state, subtask_id: str):
@@ -204,8 +244,10 @@ class ScrapeFlow:
 
     async def _do_replan(self, state, focus: str):
         planner = self._planner_factory()
-        new_plan = await planner.replan(focus, task=self._task, previous_plan=self._replan_context(state))
-        await planner.close()
+        try:
+            new_plan = await planner.replan(focus, task=self._task, previous_plan=self._replan_context(state))
+        finally:
+            await planner.close()
         state.replans += 1
         state.plan_counter += 1
         self._state_store.write_plan(state.plan_counter, new_plan)

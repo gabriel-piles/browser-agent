@@ -9,9 +9,11 @@ from loguru import logger
 from browser_agent.adapters.execution.file_ops import (
     existing_size,
     pdf_filename_for,
+    file_filename_for,
     write_atomic,
     assert_pdf_magic,
     is_pdf_bytes,
+    is_doc_bytes,
 )
 from browser_agent.configuration import PROJECT_ROOT
 from browser_agent.domain.download_result import DownloadResult
@@ -25,9 +27,12 @@ _MAX_SIZE_BYTES = 100 * 1024 * 1024
 _RETRIES = 3
 _RETRY_DELAY_S = 1.5
 
+_DOC_SUFFIXES = (".doc", ".docx")
+_DOC_CONTENT_TYPE_SUBSTRINGS = ("msword", "wordprocessingml")
+
 
 class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
-    """Downloads PDFs via curl_cffi with Chrome TLS fingerprint impersonation.
+    """Downloads PDFs and Word documents (.doc/.docx) via curl_cffi with Chrome TLS fingerprint impersonation.
 
     This is one of two PDF download strategies. It uses curl_cffi's
     ``AsyncSession`` with ``impersonate="chrome"`` to send HTTP
@@ -89,29 +94,36 @@ class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
                 if attempt < _RETRIES:
                     await asyncio.sleep(_RETRY_DELAY_S * attempt)
                 continue
-            error = self._validate_response(r, len(r.content) if r.content else 0)
+            error = self._validate_response(r, len(r.content) if r.content else 0, url)
             if error:
                 last_error = error
                 if attempt < _RETRIES:
                     await asyncio.sleep(_RETRY_DELAY_S * attempt)
                 continue
-            if not is_pdf_bytes(r.content):
+            is_doc = path.suffix.lower() in _DOC_SUFFIXES
+            if is_doc:
+                ok = is_doc_bytes(r.content)
+                last_error = "non-document body (magic check failed)"
+            else:
+                ok = is_pdf_bytes(r.content)
                 last_error = "non-PDF body (magic check failed)"
+            if not ok:
                 if attempt < _RETRIES:
                     await asyncio.sleep(_RETRY_DELAY_S * attempt)
                 continue
             write_atomic(path, r.content)
-            try:
-                assert_pdf_magic(path, r.content, url)
-            except RuntimeError as exc:
-                return DownloadResult(
-                    success=False,
-                    saved_path=str(path),
-                    url=url,
-                    content_type=r.headers.get("content-type", ""),
-                    file_size_bytes=len(r.content),
-                    error=str(exc),
-                )
+            if not is_doc:
+                try:
+                    assert_pdf_magic(path, r.content, url)
+                except RuntimeError as exc:
+                    return DownloadResult(
+                        success=False,
+                        saved_path=str(path),
+                        url=url,
+                        content_type=r.headers.get("content-type", ""),
+                        file_size_bytes=len(r.content),
+                        error=str(exc),
+                    )
             return DownloadResult(
                 success=True,
                 saved_path=str(path),
@@ -136,14 +148,17 @@ class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
         """Derive the on-disk path from a content-addressed filename.
 
         The filename is a deterministic function of ``url``
-        (``pdf_<sha1(url)[:12]>.pdf``) so the probe download uses the
-        same naming as the emitted helpers, making existence-at-path
-        equivalent to "this URL was already downloaded".
+        (``pdf_<sha1(url)[:12]>.pdf`` / ``doc_<sha1(url)[:12]>.doc/.docx``)
+        so the probe download uses the same naming as the emitted helpers,
+        making existence-at-path equivalent to "this URL was already downloaded".
         """
+        suffix = Path(url).suffix.lower()
+        if suffix in _DOC_SUFFIXES:
+            return self._downloads_path / file_filename_for(url)
         return self._downloads_path / pdf_filename_for(url)
 
     @staticmethod
-    def _validate_response(r: Any, body_len: int) -> str:
+    def _validate_response(r: Any, body_len: int, url: str) -> str:
         """Return an error string (empty on success)."""
         if r.status_code != 200:
             return f"HTTP {r.status_code}"
@@ -152,8 +167,12 @@ class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
         if body_len > _MAX_SIZE_BYTES:
             return f"file exceeds {_MAX_SIZE_BYTES // (1024 * 1024)} MB limit"
         ct = r.headers.get("content-type", "")
-        if "pdf" not in ct.lower():
+        if not any(sub in ct.lower() for sub in ("pdf", *_DOC_CONTENT_TYPE_SUBSTRINGS)):
             logger.warning(
-                "download_pdf: content-type is {!r}, not a PDF label; verifying PDF magic bytes before saving", ct
+                "download: {url} (HTTP {status}) content-type is {ct!r}, not a recognized document label; "
+                "verifying magic bytes before saving",
+                url=url,
+                status=r.status_code,
+                ct=ct,
             )
         return ""

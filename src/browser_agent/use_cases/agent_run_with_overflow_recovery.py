@@ -20,6 +20,8 @@ from pydantic_ai import Agent
 from pydantic_ai.exceptions import UnexpectedModelBehavior, UserError as _UserError
 from pydantic_ai.usage import UsageLimitExceeded
 
+from browser_agent.agent_logging import estimate_output_letters, record_llm_estimate, record_llm_usage
+
 _FINALIZE_DIRECTIVE = (
     "\n\nIMPORTANT: your context is full. Emit your final structured result now without further tool calls. "
     "Return ONLY a valid JSON object — no XML tags, no markdown fences, no prose before or after. "
@@ -34,6 +36,7 @@ async def run_agent_with_recovery(
     deps: Any,
     usage_limits: Any,
     message_history: list[Any] | None = None,
+    agent_name: str = "agent",
 ) -> Any:
     """Run ``agent`` via ``iter()`` and retry on overflow with partial history.
 
@@ -44,6 +47,7 @@ async def run_agent_with_recovery(
     model emits its structured result without further tool calls.
     """
     agent_run = None
+    result = None
     try:
         async with agent.iter(
             prompt,
@@ -54,10 +58,20 @@ async def run_agent_with_recovery(
             agent_run = run
             async for _ in run:
                 pass
-        return run.result
+        result = run.result
     except (UnexpectedModelBehavior, UsageLimitExceeded):
         partial: list[Any] = list(agent_run.all_messages()) if agent_run else []
-        return await _retry(agent, prompt, deps, usage_limits, message_history, partial)
+        result = await _retry(agent, prompt, deps, usage_limits, message_history, partial)
+    record_llm_estimate(agent_name, len(prompt), estimate_output_letters(getattr(result, "output", None)))
+    usage = getattr(result, "usage", None)
+    if callable(usage):
+        real = usage()
+        record_llm_usage(
+            agent_name,
+            getattr(real, "input_tokens", 0) or 0,
+            getattr(real, "output_tokens", 0) or 0,
+        )
+    return result
 
 
 async def _retry(

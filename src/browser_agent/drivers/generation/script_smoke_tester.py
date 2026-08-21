@@ -223,15 +223,14 @@ def _analyze_records(db_path: Path) -> tuple[int, int, list[str], bool]:
     """Return (downloaded_rows, total_rows, violations, has_download_intent) from the scratch metadata table.
 
     Violations are deterministic correctness bugs, one human-readable line each:
-      - canonical_filename: a downloaded row's pdf_filename != the type-aware
-        expected basename (pdf_id_for(file_url)+".pdf" for PDFs, doc_<hash><ext>
-        for documents) derived from file_url
-      - failed_download: a row with file_url/pdf_url but download_status != "downloaded" or empty pdf_filename
-      - load_failed: a row with download_status == "load_failed" (metadata gate never rendered)
-    ``has_download_intent`` is true when any row carries a ``file_url``,
-    ``pdf_url``, ``pdf_filename``, or a non-trivial ``download_status`` —
-    the task attempts downloads; extract-only tasks never set these and
-    pass on ``record_count >= 1`` alone.
+      - canonical_filename: a downloaded row's core_pdf_filename != the type-aware
+        expected basename (pdf_id_for(core_file_url)+".pdf" for PDFs, doc_<hash><ext>
+        for documents) derived from core_file_url
+      - failed_download: a row with core_file_url but core_download_status != "downloaded"
+        or empty core_pdf_filename
+      - load_failed: a row with core_download_status == "load_failed" (metadata gate never rendered)
+    ``has_download_intent`` is true when any row carries a ``core_file_url``,
+    ``core_pdf_filename``, or a non-trivial ``core_download_status`` —
     """
     if not db_path.exists():
         return 0, 0, [], False
@@ -250,22 +249,21 @@ def _analyze_records(db_path: Path) -> tuple[int, int, list[str], bool]:
             data = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
             continue
-        fu = data.get("file_url")
-        pf = data.get("pdf_filename")
-        pu = data.get("pdf_url")
-        status = data.get("download_status")
-        if fu or pf or pu or (status and status != "no_files"):
+        fu = data.get("core_file_url")
+        pf = data.get("core_pdf_filename")
+        status = data.get("core_download_status")
+        if fu or pf or (status and status != "no_files"):
             has_download_intent = True
         if status == "downloaded" and pf:
             downloaded += 1
             if fu and pf:
                 expected = PdfUrlMatcher.expected_filenames_for(fu)[0]
                 if pf != expected:
-                    violations.append(f"canonical_filename: {pf!r} != {expected!r} (file_url={fu})")
+                    violations.append(f"canonical_filename: {pf!r} != {expected!r} (core_file_url={fu})")
         elif status == "load_failed":
-            violations.append(f"load_failed: source_page_url={data.get('source_page_url')!r}")
-        elif fu or pu:
-            violations.append(f"failed_download: status={status!r} pdf_filename={pf!r} (file_url={fu!r} pdf_url={pu!r})")
+            violations.append(f"load_failed: core_source_page_url={data.get('core_source_page_url')!r}")
+        elif fu:
+            violations.append(f"failed_download: status={status!r} core_pdf_filename={pf!r} (core_file_url={fu!r})")
     if len(rows) == 0:
         violations.append("zero_records: script ran but saved no metadata rows")
     return downloaded, len(rows), violations, has_download_intent

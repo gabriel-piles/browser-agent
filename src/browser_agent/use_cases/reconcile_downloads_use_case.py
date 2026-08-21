@@ -141,13 +141,13 @@ class ReconcileDownloadsUseCase:
     def _reconcile_row(self, row: tuple[str, str, str], disk_files: set[str]) -> ReconciledPdf:
         source_url, _slug, data_json = row
         data = parse_row_data(data_json)
-        download_status = data.get("download_status", "") or ""
-        file_url = data.get("file_url", "") or ""
+        download_status = data.get("core_download_status", "") or ""
+        file_url = data.get("core_file_url", "") or ""
         if not file_url:
             return ReconciledPdf(
                 source_url=source_url,
                 verdict="empty_pdf_url",
-                notes="row has no file_url",
+                notes="row has no core_file_url",
                 download_status=download_status,
             )
         return self._check_file_for_url(source_url, file_url, data, disk_files, download_status)
@@ -160,7 +160,7 @@ class ReconcileDownloadsUseCase:
         disk_files: set[str],
         download_status: str,
     ) -> ReconciledPdf:
-        db_filename = data.get("pdf_filename", "") or ""
+        db_filename = data.get("core_pdf_filename", "") or ""
         expected_norm, expected_orig = PdfUrlMatcher.expected_filenames_for(file_url)
         matched, mode = self._match_on_disk(expected_norm, expected_orig, disk_files)
         filename_mismatch = bool(db_filename) and db_filename != expected_norm
@@ -258,7 +258,7 @@ class ReconcileDownloadsUseCase:
     def _url_findings(self, rows: list[tuple[str, str, str]]) -> list[CorpusFinding]:
         urls: list[str] = []
         for _src, _slug, data_json in rows:
-            url = parse_row_data(data_json).get("file_url", "") or ""
+            url = parse_row_data(data_json).get("core_file_url", "") or ""
             if url:
                 urls.append(url)
         counts = Counter(urls)
@@ -268,7 +268,7 @@ class ReconcileDownloadsUseCase:
             out.append(
                 CorpusFinding(
                     kind="duplicate_pdf_url",
-                    detail=f"{len(dups)} file_url value(s) appear in more than one row.",
+                    detail=f"{len(dups)} core_file_url value(s) appear in more than one row.",
                     items=dups[:_MAX_FINDING_ITEMS],
                 )
             )

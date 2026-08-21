@@ -56,7 +56,7 @@ def _install_intercept() -> None:
 def configure_logging() -> None:
     """Idempotent loguru setup for the whole package."""
     logger.remove()
-    logger.configure(extra={"tool": ""})
+    logger.configure(extra={"tool": "", "agent": ""})
     logger.add(sys.stderr, format=_LOG_FORMAT, level=_log_level(), colorize=_use_color())
     _maybe_add_file_handler()
     _install_intercept()
@@ -67,7 +67,7 @@ _LOG_FORMAT = (
     "<green>{time:HH:mm:ss.SSS}</green> | "
     "<level>{level: <8}</level> | "
     "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> "
-    "<blue>{extra[tool]}</blue> - "
+    "<yellow>{extra[agent]:<14}</yellow> <blue>{extra[tool]}</blue> - "
     "<level>{message}</level>"
 )
 

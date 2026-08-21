@@ -99,7 +99,7 @@ def pdf_id_for(url):
     """``pdf_<sha1(canonical_url)[:12]>`` — the download helper's id stem.
 
     Use this at discovery time (before any download) so the DB
-    ``source_url`` key, the stored ``pdf_id``, and the on-disk filename
+    ``source_url`` key, the stored ``core_pdf_id``, and the on-disk filename
     stem all derive from the SAME canonical URL. NEVER inline
     ``hashlib.sha1(file_url.encode())`` — it skips percent-encoding
     normalization and can create a duplicate row for the same PDF.

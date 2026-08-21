@@ -110,7 +110,7 @@ class RowIssueClassifier:
         issues: list[tuple[str, str, list[str]]] = []
         for source_url, _task_slug, raw_data in records:
             record = self._parse_record(raw_data)
-            record.setdefault("pdf_filename", resolve_pdf_filename(record, source_url, self._downloads_dir))
+            record.setdefault("core_pdf_filename", resolve_pdf_filename(record, source_url, self._downloads_dir))
             action, row_issues = self.classify_one(
                 record, source_url, mapping, template, thesaurus_lookup_by_property, entities_by_key, registry_template
             )

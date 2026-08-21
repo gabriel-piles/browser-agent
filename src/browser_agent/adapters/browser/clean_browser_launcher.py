@@ -209,6 +209,114 @@ def terminate_chromium(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=5)
 
 
+def _chromium_pgid(entry: str, root: Path) -> tuple[int, int] | None:
+    """Return ``(pid, pgid)`` if `/proc/<entry>` is a Chromium under ``root``.
+
+    Matches on the process name containing ``chrom`` and a resolved
+    ``--user-data-dir`` value that is relative to ``root``, so a stale
+    instance holding a run's profile is caught but the operator's real
+    browser (under ``~/.config``) never is. Own process is skipped.
+    """
+    try:
+        pid = int(entry)
+    except ValueError:
+        return None
+    if pid == os.getpid():
+        return None
+    try:
+        args = Path("/proc", entry, "cmdline").read_bytes().split(b"\x00")
+    except OSError:
+        return None
+    if not any(b"chrom" in a for a in args):
+        return None
+    ud = next(
+        (a.split(b"=", 1)[1].decode("utf-8", errors="replace") for a in args if a.startswith(b"--user-data-dir=")),
+        None,
+    )
+    if ud is None or not Path(ud).resolve().is_relative_to(root):
+        return None
+    try:
+        return pid, os.getpgid(pid)
+    except OSError:
+        return None
+
+
+def _pgrep_pids_under(root: Path) -> list[tuple[int, int]]:
+    """Fallback for non-Linux hosts: find Chromium pids via ``pgrep``."""
+    try:
+        out = subprocess.run(
+            ["pgrep", "-f", f"user-data-dir={root}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    pids: list[tuple[int, int]] = []
+    for token in out.split():
+        try:
+            pid = int(token)
+        except ValueError:
+            continue
+        try:
+            pids.append((pid, os.getpgid(pid)))
+        except OSError:
+            continue
+    return pids
+
+
+def _chromium_pids_under(root: Path) -> list[tuple[int, int]]:
+    """Collect ``(pid, pgid)`` for every Chromium using a profile under ``root``."""
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return _pgrep_pids_under(root)
+    return [pgid for entry in entries if entry.isdigit() if (pgid := _chromium_pgid(entry, root)) is not None]
+
+
+def _group_alive(pgid: int) -> bool:
+    """Return True if the process group ``pgid`` still exists."""
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _term_then_kill(pgid: int) -> None:
+    """TERM the group, poll ~2s for exit, then KILL it."""
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return
+    for _ in range(20):
+        if not _group_alive(pgid):
+            return
+        time.sleep(0.1)
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def kill_chromium_under(root_dir: Path) -> int:
+    """Reap every live Chromium group whose profile dir is under ``root_dir``.
+
+    Returns the number of process groups terminated. Safe to call with
+    no matching browsers; persistent (non-temp) profile directories are
+    left intact.
+    """
+    root = Path(root_dir).resolve()
+    targets = _chromium_pids_under(root)
+    for _pid, pgid in targets:
+        _term_then_kill(pgid)
+    if targets:
+        logger.info("terminated {} Chromium group(s) under {}", len(targets), root)
+    return len(targets)
+
+
 async def wait_for_devtools_port(
     process: subprocess.Popen[bytes],
     port: int,

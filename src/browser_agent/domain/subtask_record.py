@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 SubtaskStatus = Literal[
     "pending",
     "building",
+    "lint_failed",
     "smoke_failed",
     "execution_failed",
     "verification_failed",

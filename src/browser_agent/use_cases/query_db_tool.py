@@ -23,8 +23,9 @@ _SQL_ERROR_PREFIX = "# query_db: SQL error"
 _SCHEMA_REMINDER = (
     "Schema: metadata(source_url TEXT PRIMARY KEY, task_slug TEXT, scraped_at TEXT, data TEXT); "
     "discovered_links(url TEXT PRIMARY KEY, filter_label TEXT, status TEXT, discovered_at TEXT). "
-    "`data` is a JSON blob whose keys include file_url, pdf_filename, "
-    "pdf_id, pdf_name, pdf_type, subcategory, year, state. "
+    "`data` is a JSON blob whose agent-instrumented keys include core_file_url, "
+    "core_pdf_filename, core_pdf_id, core_pdf_name, core_pdf_type; task-prompt keys "
+    "include subcategory, year, state. "
     "`discovered_links.status` is 'discovered' (not yet processed), 'processed', or 'sample' (validation seeds, never work items)."
 )
 _SELECT_RE = re.compile(r"^\s*SELECT\b", re.IGNORECASE)

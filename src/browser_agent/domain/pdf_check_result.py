@@ -14,7 +14,7 @@ class PdfCheckResult(BaseModel):
     url: str = Field(description="The PDF URL that was checked.")
     found_in_db: bool = Field(description="True if a matching row exists in metadata.db.")
     db_source_url: str = Field(default="", description="The source_url of the matching DB row.")
-    pdf_filename: str = Field(default="", description="The pdf_filename from the DB row data.")
+    pdf_filename: str = Field(default="", description="The core_pdf_filename from the DB row data.")
     file_exists: bool = Field(default=False, description="True if the file exists on disk.")
     file_size_bytes: int = Field(default=0, description="Size of the file in bytes (0 if missing).")
     is_valid_pdf: bool = Field(

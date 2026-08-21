@@ -17,7 +17,7 @@ from browser_agent.domain.sync_plan import SyncAction, SyncPlan, SyncPlanRow
 from browser_agent.domain.uwazi_mapping import UwaziMapping
 from browser_agent.domain.uwazi_template import UwaziTemplate
 from browser_agent.drivers.classification.existing_entities_fetcher import ExistingEntitiesFetcher
-from browser_agent.use_cases.metadata_db import normalize_record, parse_row_data, query_rows
+from browser_agent.use_cases.metadata_db import parse_row_data, query_rows
 from browser_agent.use_cases.metadata_value_transformer import (
     MetadataValueTransformer,
     build_thesaurus_parents,
@@ -40,7 +40,7 @@ def resolve_pdf_filename(record: dict, source_url: str, downloads_dir: Path | No
     Non-PDF documents (``.doc``/``.docx``/``.rtf``/…) return ``None`` —
     :func:`resolve_supporting_filename` owns them.
     """
-    raw = record.get("pdf_filename") or ""
+    raw = record.get("core_pdf_filename") or ""
     if file_ext_for(raw) != ".pdf" and file_ext_for(raw) != "":
         return None  # non-PDF document -> supporting path
     if raw and raw.strip() and not raw.startswith("no-pdf"):
@@ -49,7 +49,7 @@ def resolve_pdf_filename(record: dict, source_url: str, downloads_dir: Path | No
             candidate = downloads_dir / raw
         if candidate.exists():
             return str(candidate.resolve())
-    file_url = record.get("file_url") or ""
+    file_url = record.get("core_file_url") or ""
     if file_url and downloads_dir is not None:
         candidate = downloads_dir / pdf_filename_for(file_url)
         if candidate.exists():
@@ -59,7 +59,7 @@ def resolve_pdf_filename(record: dict, source_url: str, downloads_dir: Path | No
 
 def resolve_html_filename(record: dict, downloads_dir: Path | None) -> str | None:
     """Return the absolute local HTML path for one record, or ``None``."""
-    raw = record.get("html_filename") or ""
+    raw = record.get("core_html_filename") or ""
     if raw and raw.strip():
         candidate = Path(raw)
         if not candidate.is_absolute() and downloads_dir is not None:
@@ -72,12 +72,12 @@ def resolve_html_filename(record: dict, downloads_dir: Path | None) -> str | Non
 def resolve_supporting_filename(record: dict, raw_filename: str, downloads_dir: Path | None) -> str | None:
     """Return the absolute local supporting-file path for one record, or ``None``.
 
-    ``raw_filename`` is the original ``pdf_filename`` basename captured
+    ``raw_filename`` is the original ``core_pdf_filename`` basename captured
     before ``_build_plan_row`` mutates the record. Only non-PDF document
     basenames are resolved here; PDF (or unknown/extensionless) basenames
     belong to :func:`resolve_pdf_filename`.
     """
-    raw = raw_filename or record.get("pdf_filename") or ""
+    raw = raw_filename or record.get("core_pdf_filename") or ""
     if not raw or raw.startswith("no-pdf"):
         return None
     if file_ext_for(raw) in (".pdf", ""):
@@ -87,7 +87,7 @@ def resolve_supporting_filename(record: dict, raw_filename: str, downloads_dir: 
         candidate = downloads_dir / raw
     if candidate.exists():
         return str(candidate.resolve())
-    file_url = record.get("file_url") or ""
+    file_url = record.get("core_file_url") or ""
     if file_url and downloads_dir is not None:
         cand2 = downloads_dir / file_filename_for(file_url)
         if cand2.exists():
@@ -143,10 +143,10 @@ def _row_action(
     primary template the action is CREATE_REGISTRY_ONLY (recover the
     missing registry entity); otherwise CREATE (both).
 
-    A record whose data has no ``file_url`` is SKIP (``no_file_url``)
+    A record whose data has no ``core_file_url`` is SKIP (``no_file_url``)
     and is never uploaded.
     """
-    if not (record.get("file_url") or ""):
+    if not (record.get("core_file_url") or ""):
         return SyncAction.SKIP, "no_file_url"
     if not mapping.identity.key_property:
         return SyncAction.CREATE, None
@@ -268,9 +268,9 @@ def _build_plan_row(
     primary_shared_id_for_key=None,
 ) -> SyncPlanRow:
     """Transform one record into one :class:`SyncPlanRow`."""
-    raw_filename = record.get("pdf_filename") or ""
+    raw_filename = record.get("core_pdf_filename") or ""
     pdf_path = resolve_pdf_filename(record, source_url, downloads_dir)
-    record["pdf_filename"] = pdf_path
+    record["core_pdf_filename"] = pdf_path
     html_path = resolve_html_filename(record, downloads_dir)
     supporting_path = resolve_supporting_filename(record, raw_filename, downloads_dir)
     action, skip_reason = _row_action(
@@ -353,7 +353,7 @@ def _plan_rows(records, mapping, client, thesaurus_lookup_by_property, downloads
     relationship_title_to_id = _fetch_relationship_entity_mapping(client, mapping, template)
     return tuple(
         _build_plan_row(
-            normalize_record(parse_row_data(raw_data)),
+            parse_row_data(raw_data),
             source_url,
             mapping,
             entities_by_key,

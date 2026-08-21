@@ -22,7 +22,7 @@ from pathlib import Path
 from loguru import logger
 
 from browser_agent.adapters.emitted_normalize_launch import with_emitted_normalize_launch
-from browser_agent.adapters.emitted_normalize_extract_links import with_emitted_normalize_extract_links
+from browser_agent.adapters.emitted_normalize_extract_fields_module import with_emitted_normalize_extract_fields_module
 from browser_agent.domain.emit_result import EmitResult
 from browser_agent.domain.lint_finding import LintFinding
 from browser_agent.domain.generated_script import GeneratedScript
@@ -62,7 +62,7 @@ class ScriptEmitter:
         """Run the normalize-launch transform, logging if it matched."""
         code = script.python_code
         code, applied = self._apply(with_emitted_normalize_launch, code, "normalize_launch")
-        code, a2 = self._apply(with_emitted_normalize_extract_links, code, "normalize_extract_links")
+        code, a2 = self._apply(with_emitted_normalize_extract_fields_module, code, "normalize_extract_fields_module")
         applied += a2
         return code, applied
 

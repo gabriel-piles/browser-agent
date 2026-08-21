@@ -22,11 +22,15 @@ from browser_agent.drivers.generation.script_path_builder import ScriptPathBuild
 from browser_agent.drivers.generation.script_tools_copier import ScriptToolsCopier
 from browser_agent.drivers.generation.task_reader import TaskReader
 from browser_agent.drivers.flow.flow_paths import FlowPaths
+from browser_agent.drivers.flow.refresh_flow import RefreshFlow
 from browser_agent.drivers.flow.scrape_flow import ScrapeFlow
+from browser_agent.drivers.run_elapsed_heartbeat import RunElapsedHeartbeat
 from browser_agent.drivers.flow.subtask_pipeline import SubtaskPipeline
 from browser_agent.domain.run_config import RunConfig
+from browser_agent.agent_logging import log_llm_total_summary, reset_llm_estimates
 from browser_agent.logging_config import configure_logging
 from browser_agent.use_cases.agent_deps import AgentDeps
+from browser_agent.use_cases.concurrency_context_renderer import render_concurrency_context
 from browser_agent.use_cases.emitted_script_linter import EmittedScriptLinter
 from browser_agent.use_cases.final_verifier_use_case import FinalVerifierUseCase
 from browser_agent.use_cases.flow_state_store import FlowStateStore
@@ -47,14 +51,28 @@ class GenerateScriptDriver:
     def run(self, argv: list[str]) -> int:
         """Configure logging, run the async pipeline, return the process exit code."""
         configure_logging()
-        return asyncio.run(self._run_async(argv))
+        reset_llm_estimates()
+        try:
+            return asyncio.run(self._run_async(argv))
+        finally:
+            log_llm_total_summary()
 
     async def _run_async(self, argv: list[str]) -> int:
         run = RunsConfigLoader.load_active()
         run_path = RunsConfigLoader.load_active_path()
+        heartbeat = RunElapsedHeartbeat()
+        heartbeat.start()
+        # Reap Chromium windows left by a previously crashed ``step_0`` run
+        # (matching both ``profile`` and ``profile_builder`` dirs under the run
+        # path) so this run's planner and subtask sessions start clean instead
+        # of handing off to a stale instance holding the profile lock.
+        from browser_agent.adapters.browser.clean_browser_launcher import kill_chromium_under
+
+        kill_chromium_under(run_path)
         ScriptToolsCopier().copy(run_path)
 
         task = self._read_task(argv, run)
+        concurrency_directive = render_concurrency_context(run)
         logger.info(
             "flow driver starting task_tokens={n} run={run}",
             n=len(task) // 4,
@@ -67,7 +85,7 @@ class GenerateScriptDriver:
         path_builder = ScriptPathBuilder(run_path)
         emitter = ScriptEmitter(path_builder)
         # Registry/related-document runs (scraper_registry_template set) require a
-        # saved HTML file per downloaded document, not just a source_html snippet.
+        # saved HTML file per downloaded document, not just a core_source_html snippet.
         require_html_files = bool(run.scraper_registry_template)
         linter = EmittedScriptLinter(require_html_files=require_html_files)
         executor = SubtaskExecutor()
@@ -77,7 +95,7 @@ class GenerateScriptDriver:
             run_path=run_path,
             require_html_files=require_html_files,
         )
-        pipeline = SubtaskPipeline(flow_paths, emitter, linter, state_store, executor, verifier)
+        pipeline = SubtaskPipeline(flow_paths, emitter, linter, state_store, executor, verifier, concurrency_directive)
         orchestrator = OrchestratorUseCase()
         final_verifier = FinalVerifierUseCase(run_path)
 
@@ -110,6 +128,7 @@ class GenerateScriptDriver:
             )
             return TaskPlannerUseCase(deps)
 
+        refresh_flow = RefreshFlow(run_path, state_store, pipeline, orchestrator, final_verifier)
         flow = ScrapeFlow(
             run_path,
             flow_paths,
@@ -118,13 +137,45 @@ class GenerateScriptDriver:
             orchestrator,
             pipeline,
             final_verifier,
+            refresh_flow,
         )
+
+        def planner_factory():
+            from browser_agent.adapters.browser.zendriver_browser_session import (
+                ZendriverBrowserSession,
+            )
+            from browser_agent.adapters.execution.in_process_script_runner_adapter import (
+                InProcessScriptRunnerAdapter,
+            )
+            from browser_agent.adapters.execution.curl_cffi_pdf_downloader_adapter import (
+                CurlCffiPdfDownloaderAdapter,
+            )
+            from browser_agent.adapters.llm.opencode_zen_adapter import OpenCodeZenAdapter
+            from browser_agent.configuration import ZENDRIVER_HEADLESS
+
+            session = ZendriverBrowserSession(
+                headless=ZENDRIVER_HEADLESS,
+                user_data_dir=run_path / "profile",
+            )
+            deps = AgentDeps(
+                llm=OpenCodeZenAdapter(),
+                browser_session=session,
+                script_runner=InProcessScriptRunnerAdapter(
+                    browser_session=session,
+                    metadata_db_path=run_path / "metadata.db",
+                    task_slug=run.name,
+                ),
+                pdf_downloader=CurlCffiPdfDownloaderAdapter(),
+            )
+            return TaskPlannerUseCase(deps)
 
         try:
             return await flow.run(task)
         except Exception:
             logger.exception("flow driver failed")
             return 2
+        finally:
+            await heartbeat.stop()
 
     def _read_task(self, argv: list[str], run: RunConfig) -> str:
         return self._task_reader.read(argv, run)

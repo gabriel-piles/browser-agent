@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -35,6 +36,7 @@ from zendriver.core.connection import ProtocolException as _ProtocolException
 from browser_agent.adapters.browser.clean_browser_launcher import (
     connect_and_prepare,
     free_port,
+    kill_chromium_under,
     launch_chromium,
     reset_profile,
     stop_browser,
@@ -76,6 +78,7 @@ _EXTRACT_TAIL_ELEMENTS = 25
 
 _SELECT_MAX_OPTIONS = 60
 _NON_HTML_EXTENSIONS = (".js", ".css", ".json", ".xml", ".txt", ".svg")
+_CLOSE_STOP_TIMEOUT_S = 10.0
 
 
 class ZendriverBrowserSession(BrowserSessionPort):
@@ -89,6 +92,8 @@ class ZendriverBrowserSession(BrowserSessionPort):
         self._tracker: CdpPageTracker | None = None
         self._process: subprocess.Popen[bytes] | None = None
         self._port: int | None = None
+        self._owns_profile = False
+        self._profile_dir: Path | None = self._user_data_dir
         self._challenge_bypass = HumanChallengeBypass(
             config=BypassConfig(
                 max_wait_rounds=0,
@@ -118,6 +123,10 @@ class ZendriverBrowserSession(BrowserSessionPort):
 
             if not _prepared:
                 if self._user_data_dir is not None:
+                    # Reap any live Chromium still holding this profile dir
+                    # (left by a crashed previous session) so the fresh launch
+                    # opens its own debug port instead of handing off to it.
+                    kill_chromium_under(Path(self._user_data_dir))
                     # Fresh profile per launch: wipe accumulated locks/corrupt
                     # state and re-seed from the real Chromium profile. A
                     # reused profile — stale SingletonLock, a live prior
@@ -132,6 +141,8 @@ class ZendriverBrowserSession(BrowserSessionPort):
                     )
                 else:
                     user_data_dir = tempfile.mkdtemp(prefix="zd_profile_")
+                    self._owns_profile = True
+                    self._profile_dir = Path(user_data_dir)
                     logger.info("launching clean Chromium (headless={})", self._headless)
                 if NOPECHA_ENABLED:
                     extension_dir = NopechaExtension().ensure_ready()
@@ -176,15 +187,29 @@ class ZendriverBrowserSession(BrowserSessionPort):
 
     async def close(self) -> None:
         browser = self._browser
+        tracker = self._tracker
+        process = self._process
         self._browser = None
         self._tab = None
-        if self._tracker is not None:
-            self._tracker.detach()
         self._tracker = None
-        if browser is not None:
-            await stop_browser(browser, self._process)
         self._process = None
         self._port = None
+        if tracker is not None:
+            try:
+                tracker.detach()
+            except Exception:
+                logger.exception("failed to detach page tracker")
+        if browser is not None:
+            try:
+                await asyncio.wait_for(stop_browser(browser, process), timeout=_CLOSE_STOP_TIMEOUT_S)
+            except (Exception, asyncio.TimeoutError):
+                logger.warning("browser.stop() hung or failed; force-killing process group")
+                if process is not None:
+                    terminate_chromium(process)
+        elif process is not None:
+            terminate_chromium(process)
+        if self._owns_profile and self._profile_dir is not None:
+            shutil.rmtree(self._profile_dir, ignore_errors=True)
 
     async def perform(self, action: PageAction) -> PageSnapshot:
         if self._tab is None:

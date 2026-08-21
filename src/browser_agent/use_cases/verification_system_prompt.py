@@ -32,10 +32,10 @@ navigation paths the prompt never asked for.
 
 The **Deterministic Reconciler Inventory** (in your prompt) is ground
 truth for the DB-vs-disk diff. It already lists, for EVERY row in
-`metadata.db`: the expected on-disk filename (recomputed from `file_url`),
+`metadata.db`: the expected on-disk filename (recomputed from `core_file_url`),
 whether the file exists, and whether it is a valid PDF (magic + `%%EOF`).
 It also reports orphan files, `.part` leftovers, duplicate/empty
-`file_url` rows, and identical-size clusters. Do NOT re-derive this; cite
+`core_file_url` rows, and identical-size clusters. Do NOT re-derive this; cite
 it. The exhaustive inventory is done — your job is what code cannot do.
 
 ## How the scraper works (two-script architecture)
@@ -95,8 +95,9 @@ download.
 4. query_db(sql_query) — read-only SELECT against `metadata.db` to
    inventory coverage. Schema: metadata(source_url TEXT, task_slug TEXT,
    data TEXT); discovered_links(url TEXT PRIMARY KEY, filter_label TEXT,
-   status TEXT, discovered_at TEXT); `data` is JSON with keys file_url,
-   pdf_filename, pdf_id, pdf_name, pdf_type, subcategory, year, state.
+   status TEXT, discovered_at TEXT); `data` is JSON whose agent-instrumented
+   keys include core_file_url, core_pdf_filename, core_pdf_id, core_pdf_name,
+   core_pdf_type; task-prompt keys include subcategory, year, state.
    `discovered_links.status` is 'discovered', 'processed', or 'sample' (sample rows are validation seeds, never work items).
 5. run_read_script(python_code) — write+run read-only Python to
    cross-reference DB vs filesystem, parse a PDF's basic integrity,
@@ -109,7 +110,7 @@ download.
    path/filter/page that yields PDFs. Commit to this checklist.
 2. Read the reconciler inventory in your prompt. It already accounts
    for every DB row: which rows have no file, which files are corrupt
-   (no `%%EOF`), which are suspiciously small, which `file_url`s are
+   (no `%%EOF`), which are suspiciously small, which `core_file_url`s are
    duplicates or empty, which files are orphans, which `.part` files
    remain, and identical-size clusters. Cite these by verdict.
 3. Re-walk the site with `explore_page` following the prompt's
@@ -151,13 +152,13 @@ accumulated into `pdf_results` for you. Concentrate on the analysis only.
   verdict other than "present".
 - missing_coverage: one MissingCoverage per declared path that is not
   fully covered — navigation_path, expected_total (site-advertised
-  count, 0 if unknown), observed_total (distinct file_url rows for the
+  count, 0 if unknown), observed_total (distinct core_file_url rows for the
   path), expected (what the prompt says), actual (none / partial /
   corrupt + counts), reason (the logic bug), step_0_fix (concrete
   instruction to hand to the step 0 agent).
 - expected_pdf_total: the sum of site-advertised counts across paths
   (0 if none were harvestable).
-- observed_pdf_total: the count of distinct file_url rows in the DB
+- observed_pdf_total: the count of distinct core_file_url rows in the DB
   across all paths (from query_db COUNT).
 - coverage_complete: true when observed_pdf_total meets or exceeds
   expected_pdf_total.

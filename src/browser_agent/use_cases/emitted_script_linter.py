@@ -82,14 +82,14 @@ def _check_download_status(python_code: str) -> list[LintFinding]:
     out: list[LintFinding] = []
     for match in re.finditer(r"\bsave_record\s*\(", python_code):
         call_text = _call_args(python_code, match.end() - 1)
-        has_pdf = '"pdf_filename"' in call_text or "'pdf_filename'" in call_text
-        has_dl = '"download_status"' in call_text or "'download_status'" in call_text
+        has_pdf = '"core_pdf_filename"' in call_text or "'core_pdf_filename'" in call_text
+        has_dl = '"core_download_status"' in call_text or "'core_download_status'" in call_text
         if has_pdf and not has_dl:
             out.append(
                 LintFinding(
                     rule="14",
                     severity="error",
-                    message="save_record with pdf_filename must include download_status",
+                    message="save_record with core_pdf_filename must include core_download_status",
                     line=_line_of(python_code, match.start()),
                 )
             )
@@ -100,25 +100,25 @@ _HTML_CAPTURE_MSG = (
     "processing script downloads documents but never captures page HTML "
     "(rule 14). Either: (a) call result = await save_page_html(tab, out_dir, "
     "page_url) for the page where each PDF/doc was found and store "
-    "Path(result['saved_path']).name as 'html_filename' (and the page URL "
-    "as 'source_page_url') in EVERY save_record data dict that has a "
-    "pdf_filename — use this for per-document-page "
+    "Path(result['saved_path']).name as 'core_html_filename' (and the page URL "
+    "as 'core_source_page_url') in EVERY save_record data dict that has a "
+    "core_pdf_filename — use this for per-document-page "
     "tasks; or (b) for listing-page-walk tasks where metadata lives in table "
     "rows and whole-page HTML is the wrong granularity, call "
     "extract_rows(tab, row_selector, cell_specs, include_html=True) and "
-    "store its 'source_html' field (the row's outerHTML) in every save_record "
+    "store its 'core_source_html' field (the row's outerHTML) in every save_record "
     "data dict. On SPA pages pass ready_selector naming the late-bound "
-    "metadata element. Set 'html_filename': '' only when no HTML was captured "
+    "metadata element. Set 'core_html_filename': '' only when no HTML was captured "
     "for that row."
 )
 _HTML_CAPTURE_REQUIRES_FILE_MSG = (
     "this task requires a saved HTML file per downloaded document (registry/"
-    "related-document flow), so a bare 'source_html' row snippet is NOT "
+    "related-document flow), so a bare 'core_source_html' row snippet is NOT "
     "sufficient (rule 14). You MUST call result = await save_page_html(tab, "
     "out_dir, page_url) for the page/table where each PDF/doc was found and "
-    "store Path(result['saved_path']).name as 'html_filename' (and the page "
-    "URL as 'source_page_url') in EVERY save_record data dict that has a "
-    "pdf_filename. On SPA pages pass ready_selector naming the late-bound "
+    "store Path(result['saved_path']).name as 'core_html_filename' (and the page "
+    "URL as 'core_source_page_url') in EVERY save_record data dict that has a "
+    "core_pdf_filename. On SPA pages pass ready_selector naming the late-bound "
     "metadata element."
 )
 
@@ -126,14 +126,14 @@ _HTML_CAPTURE_REQUIRES_FILE_MSG = (
 def _check_html_capture(python_code: str, require_files: bool = False) -> list[LintFinding]:
     """Rule 14: a script that downloads documents must also capture page HTML.
 
-    Accepts either ``save_page_html`` + ``html_filename`` key (per-document-page
-    shape) or a ``source_html`` key (listing-page-walk shape, populated via
+    Accepts either ``save_page_html`` + ``core_html_filename`` key (per-document-page
+    shape) or a ``core_source_html`` key (listing-page-walk shape, populated via
     ``extract_rows(include_html=True)``).
 
     When ``require_files`` is True (registry/related-document flows need an
-    on-disk HTML file per document), the ``source_html`` row snippet alone
+    on-disk HTML file per document), the ``core_source_html`` row snippet alone
     does NOT satisfy the rule — the script must call ``save_page_html`` and
-    set ``html_filename``.
+    set ``core_html_filename``.
     """
     download = re.search(
         r"\b(?:download_pdf_browser|download_pdf_curl_cffi|download_file_browser|download_file_curl_cffi)\s*\(",
@@ -144,10 +144,10 @@ def _check_html_capture(python_code: str, require_files: bool = False) -> list[L
     if re.search(r"\bsave_record\s*\(", python_code) is None:
         return []
     has_html_call = re.search(r"\bsave_page_html\s*\(", python_code) is not None
-    has_html_key = re.search(r"['\"]html_filename['\"]", python_code) is not None
+    has_html_key = re.search(r"['\"]core_html_filename['\"]", python_code) is not None
     if has_html_call and has_html_key:
         return []
-    has_source_html_key = re.search(r"['\"]source_html['\"]", python_code) is not None
+    has_source_html_key = re.search(r"['\"]core_source_html['\"]", python_code) is not None
     if not require_files and has_source_html_key:
         return []
     message = _HTML_CAPTURE_REQUIRES_FILE_MSG if require_files else _HTML_CAPTURE_MSG
@@ -686,7 +686,7 @@ def _check_bare_paths(python_code: str) -> list[LintFinding]:
 
 
 _BARE_HOST_CONCAT_MSG = (
-    "never bare-concatenate a host onto an href (rule 13): build file_url "
+    "never bare-concatenate a host onto an href (rule 13): build core_file_url "
     'with urljoin(base, quote(href, safe="/%?=&")) so leading whitespace and '
     "unsafe chars are percent-encoded, not embedded as raw spaces"
 )
@@ -777,6 +777,29 @@ def _check_self_contained(python_code: str) -> list[LintFinding]:
     return out
 
 
+def _script_tools_import_submodules(node: ast.AST) -> list[str | None]:
+    """Submodule names under ``script_tools.`` for an import node (None = whole-package)."""
+    if isinstance(node, ast.ImportFrom):
+        if node.module == "script_tools":
+            return [None]
+        if node.module and node.module.startswith("script_tools."):
+            return [node.module.split(".", 1)[1]]
+        return []
+    if isinstance(node, ast.Import):
+        return [a.name.split(".", 1)[1] for a in node.names if "." in a.name and a.name.startswith("script_tools.")]
+    return []
+
+
+def _script_tools_bad_module_msg(submod: str, valid_modules: frozenset[str]) -> str:
+    """Explain that ``script_tools.<submod>`` is not a module but a function inside extract_fields."""
+    return (
+        f"script_tools.{submod} does not exist — extract_rows, extract_links, and "
+        f"extract_fields are all FUNCTIONS inside extract_fields.py, not modules. "
+        f"Valid modules: {', '.join(sorted(valid_modules))}. Import them from "
+        f"'from script_tools.extract_fields import extract_rows, extract_links'."
+    )
+
+
 def _check_script_tools_package_import(python_code: str) -> list[LintFinding]:
     """Flag ``from script_tools import X`` and non-existent ``script_tools.X`` modules."""
     out: list[LintFinding] = []
@@ -802,18 +825,15 @@ def _check_script_tools_package_import(python_code: str) -> list[LintFinding]:
         }
     )
     for node in ast.walk(tree):
-        if not isinstance(node, ast.ImportFrom):
-            continue
-        if node.module == "script_tools":
-            out.append(LintFinding(rule="5b", severity="error", message=_SCRIPT_TOOLS_PKG_MSG, line=node.lineno))
-        elif node.module and node.module.startswith("script_tools."):
-            submod = node.module.split(".", 1)[1]
-            if submod not in valid_modules:
+        for submod in _script_tools_import_submodules(node):
+            if submod is None:
+                out.append(LintFinding(rule="5b", severity="error", message=_SCRIPT_TOOLS_PKG_MSG, line=node.lineno))
+            elif submod not in valid_modules:
                 out.append(
                     LintFinding(
                         rule="5c",
                         severity="error",
-                        message=f"script_tools.{submod} does not exist (extract_links is a function in extract_fields, not a module). Valid modules: {', '.join(sorted(valid_modules))}. Use 'from script_tools.page_wait import prepare_page_wait' (module=page_wait), not 'from script_tools.prepare_page_wait import ...'.",
+                        message=_script_tools_bad_module_msg(submod, valid_modules),
                         line=node.lineno,
                     )
                 )
@@ -1389,7 +1409,7 @@ def _check_rename_download(python_code: str) -> list[LintFinding]:
                     message=(
                         "never rename a downloaded file — the download helper already derives "
                         "the canonical name; store Path(result['saved_path']).name verbatim as "
-                        "pdf_filename"
+                        "core_pdf_filename"
                     ),
                     line=_line_of(python_code, match.start()),
                 )
@@ -1398,19 +1418,19 @@ def _check_rename_download(python_code: str) -> list[LintFinding]:
 
 
 def _check_empty_file_url(python_code: str) -> list[LintFinding]:
-    """Rule 14: flag ``save_record`` rows whose data dict sets ``file_url`` to an empty string."""
+    """Rule 14: flag ``save_record`` rows whose data dict sets ``core_file_url`` to an empty string."""
     out: list[LintFinding] = []
     for match in re.finditer(r"\bsave_record\s*\(", python_code):
         call_text = _call_args(python_code, match.end() - 1)
-        if '"file_url": ""' in call_text or "'file_url': ''" in call_text:
+        if '"core_file_url": ""' in call_text or "'core_file_url': ''" in call_text:
             out.append(
                 LintFinding(
                     rule="14",
                     severity="error",
                     message=(
-                        "save_record with an empty file_url — a page with no download links must "
-                        "be SKIPPED (no row), not recorded with an empty file_url; load_failed rows "
-                        "set source_page_url and omit file_url instead"
+                        "save_record with an empty core_file_url — a page with no download links must "
+                        "be SKIPPED (no row), not recorded with an empty core_file_url; load_failed rows "
+                        "set core_source_page_url and omit core_file_url instead"
                     ),
                     line=_line_of(python_code, match.start()),
                 )

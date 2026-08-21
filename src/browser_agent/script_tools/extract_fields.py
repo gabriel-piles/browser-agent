@@ -124,7 +124,7 @@ async def extract_rows(tab, row_selector: str, cell_specs: list[dict], include_h
         "else if (s.source === 'href') rec[s.field] = (el.getAttribute('href') || '').trim();"
         "else rec[s.field] = (el.textContent || '').trim();"
         "}"
-        "if (includeHtml) rec['source_html'] = row.outerHTML;"
+        "if (includeHtml) rec['core_source_html'] = row.outerHTML;"
         "out.push(rec);"
         "}"
         "return JSON.stringify(out);"

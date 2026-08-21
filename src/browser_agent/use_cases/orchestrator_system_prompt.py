@@ -44,6 +44,29 @@ DECISION PRIORITY:
 - abort when the site is fundamentally unreachable or every subtask
   is failing with no viable path forward.
 
+REFRESH RUN — when the summary JSON has ``"kind": "refresh"``:
+The flow was re-run over an ALREADY-FINISHED run. Discovery scripts
+have already been re-executed (idempotent link walk).
+- ``failed_documents``: rows whose download failed or whose file is
+  missing from disk (transient server errors are the usual cause).
+- ``new_discovered_links``: document links that appeared on the site
+  since the last run — not yet processed (status='discovered').
+- Re-executing a script is cheap and safe: scripts automatically retry
+  failed downloads (load_failed_downloads) and process new links
+  (load_discovered_links); already-downloaded files are skipped.
+
+Actions for a refresh summary (choose one):
+  refresh — re-execute the EXISTING emitted scripts of the subtasks in
+      ``subtask_ids`` (no rebuild, no repair loop). Include every
+      subtask that owns failed_documents rows and/or consumes the new
+      links. For single-page plans (no discovery subtask), include the
+      processing subtask to pick up newly published documents.
+  accept_gap — the failures look permanent (404, withdrawn documents);
+      record which ones in reasoning and do not retry.
+  finish — nothing actionable (no failed documents, no new links).
+  abort — the site is fundamentally unreachable.
+Never choose accept_plan, replan, or repair for a refresh summary.
+
 YOUR TASK: read the summary, apply the circuit-breaker rules, and
 emit exactly one OrchestratorDecision.
 

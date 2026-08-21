@@ -4,129 +4,208 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from loguru import logger
 
 from browser_agent.domain.subtask_record import SubtaskRecord
 from browser_agent.domain.subtask_smoke_report import SubtaskSmokeReport
+from browser_agent.use_cases.script_repair_prompt import (
+    format_lint_repair,
+    format_execution_repair,
+    format_verification_repair,
+)
 
 _MAX_SUBTASK_ATTEMPTS = 3
 _MAX_LINT_REPAIRS_PER_ATTEMPT = 1
-_MAX_SMOKE_REPAIRS_PER_ATTEMPT = 1
-_MAX_VERIFY_REPAIRS_PER_ATTEMPT = 1
+_MAX_POST_EMIT_REPAIRS = 3
 _SMOKE_TIMEOUT_S = 60.0
 _DISCOVERY_RUN_TIMEOUT_S = 600.0
+
+
+def _resolve_existing_script(raw: str, run_path: Path) -> Path | None:
+    """Resolve a stored script_path (relative to the run) to an existing file."""
+    if not raw:
+        return None
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = run_path / candidate
+    if candidate.is_file():
+        return candidate
+    fallback = Path(raw)
+    return fallback if fallback.is_file() else None
+
+
+def _relativize(path: str, run_path: Path) -> str:
+    """Prefer a run-relative path; keep the raw value when outside the run."""
+    try:
+        return str(Path(path).relative_to(run_path))
+    except ValueError:
+        return str(Path(path))
 
 
 class SubtaskPipeline:
     """Build, lint, emit, smoke-test, execute, and verify one subtask."""
 
-    def __init__(self, flow_paths, emitter, linter, state_store, executor, verifier):
+    def __init__(self, flow_paths, emitter, linter, state_store, executor, verifier, concurrency_directive: str = ""):
         self._flow_paths = flow_paths
         self._emitter = emitter
         self._linter = linter
         self._state_store = state_store
         self._executor = executor
         self._verifier = verifier
+        self._concurrency_directive = concurrency_directive
         self._run_path = flow_paths._root
 
     async def run(self, subtask, state, context: str) -> SubtaskRecord:
-
         record = self._find_or_create_record(state, subtask.subtask_id, state.plan_counter)
         record.status = "building"
-
         profile_dir = self._run_path / "profile_builder"
-
+        last_feedback = ""
         for attempt in range(_MAX_SUBTASK_ATTEMPTS):
             record.attempts = attempt + 1
-            # ``ZendriverBrowserSession.start`` resets (wipes + re-seeds) the
-            # profile dir on every launch, so no upfront cleanup is needed.
             bsession, builder = await self._build_session(profile_dir, subtask.subtask_id)
-            result = await self._attempt(subtask, context, record, bsession, builder, attempt)
-            await bsession.close()
-
+            try:
+                result, last_feedback = await self._attempt(
+                    subtask, context, record, bsession, builder, attempt, prior_feedback=last_feedback
+                )
+            finally:
+                await bsession.close()
             if result == "succeeded":
                 record.status = "succeeded"
                 return record
             if result == "repair_noop":
                 record.status = "repair_noop"
                 return record
-
         record.status = record.status if record.status != "building" else "execution_failed"
         return record
 
-    async def _attempt(self, subtask, context, record, bsession, builder, attempt):
-        script = None
-        for _ in range(_MAX_LINT_REPAIRS_PER_ATTEMPT + 1):
-            script, record = await self._build_and_lint(subtask, context, record, builder)
-            if script is None:
-                continue
-            if record.status == "ok":
-                break
-        if script is None:
-            return record.status
+    async def reexecute(self, subtask, state) -> SubtaskRecord:
+        """Re-run the emitted script only — no build/lint/smoke/repair loop."""
+        record = self._find_or_create_record(state, subtask.subtask_id, state.plan_counter)
+        exec_report = await self._reexecute_script(subtask, record)
+        if exec_report is None:
+            return record
+        vreport = await self._verifier.verify(subtask, self._state_store)
+        record.status = "succeeded" if self._verifier.passed(vreport) else "verification_failed"
+        return record
+
+    async def _reexecute_script(self, subtask, record):
+        """Resolve and run the stored script once; persist the execution report."""
+        script_path = _resolve_existing_script(record.script_path, self._run_path)
+        if script_path is None:
+            logger.warning(
+                "subtask {id}: emitted script missing — cannot re-execute",
+                id=subtask.subtask_id,
+            )
+            record.status = "execution_failed"
+            return None
+        record.attempts += 1
+        exec_report = await self._run_subtask_script(subtask.subtask_id, script_path)
+        exec_report.script_path = _relativize(exec_report.script_path, self._run_path)
+        self._state_store.write_report(subtask.subtask_id, "execution_report", exec_report)
+        if exec_report.exit_code != 0:
+            record.status = "execution_failed"
+            return None
+        return exec_report
+
+    async def _attempt(
+        self, subtask, context, record, bsession, builder, attempt, prior_feedback: str = ""
+    ) -> tuple[str, str]:
+        if prior_feedback:
+            context = f"{prior_feedback}\n\n{context}"
+        last_feedback = ""
+        last_status = "verification_failed"
+
+        # 1) Generate, then repair lint with findings (replaces blind re-execute).
+        script, record = await self._generate_script(subtask, context, record, builder)
+        script, findings = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT)
+        if findings:
+            record.status = "lint_failed"
+            return record.status, format_lint_repair(findings)
 
         emit_result, record = self._emit(subtask, script, record, state=None)
         if record.status == "repair_noop":
-            return "repair_noop"
+            return "repair_noop", last_feedback
 
-        for _ in range(_MAX_SMOKE_REPAIRS_PER_ATTEMPT + 1):
+        # 2) Unified post-emit loop: smoke -> exec -> verify, each repairing with
+        #    its own findings and re-gating lint after every repair.
+        for _ in range(_MAX_POST_EMIT_REPAIRS + 1):
             smoke, record = await self._smoke(subtask, record, emit_result)
-            if smoke and smoke.smoke.success and not smoke.discovery_self_check_failures:
-                if smoke.self_check is None or smoke.self_check.success:
-                    break
-            if record.status == "repair_noop":
-                return "repair_noop"
-            if smoke and not smoke.smoke.success:
-                script = await builder.repair(self._format_smoke_repair(subtask.kind, smoke))
+            smoke_phase_failed = (
+                (smoke and not smoke.smoke.success)
+                or (smoke and smoke.discovery_self_check_failures)
+                or (subtask.kind == "processing" and smoke and smoke.self_check and not smoke.self_check.success)
+            )
+            if smoke_phase_failed:
+                feedback = self._format_smoke_repair(subtask.kind, smoke)
+                last_feedback, last_status = feedback, "verification_failed"
+                script = await builder.repair(feedback)
+                script, _ = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT)
                 emit_result, record = self._emit(subtask, script, record, state=None)
                 if record.status == "repair_noop":
-                    return "repair_noop"
-            else:
-                break
+                    return "repair_noop", last_feedback
+                continue
 
-        exec_report = await self._executor.run(subtask.subtask_id, emit_result.script_path)
-        try:
-            exec_report.script_path = str(Path(exec_report.script_path).relative_to(self._run_path))
-        except ValueError:
-            exec_report.script_path = str(Path(exec_report.script_path))
-        self._state_store.write_report(subtask.subtask_id, "execution_report", exec_report)
-        if exec_report.exit_code != 0:
-            from browser_agent.use_cases.script_repair_prompt import format_execution_repair
-
-            record.status = "execution_failed"
-            context = format_execution_repair(exec_report.output_tail)
-            return record.status
-
-        for _ in range(_MAX_VERIFY_REPAIRS_PER_ATTEMPT + 1):
-            vreport = await self._verifier.verify(subtask, self._state_store)
-            if self._verifier.passed(vreport):
-                return "succeeded"
-            if _ >= _MAX_VERIFY_REPAIRS_PER_ATTEMPT:
-                record.status = "verification_failed"
-                return record.status
-            from browser_agent.use_cases.script_repair_prompt import format_verification_repair
-
-            script = await builder.repair(format_verification_repair(vreport))
-            emit_result, record = self._emit(subtask, script, record, state=None)
-            if record.status == "repair_noop":
-                return "repair_noop"
-            smoke, record = await self._smoke(subtask, record, emit_result)
-            exec_report = await self._executor.run(subtask.subtask_id, emit_result.script_path)
+            exec_report = await self._run_subtask_script(subtask.subtask_id, emit_result.script_path)
             try:
                 exec_report.script_path = str(Path(exec_report.script_path).relative_to(self._run_path))
             except ValueError:
                 exec_report.script_path = str(Path(exec_report.script_path))
+            self._state_store.write_report(subtask.subtask_id, "execution_report", exec_report)
+            if exec_report.exit_code != 0:
+                feedback = format_execution_repair(exec_report.output_tail)
+                last_feedback, last_status = feedback, "execution_failed"
+                script = await builder.repair(feedback)
+                script, _ = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT)
+                emit_result, record = self._emit(subtask, script, record, state=None)
+                if record.status == "repair_noop":
+                    return "repair_noop", last_feedback
+                continue
 
-        record.status = "verification_failed"
-        return record.status
+            vreport = await self._verifier.verify(subtask, self._state_store)
+            if self._verifier.passed(vreport):
+                return "succeeded", ""
+            feedback = format_verification_repair(vreport)
+            last_feedback, last_status = feedback, "verification_failed"
+            script = await builder.repair(feedback)
+            script, _ = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT)
+            emit_result, record = self._emit(subtask, script, record, state=None)
+            if record.status == "repair_noop":
+                return "repair_noop", last_feedback
+            # loop continues -> re-smoke with the repaired script
 
-    async def _build_and_lint(self, subtask, context, record, builder):
+        record.status = last_status
+        return record.status, last_feedback
 
+    async def _run_subtask_script(self, subtask_id, script_path):
+        """Run the emitted script, then reap any Chromium it left behind.
+
+        The script's Chromium (``run_path/profile``) runs in its own
+        process group, so the executor's group kill never touches it; a
+        crashed or timed-out script would otherwise orphan the window.
+        Reaping after the subprocess exits is safe: only that script's
+        browser can be using the run profile at this point.
+        """
+        from browser_agent.adapters.browser.clean_browser_launcher import kill_chromium_under
+
+        try:
+            return await self._executor.run(subtask_id, script_path)
+        finally:
+            kill_chromium_under(self._run_path / "profile")
+
+    async def _generate_script(self, subtask, context, record, builder):
+        if subtask.kind == "processing" and self._concurrency_directive:
+            context = f"{self._concurrency_directive}\n\n{context}"
         script = await builder.execute(subtask, context)
-        findings = [f for f in self._linter.lint(script.python_code, kind=subtask.kind) if f.severity == "error"]
-        if findings:
-            return None, record
-        record.status = "ok"
         return script, record
+
+    async def _lint_repair_loop(self, subtask, script, builder, max_repairs):
+        for _ in range(max_repairs):
+            findings = [f for f in self._linter.lint(script.python_code, kind=subtask.kind) if f.severity == "error"]
+            if not findings:
+                return script, []
+            script = await builder.repair(format_lint_repair(findings))
+        findings = [f for f in self._linter.lint(script.python_code, kind=subtask.kind) if f.severity == "error"]
+        return script, findings
 
     def _emit(self, subtask, script, record, state):
         emit_result = self._emitter.emit(

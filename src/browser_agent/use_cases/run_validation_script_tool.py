@@ -26,12 +26,16 @@ from browser_agent.agent_logging import traced_tool
 from browser_agent.domain.script_execution_result import ScriptExecutionResult
 from browser_agent.ports.script_runner_port import ScriptRunnerPort
 from browser_agent.use_cases.agent_deps import AgentDeps
-from browser_agent.use_cases.zendriver_error_patterns import ZD_RUNTIME_ERROR_PATTERNS
+from browser_agent.use_cases.zendriver_error_patterns import SCRIPT_TOOLS_MODULES, ZD_RUNTIME_ERROR_PATTERNS
 from browser_agent.use_cases.script_precheck import precheck
 
 VALIDATION_TIMEOUT_S = 90.0
 _ERROR_HEAD_CHARS = 2000
 _TIMEOUT_NOTICE_RE = re.compile(r"\[TIMEOUT[^\]]*\]")
+
+# Consecutive pure-timeout streak (module state, like the LLM ledger). First
+# pure timeout stays uncharged; each subsequent one is charged as FAILED.
+_CONSECUTIVE_PURE_TIMEOUTS = 0
 
 # Environmental warning-noise lines that must never become the operator-log
 # tail. Python emits these around LLM-authored code (only visible when
@@ -115,9 +119,9 @@ _STATIC_CHECK_PATTERNS: list[tuple[re.Pattern[str], str]] = [
         re.compile(
             r"(?s)^(?=.*\b(?:download_pdf_browser|download_pdf_curl_cffi|download_file_browser|download_file_curl_cffi)\s*\()"
             r"(?=.*\bsave_record\s*\()"
-            r"(?!.*['\"]html_filename['\"])"
+            r"(?!.*['\"]core_html_filename['\"])"
         ),
-        "save_record(...) is missing the 'html_filename' key (rule 13/14). "
+        "save_record(...) is missing the 'core_html_filename' key (rule 13/14). "
         "When the task downloads PDFs you MUST also save the page HTML and link it: "
         "call result = await save_page_html(tab, out_dir, page_url) (add "
         'ready_selector="<metadata element CSS>" on SPA pages where metadata '
@@ -128,8 +132,8 @@ _STATIC_CHECK_PATTERNS: list[tuple[re.Pattern[str], str]] = [
         "page (e.g. .document__credits-item matches the STATIC #original-text "
         "block on vLex — name an element that only exists after the binding "
         'pass, like metadata-item or ".document__credits metadata-item"), then pass '
-        "\"html_filename\": Path(result['saved_path']).name in EVERY save_record "
-        "data dict that has a pdf_filename. Omit the key only when no HTML was "
+        "\"core_html_filename\": Path(result['saved_path']).name in EVERY save_record "
+        "data dict that has a core_pdf_filename. Omit the key only when no HTML was "
         "captured for that row.",
     ),
     (
@@ -162,7 +166,19 @@ _STATIC_CHECK_PATTERNS: list[tuple[re.Pattern[str], str]] = [
         "wait_for_anchors RAISES TimeoutError on zero matches; it never returns 0. "
         "Wrap the gate in `try: ... except TimeoutError:` and run the modal-open "
         "fallback / metadata-gate retry (rule 14b) in the except block. Record "
-        "download_status='load_failed' only after the retries fail.",
+        "core_download_status='load_failed' only after the retries fail.",
+    ),
+    (
+        re.compile(
+            r"\b(?:from|import)\s+script_tools\.(?!"
+            + "|".join(re.escape(m) for m in SCRIPT_TOOLS_MODULES)
+            + r"\b)[A-Za-z_]\w*"
+        ),
+        "That script_tools module does NOT exist. The ONLY available script_tools modules are: "
+        + ", ".join(f"script_tools.{m}" for m in SCRIPT_TOOLS_MODULES)
+        + " — no other script_tools modules exist. Note: extract_rows, extract_links, and "
+        "extract_fields are all FUNCTIONS inside script_tools.extract_fields; import with: "
+        "from script_tools.extract_fields import extract_fields, extract_links, extract_rows.",
     ),
 ]
 
@@ -234,15 +250,24 @@ async def run_validation_script(ctx: RunContext[AgentDeps], python_code: str) ->
     runner: ScriptRunnerPort = deps.script_runner
     async with traced_tool("run_validation_script"):
         result: ScriptExecutionResult = await runner.run(python_code, timeout=VALIDATION_TIMEOUT_S)
+    global _CONSECUTIVE_PURE_TIMEOUTS
     if _is_pure_timeout(result):
-        # A timeout with no output is environmental (slow target site), not a
-        # strategy error — so it is NOT charged. Roll the counter back before
-        # logging so the logged run number matches the agent-facing
-        # "attempts remaining" bookkeeping.
+        _CONSECUTIVE_PURE_TIMEOUTS += 1
+        if _CONSECUTIVE_PURE_TIMEOUTS > 1:
+            # Repeated identical full-run timeout: charge it so the agent
+            # cannot burn minutes re-running the same script for free.
+            _log_validation_result(result, run_number, charged=True)
+            return _timeout_charged(result, deps, _CONSECUTIVE_PURE_TIMEOUTS)
+        # First pure timeout is environmental (slow target site), not a
+        # strategy error — NOT charged. Roll the counter back before logging
+        # so the logged run number matches the agent-facing bookkeeping.
         deps.validation_attempts -= 1
         _log_validation_result(result, run_number, charged=False)
         return _timeout_no_charge(result, deps.validation_attempts, deps.validation_limit)
+    _CONSECUTIVE_PURE_TIMEOUTS = 0
     _log_validation_result(result, run_number, charged=True)
+    if result.success and _reports_zero_variants(result.output):
+        return _zero_variants_failed(deps)
     if not result.success:
         _log_zendriver_errors_in_output(result.output, run_number)
     return _format_result(result, deps.validation_attempts, deps.validation_limit)
@@ -309,6 +334,43 @@ def _timeout_no_charge(result: ScriptExecutionResult, attempt: int, limit: int) 
         "simplify the script (fewer navigations, skip PDF downloads)."
     )
     return f"{header}\n\n{result.output}\n\n{note}"
+
+
+def _timeout_charged(result: ScriptExecutionResult, deps: AgentDeps, repeat: int) -> str:
+    """Format a repeated pure timeout that IS charged as a failed attempt."""
+    header = (
+        f"# Validation attempt {deps.validation_attempts}/{deps.validation_limit}: FAILED (exit_code={result.exit_code})"
+    )
+    note = (
+        f"[TIMEOUT after {VALIDATION_TIMEOUT_S:.0f}s — validation script cancelled; "
+        f"repeated full-run timeout ({repeat}). Split validation into a smaller dry-run "
+        "(limit rows/iterations) before running the full script.]"
+    )
+    return f"{header}\n\n{note}"
+
+
+_ZERO_VARIANT_MARKERS: tuple[str, ...] = ("no variants to process", "0 variants", "0 records saved")
+
+
+def _reports_zero_variants(output: str) -> bool:
+    """True when a nominally successful run processed zero variants."""
+    return any(marker in output for marker in _ZERO_VARIANT_MARKERS)
+
+
+def _zero_variants_failed(deps: AgentDeps) -> str:
+    """Format a false pass: success marker on stdout but nothing extracted."""
+    remaining = deps.validation_limit - deps.validation_attempts
+    footer = (
+        f"\n# You have {remaining} validation attempt(s) remaining."
+        if remaining > 0
+        else "\n# This was your LAST validation attempt. Emit the final script now."
+    )
+    header = f"# Validation attempt {deps.validation_attempts}/{deps.validation_limit}: FAILED"
+    body = (
+        "Validation passed but processed 0 variants — extraction produced nothing; "
+        "verify selectors and pagination before emitting."
+    )
+    return f"{header}\n\n{body}{footer}"
 
 
 def _log_validation_result(result: ScriptExecutionResult, run_number: int, charged: bool) -> None:

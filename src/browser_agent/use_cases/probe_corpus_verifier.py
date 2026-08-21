@@ -21,15 +21,11 @@ def _row_document_urls(data_json: str) -> list[str]:
     """Return the download URLs recorded in a row's data blob (deduped).
 
     A row's ``source_url`` PK is often a synthesized page/ref/lang key;
-    the real document URL lives in ``data.file_url`` (legacy: ``pdf_url``).
+    the real document URL lives in ``data.core_file_url``.
     """
     data = parse_row_data(data_json)
-    urls: list[str] = []
-    for key in ("file_url", "pdf_url"):
-        url = data.get(key, "") or ""
-        if url and url not in urls:
-            urls.append(url)
-    return urls
+    url = data.get("core_file_url", "") or ""
+    return [url] if url else []
 
 
 class ProbeCorpusVerifier:
@@ -64,9 +60,9 @@ class ProbeCorpusVerifier:
 
         Satisfaction is any of: an exact URL match on the row's
         ``source_url``, an exact match on a document URL stored in the
-        row's ``data`` blob (``file_url`` / legacy ``pdf_url``), or a
+        row's ``data`` blob (``core_file_url``), or a
         prefix match against the row ``source_url`` (a listing page).
-        Only the row PK is prefix-matched — never ``file_url`` values.
+        Only the row PK is prefix-matched — never ``core_file_url`` values.
         """
         if PdfUrlMatcher.match(source_url, row_source_url).matched:
             return True
@@ -79,7 +75,7 @@ class ProbeCorpusVerifier:
 
         A candidate counts as captured when it matches the row's
         ``source_url`` OR the document URL stored in its ``data`` blob
-        (``file_url`` / legacy ``pdf_url``) — the same URL the reconciler
+        (``core_file_url``) — the same URL the reconciler
         verifies against disk — or is a listing-page prefix of the row PK.
         """
         for row_source, _slug, data_json in rows:

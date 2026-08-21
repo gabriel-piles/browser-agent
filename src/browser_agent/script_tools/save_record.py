@@ -73,7 +73,9 @@ def save_record(source_url: str, data: dict) -> None:
     Upserts by source_url: re-running the scraper updates existing
     records instead of creating duplicates. The table schema is fixed
     so downstream scripts can query it without knowing which scraper
-    produced the data.
+    produced the data. Keys prefixed ``core_`` are agent-instrumented
+    (download discipline, HTML capture); all other keys come from the
+    task prompt's extraction spec.
 
     When downloading multiple files per page (PDFs, images), call this
     once per FILE with a content-stable source_url derived from the
@@ -91,31 +93,31 @@ def save_record(source_url: str, data: dict) -> None:
     filename is derived by the download helper from the file's download
     URL (``<pdf_id_for(url)>.pdf``); read it from the helper's result
     dict (``result["saved_path"]``) and store it in ``data`` as
-    ``pdf_id`` / ``pdf_filename``. Keep the human label and type in
-    ``pdf_name`` / ``pdf_type``. The path is a pure function of the
-    canonical URL so the download helper's existence check means
-    "already downloaded this URL".
+    ``core_pdf_id`` / ``core_pdf_filename``. Keep the human label and
+    type in ``core_pdf_name`` / ``core_pdf_type``. The path is a pure
+    function of the canonical URL so the download helper's existence
+    check means "already downloaded this URL".
 
     Download status — call ``save_record`` for EVERY discovered PDF,
     success OR failure, so a failed download leaves a row that a
     re-run can retry (the URL would otherwise be lost). On success set
-    ``download_status="downloaded"`` and ``pdf_filename`` to the
-    on-disk name. On failure set ``download_status="failed"``,
-    ``pdf_filename=""`` (empty string, not omitted, so downstream code
-    can distinguish "discovered but not downloaded" from "never
-    discovered"), and ``download_error`` to the exception message. The
-    retry-queue query (rule 8a) selects rows where ``download_status``
-    is ``"failed"`` OR ``pdf_filename`` is empty; existing rows from
-    prior runs that predate this key are treated as already-downloaded
-    and skipped (they have a non-empty ``pdf_filename`` and no
-    ``download_status``). For a page whose metadata rendered but that
-    has no downloadable files of its own (rule 14b), save ONE
-    metadata-only row keyed by the page URL with
-    ``download_status="no_files"`` and ``pdf_filename=""`` — the retry
-    queue skips ``no_files`` rows.
+    ``core_download_status="downloaded"`` and ``core_pdf_filename`` to
+    the on-disk name. On failure set ``core_download_status="failed"``,
+    ``core_pdf_filename=""`` (empty string, not omitted, so downstream
+    code can distinguish "discovered but not downloaded" from "never
+    discovered"), and ``core_download_error`` to the exception message.
+    The retry-queue query (rule 8a) selects rows where
+    ``core_download_status`` is ``"failed"`` OR ``core_pdf_filename``
+    is empty; rows lacking ``core_pdf_filename`` (e.g. legacy runs from
+    before the ``core_`` prefix) are treated as not-downloaded and
+    retried. For a page whose metadata rendered but that has no
+    downloadable files of its own (rule 14b), save ONE metadata-only
+    row keyed by the page URL with ``core_download_status="no_files"``
+    and ``core_pdf_filename=""`` — the retry queue skips ``no_files``
+    rows.
 
-    ``pdf_filename`` holds the downloaded file's on-disk basename for
-    EVERY downloaded file — PDF or non-PDF document (``.doc``/``.docx``/
+    ``core_pdf_filename`` holds the downloaded file's on-disk basename
+    for EVERY downloaded file — PDF or non-PDF document (``.doc``/``.docx``/
     ``.rtf``/…); there is no separate supporting role. Never set
     ``download_role`` or ``supporting_filename``; the download helper
     derives the basename (``Path(result["saved_path"]).name``) — store it
@@ -124,24 +126,24 @@ def save_record(source_url: str, data: dict) -> None:
 
     When the task also captures the source HTML of the page where each
     PDF was found (supporting file), store the HTML helper's basename
-    in ``data`` as ``html_filename`` (read it from the
+    in ``data`` as ``core_html_filename`` (read it from the
     ``save_page_html`` result dict's ``saved_path``). Downstream
-    upload code reads ``html_filename`` to attach the HTML as a
+    upload code reads ``core_html_filename`` to attach the HTML as a
     supporting attachment on the same Uwazi entity. Omit the key
     (or set it to ``None``) when no HTML was captured for a row.
 
     Store the URL of the page whose HTML was saved as
-    ``source_page_url`` in the same ``data`` dict (the ``source_url``
-    passed to ``save_page_html``), so downstream Uwazi mapping can
-    place it on a ``link``-type property. This is the SOURCE PAGE URL,
-    never the file download URL (``file_url``). Omit when no HTML was
-    captured.
+    ``core_source_page_url`` in the same ``data`` dict (the
+    ``source_url`` passed to ``save_page_html``), so downstream Uwazi
+    mapping can place it on a ``link``-type property. This is the
+    SOURCE PAGE URL, never the file download URL (``core_file_url``).
+    Omit when no HTML was captured.
     """
     source_url = _canonical_url(source_url)
     if isinstance(data, dict):
-        _pu = data.get("file_url")
+        _pu = data.get("core_file_url")
         if isinstance(_pu, str):
-            data = {**data, "file_url": _canonical_url(_pu)}
+            data = {**data, "core_file_url": _canonical_url(_pu)}
     db_path = _resolve_db_path()
     task_slug = _resolve_task_slug()
     conn = sqlite3.connect(db_path, timeout=5.0)
@@ -162,11 +164,12 @@ def load_failed_downloads() -> list[tuple[str, dict]]:
 
     Ensures the schema exists FIRST so a fresh run returns ``[]`` instead
     of raising ``OperationalError: no such table: metadata``. The filter
-    matches the rule-8a retry semantics: ``download_status == "failed"``
-    OR ``not pdf_filename``. Rows predating the keys with a non-empty
-    ``pdf_filename`` are skipped (treated as already downloaded). Rows
-    with ``download_status == "no_files"`` (metadata-only pages, rule
-    14b) are excluded — there is nothing to retry.
+    matches the rule-8a retry semantics: ``core_download_status ==
+    "failed"`` OR ``not core_pdf_filename``. Rows lacking
+    ``core_pdf_filename`` (legacy pre-``core_`` runs) are treated as
+    not-downloaded. Rows with ``core_download_status == "no_files"``
+    (metadata-only pages, rule 14b) are excluded — there is nothing to
+    retry.
     """
     db_path = _resolve_db_path()
     conn = sqlite3.connect(db_path, timeout=5.0)
@@ -179,8 +182,8 @@ def load_failed_downloads() -> list[tuple[str, dict]]:
     pending = []
     for source_url, raw in rows:
         data = json.loads(raw)
-        if data.get("download_status") == "no_files":
+        if data.get("core_download_status") == "no_files":
             continue
-        if data.get("download_status") == "failed" or not data.get("pdf_filename"):
+        if data.get("core_download_status") == "failed" or not data.get("core_pdf_filename"):
             pending.append((source_url, data))
     return pending

@@ -75,7 +75,7 @@ class VerifyDownloadsUseCase:
         return report.model_copy(update={"pdf_results": merged})
 
     async def _run_agent(self, agent: Agent, prompt: str) -> Any:
-        agent_logger.info(
+        agent_logger.bind(agent="verifier").info(
             "START  prompt_tokens={n} prompt_preview={preview}",
             n=len(prompt) // 4,
             preview=_truncate(prompt, 200),
@@ -92,7 +92,7 @@ class VerifyDownloadsUseCase:
                 ),
             )
         finally:
-            agent_logger.info(
+            agent_logger.bind(agent="verifier").info(
                 "END    elapsed={elapsed:.1f}s",
                 elapsed=time.monotonic() - started,
             )
@@ -129,14 +129,19 @@ _AGENT_RUN_RETRY_DELAY_S = 5.0
 _BROWSER_RESTARTS = 1
 
 
-async def _run_with_retry(agent: Agent, prompt: str, **kwargs: Any) -> Any:
-    """Run the agent, retrying transient model errors up to twice.
+async def _run_with_retry(
+    agent: Agent,
+    prompt: str,
+    agent_name: str = "verifier",
+    **kwargs: Any,
+) -> Any:
+    """Run the agent, retrying transient errors up to twice.
 
     Context overflow is handled inside
     :func:`run_agent_with_recovery`, which preserves partial history
-    and retries once with a finalize directive; a second overflow
+    and rescues once with a finalize directive; a second overflow
     propagates. Lost CDP connections recycle the browser session once
-    and rerun. Transient errors keep the existing retry-with-delay
+    and rerun. Transient errors keep the usual retry-with-delay
     behavior.
     """
     last_exc: Exception | None = None
@@ -149,6 +154,7 @@ async def _run_with_retry(agent: Agent, prompt: str, **kwargs: Any) -> Any:
                 deps=kwargs.get("deps"),
                 usage_limits=kwargs.get("usage_limits"),
                 message_history=kwargs.get("message_history"),
+                agent_name=agent_name,
             )
         except _BrowserConnectionClosed as exc:
             last_exc = exc

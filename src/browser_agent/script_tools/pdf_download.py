@@ -277,10 +277,10 @@ async def download_pdf_curl_cffi(url, save_path, tab=None):
     file.
 
     Returns a dict with ``saved_path`` (the absolute path written)
-    so the caller can store the exact ``pdf_filename`` in the DB:
+    so the caller can store the exact ``core_pdf_filename`` in the DB:
 
         result = await download_pdf_curl_cffi(file_url, out_dir, tab)
-        save_record(..., {"pdf_filename": Path(result["saved_path"]).name, ...})
+        save_record(..., {"core_pdf_filename": Path(result["saved_path"]).name, ...})
 
     Retries transient failures (network error, HTTP >= 400, empty
     body) up to ``_PDF_DOWNLOAD_RETRIES`` times with linear backoff
@@ -541,10 +541,10 @@ async def download_pdf_browser(tab, url, save_path):
     (temp + rename).
 
     Returns a dict with ``saved_path`` (the absolute path written)
-    so the caller can store the exact ``pdf_filename`` in the DB:
+    so the caller can store the exact ``core_pdf_filename`` in the DB:
 
         result = await download_pdf_browser(tab, file_url, out_dir)
-        save_record(..., {"pdf_filename": Path(result["saved_path"]).name, ...})
+        save_record(..., {"core_pdf_filename": Path(result["saved_path"]).name, ...})
 
     Raises ``RuntimeError`` if all three strategies fail.
 

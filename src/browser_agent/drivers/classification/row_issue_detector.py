@@ -81,9 +81,9 @@ class RowIssueDetector:
         """Return the PDF issue for ``record`` when ``upload_pdf`` is true, else ``None``."""
         if not mapping.upload_pdf:
             return None
-        if record.get("pdf_filename"):
+        if record.get("core_pdf_filename"):
             return None
-        return "upload_pdf is true but the source row has no pdf_filename"
+        return "upload_pdf is true but the source row has no core_pdf_filename"
 
     def _row_title(self, record: dict, mapping: UwaziMapping) -> str:
         """Return the entity title for one record, falling back to the empty string."""

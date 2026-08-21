@@ -39,7 +39,10 @@ For processing scripts:
 
 NEVER write ``from script_tools import X`` — ``script_tools`` is a package
 of modules, not an ``__init__`` that re-exports names. Always import from
-the submodule.
+the submodule. extract_rows, extract_links, and extract_fields are all
+FUNCTIONS inside script_tools.extract_fields — there is no
+script_tools.extract_rows or script_tools.extract_links module; import
+them all from script_tools.extract_fields.
 
 ================================================================
 DISCOVERY SCRIPT RULES (when kind="discovery")
@@ -610,9 +613,9 @@ does inline extraction only (no ``load_discovered_links()`` call).
    your own backoff/block logic; call them inside try/except. NEVER use
    ``tab.get`` to download a PDF (it renders a viewer, not a download).
    Every download attempt — success OR failure — MUST persist a
-   ``save_record`` row (success: ``pdf_filename=Path(result["saved_path"]).name``,
-   ``download_status="downloaded"``; failure: ``pdf_filename=""``,
-   ``download_status="failed"``, ``download_error=...``). See the helper
+   ``save_record`` row (success: ``core_pdf_filename=Path(result["saved_path"]).name``,
+   ``core_download_status="downloaded"``; failure: ``core_pdf_filename=""``,
+   ``core_download_status="failed"``, ``core_download_error=...``). See the helper
    docstrings for the result dict and the try/except pattern.
 
 8a. Retry failed downloads — before downloading NEW files, call
@@ -620,29 +623,29 @@ does inline extraction only (no ``load_discovered_links()`` call).
     run (importing it without calling it is a lint FAILURE). Re-attempt
     every downloaded file with its matching helper (``download_pdf_*`` for
     PDFs, ``download_file_*`` for DOC/DOCX/RTF/…); on success update
-    ``pdf_filename`` and ``download_status="downloaded"``. Skip rows with
-    no ``file_url`` (metadata-only ``no_files`` rows).
+    ``core_pdf_filename`` and ``core_download_status="downloaded"``. Skip rows with
+    no ``core_file_url`` (metadata-only ``no_files`` rows).
     Failed-document retry (MANDATORY) — ``main()`` MUST contain a retry
     phase AFTER the worker ``gather`` and BEFORE ``browser.stop()``.
     ``load_failed_downloads()`` also returns rows with
-    ``download_status == "load_failed"`` (metadata-gate timeout,
-    navigation failure) carrying ``source_page_url`` but no ``file_url``.
+    ``core_download_status == "load_failed"`` (metadata-gate timeout,
+    navigation failure) carrying ``core_source_page_url`` but no ``core_file_url``.
     Handle them FIRST, BEFORE the PDF-download retry: re-process each
     SERIALLY on ``browser.main_tab`` (always visible so the metadata
     gate passes — no concurrency race), then run the PDF-download retry
-    for rows WITH ``file_url``. Required structure in ``main()``, after
+    for rows WITH ``core_file_url``. Required structure in ``main()``, after
     ``await asyncio.gather(...)``::
 
         # --- retry phase (rule 8a) ---
         failed = load_failed_downloads()
         for source_url, data in failed:
-            if data.get("download_status") == "load_failed":
-                page_url = data.get("source_page_url", "")
+            if data.get("core_download_status") == "load_failed":
+                page_url = data.get("core_source_page_url", "")
                 if page_url:
                     print(f"  RETRY load_failed: {page_url}")
                     await process_document(browser.main_tab, page_url, out_dir, 0)
                 continue
-            if not data.get("file_url"):
+            if not data.get("core_file_url"):
                 continue
             # ... existing PDF-download retry for failed downloads ...
 
@@ -727,26 +730,26 @@ does inline extraction only (no ``load_discovered_links()`` call).
     from the URL (``pdf_<sha1(canonical_url)[:12]>.pdf`` via
     ``pdf_id_for``; ``doc_<...><ext>`` via ``doc_id_for``); you do NOT
     name files. Use ``pdf_id_for(file_url)`` ONCE at discovery and reuse
-    it as the DB key, the stored ``pdf_id``, and the filename stem —
+    it as the DB key, the stored ``core_pdf_id``, and the filename stem —
     never inline ``hashlib`` (the helper percent-canonicalizes; the
     inline hash does not). ``source_url`` MUST be content-stable, never
     a position index. Every downloaded file is one row. Store the
     downloaded file's basename (``Path(result["saved_path"]).name``) in
-    ``pdf_filename`` for BOTH PDFs and non-PDF documents
+    ``core_pdf_filename`` for BOTH PDFs and non-PDF documents
     (``.doc``/``.docx``/``.rtf``/…) — there is no separate supporting
     role. Use ``download_pdf_*`` for PDFs and ``download_file_*`` for
     other documents; on success set
-    ``pdf_filename=Path(result["saved_path"]).name``,
-    ``download_status="downloaded"``; on failure set ``pdf_filename=""``,
-    ``download_status="failed"``, ``download_error``. ``file_url`` MUST be
+    ``core_pdf_filename=Path(result["saved_path"]).name``,
+    ``core_download_status="downloaded"``; on failure set ``core_pdf_filename=""``,
+    ``core_download_status="failed"``, ``core_download_error``. ``core_file_url`` MUST be
     a percent-encoded absolute URL. NEVER rename the downloaded file;
-    store ``Path(result["saved_path"]).name`` verbatim as ``pdf_filename``.
+    store ``Path(result["saved_path"]).name`` verbatim as ``core_pdf_filename``.
 
 14. HTML capture — when the task downloads PDFs, also save the HTML of
     the page where each PDF was found via
     ``save_page_html(tab, out_dir, page_url)``. Store
-    ``Path(result["saved_path"]).name`` as ``html_filename`` and the
-    page URL as ``source_page_url`` in the ``save_record`` data dict.
+    ``Path(result["saved_path"]).name`` as ``core_html_filename`` and the
+    page URL as ``core_source_page_url`` in the ``save_record`` data dict.
     On SPA pages where metadata renders AFTER initial load (Aurelia/
     React shells whose captured HTML shows ``<!--anchor-->`` instead of
     content), pass ``ready_selector`` naming the LATE-BOUND METADATA
@@ -772,13 +775,13 @@ does inline extraction only (no ``load_discovered_links()`` call).
     NOT need to "open" a dropdown before extracting links from inside it.
     LISTING-PAGE-WALK EXCEPTION — for listing-page-walk tasks (rule 20)
     where the metadata lives in table rows on a listing page and
-    whole-page HTML is the wrong granularity, ``source_html`` per row
+    whole-page HTML is the wrong granularity, ``core_source_html`` per row
     satisfies the HTML-capture intent. Call
     ``rows = await extract_rows(tab, row_selector, CELL_SPECS, include_html=True)``
-    and store ``row["source_html"]`` (the row's outerHTML) in every
+    and store ``row["core_source_html"]`` (the row's outerHTML) in every
     ``save_record`` data dict for variants derived from that row. The
-    linter accepts a ``source_html`` key in lieu of ``save_page_html`` +
-    ``html_filename`` for this task shape. ``save_page_html`` remains
+    linter accepts a ``core_source_html`` key in lieu of ``save_page_html`` +
+    ``core_html_filename`` for this task shape. ``save_page_html`` remains
     MANDATORY for the pre-existing per-document-page shape (above).
 
 14b. Per-document gate + download-widget variants — when the task
@@ -809,12 +812,12 @@ does inline extraction only (no ``load_discovered_links()`` call).
     rendered but exposes no download links must be SKIPPED — do NOT call
     save_record for it. (The no_files status remains only for tasks that
     explicitly require metadata-only rows; in that case record ONE
-    metadata-only row, including ``html_filename`` too when the task
+    metadata-only row, including ``core_html_filename`` too when the task
     captures page HTML per rule 14)::
 
         save_record(page_url, {**metadata,
-                    "pdf_filename": "", "download_status": "no_files",
-                    "source_page_url": page_url})
+                    "core_pdf_filename": "", "core_download_status": "no_files",
+                    "core_source_page_url": page_url})
 
     NEVER print "FAILED to load" for a page whose metadata rendered —
     reserve load failure for a metadata-gate timeout (a real
@@ -829,8 +832,8 @@ does inline extraction only (no ``load_discovered_links()`` call).
     (``await tab.get(page_url)``), re-activate the tab
     (``await tab.bring_to_front()`` — rule 15h), and re-poll the gate
     up to 2 more times. Only after all retries fail, record
-    ``download_status="load_failed"`` with ``pdf_filename=""`` and
-    ``source_page_url=page_url`` (so the rule-8a retry phase recovers it
+    ``core_download_status="load_failed"`` with ``core_pdf_filename=""`` and
+    ``core_source_page_url=page_url`` (so the rule-8a retry phase recovers it
     on the always-visible main_tab). The retry loop MUST stay INSIDE the
     ``async with gate_lock:`` block (rule 15h) so the re-navigation's
     foreground is not stolen by another worker — a re-navigation outside
@@ -877,9 +880,9 @@ does inline extraction only (no ``load_discovered_links()`` call).
                        # load_failed so the rule-8a retry phase re-processes
                        # it on the always-visible main_tab; keep draining.
                        print(f"  [tab{tab_id}] load_failed {url}: {exc}")
-                       save_record(url, {"download_status": "load_failed",
-                                         "pdf_filename": "",
-                                         "source_page_url": url})
+                       save_record(url, {"core_download_status": "load_failed",
+                                         "core_pdf_filename": "",
+                                         "core_source_page_url": url})
 
            await asyncio.gather(*(worker(i + 1, t) for i, t in enumerate(worker_tabs)))
 
@@ -899,7 +902,7 @@ does inline extraction only (no ``load_discovered_links()`` call).
        ``extract_fields(tab, FIELD_SPECS)`` / ``extract_links(tab, ...)``
        BEFORE calling ``save_page_html``, then iterate plain Python
        dicts (rule 14). On per-PDF extraction failure, call
-       ``save_record`` with ``download_status="failed"`` — NEVER
+       ``save_record`` with ``core_download_status="failed"`` — NEVER
        silently skip: silent skips become invisible gaps in
        ``metadata.db`` and the retry phase cannot recover them.
     e) Pass each worker its OWN ``tab`` (per-tab isolation); sharing one
@@ -1033,10 +1036,10 @@ does inline extraction only (no ``load_discovered_links()`` call).
        column text), ``date``/``item``/``action`` (action-taken column
        text), ``adopted_href`` (adopted-text column link href),
        ``draft_ref`` + ``draft_href`` (draft column link text + href).
-       ``include_html=True`` populates ``row["source_html"]`` = the
+       ``include_html=True`` populates ``row["core_source_html"]`` = the
        row's outerHTML — store it verbatim in EVERY ``save_record`` data
        dict for variants derived from that row. This is the task's
-       ``source_html`` requirement; it replaces ``html_filename``/
+       ``core_source_html`` requirement; it replaces ``core_html_filename``/
        ``save_page_html`` for this task shape (rule 14 listing-page-walk
        exception; the linter agrees).
     c) Per row, emit up to TWO documents: the ADOPTED (from
@@ -1055,11 +1058,11 @@ does inline extraction only (no ``load_discovered_links()`` call).
        ``document_ref``, ``document_status`` (``"Draft"`` if ``"L"`` in
        ``document_ref`` else ``"Adopted"``), ``language``
        (``"English"``/``"Spanish"``), ``file_type``
-       (``"pdf"``/``"doc"``/``"docx"``), ``file_url`` (absolute,
+       (``"pdf"``/``"doc"``/``"docx"``), ``core_file_url`` (absolute,
        percent-encoded per rule 13), ``title``, ``date``,
-       ``source_html``, ``source_page_url`` (the listing-page URL),
+       ``core_source_html``, ``core_source_page_url`` (the listing-page URL),
        plus the existing download-discipline keys
-       (``pdf_filename``/``download_status``/``download_error``).
+       (``core_pdf_filename``/``core_download_status``/``core_download_error``).
        ``source_url`` (PK) =
        ``f"{listing_url}/{document_ref}/{language}/{file_type}"``
        (content-stable; never a position index — rule 13).

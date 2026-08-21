@@ -22,7 +22,7 @@ class MissingCoverage(BaseModel):
     )
     observed_total: int = Field(
         default=0,
-        description="How many distinct file_url rows the DB has for this path.",
+        description="How many distinct core_file_url rows the DB has for this path.",
     )
     expected: str = Field(
         description="What the prompt says should be there.",

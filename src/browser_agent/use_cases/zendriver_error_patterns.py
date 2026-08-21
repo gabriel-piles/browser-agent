@@ -16,6 +16,26 @@ drifted in parallel from diverging again.
 
 from __future__ import annotations
 
+# The complete set of script_tools modules copied beside an emitted script.
+# Single source of truth: the ModuleNotFoundError diagnosis below and the
+# static hallucinated-import pre-check both derive from this tuple.
+SCRIPT_TOOLS_MODULES: tuple[str, ...] = (
+    "_file_utils",
+    "discover_links",
+    "discovered_links_store",
+    "dom_helpers",
+    "extract_fields",
+    "form_helpers",
+    "page_wait",
+    "pdf_download",
+    "save_page_html",
+    "save_record",
+    "start_browser",
+    "text_utils",
+)
+
+_SCRIPT_TOOLS_MODULE_LIST = ", ".join(f"script_tools.{m}" for m in SCRIPT_TOOLS_MODULES)
+
 ZD_RUNTIME_ERROR_PATTERNS: list[tuple[str, str, str]] = [
     (
         "tab.evaluate",
@@ -85,7 +105,11 @@ ZD_RUNTIME_ERROR_PATTERNS: list[tuple[str, str, str]] = [
     (
         "ModuleNotFoundError: No module named '",
         "ModuleNotFoundError",
-        "Missing module. Fix: only zendriver, asyncio, stdlib, and script_tools.* are available (rule 0/5); the script_tools/ folder is copied beside the script at emit time.",
+        "Missing module. Fix: only zendriver, asyncio, stdlib, and script_tools.* are available (rule 0/5); "
+        "the script_tools/ folder is copied beside the script at emit time. The ONLY available script_tools "
+        f"modules are: {_SCRIPT_TOOLS_MODULE_LIST} — no other script_tools modules exist. Note: extract_rows, "
+        "extract_links, and extract_fields are all FUNCTIONS inside script_tools.extract_fields — there is no "
+        "script_tools.extract_rows/extract_links module; import them from script_tools.extract_fields.",
     ),
     (
         "AttributeError: '",

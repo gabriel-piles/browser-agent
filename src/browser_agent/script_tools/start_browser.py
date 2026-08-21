@@ -246,6 +246,70 @@ def _close_stderr(process):
             pass
 
 
+def _chromium_pgids_under(root_dir):
+    """Distinct process-group ids for live Chromium using a profile under ``root_dir``.
+
+    Matches the process name containing ``chrom`` with a resolved
+    ``--user-data-dir`` relative to ``root_dir``, so the operator's real
+    browser under ``~/.config`` is never touched.
+    """
+    root = str(Path(root_dir).resolve())
+    groups = set()
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return groups
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        if pid == os.getpid():
+            continue
+        try:
+            args = Path("/proc", entry, "cmdline").read_bytes().split(b"\x00")
+        except OSError:
+            continue
+        if not any(b"chrom" in a for a in args):
+            continue
+        ud = next(
+            (a.split(b"=", 1)[1].decode("utf-8", errors="replace") for a in args if a.startswith(b"--user-data-dir=")),
+            None,
+        )
+        if ud is None or not Path(ud).resolve().is_relative_to(root):
+            continue
+        try:
+            groups.add(os.getpgid(pid))
+        except OSError:
+            continue
+    return groups
+
+
+def _terminate_group(pgid):
+    """TERM then KILL one process group, waiting ~2s for it to exit."""
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return
+    for _ in range(20):
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            break
+        time.sleep(0.1)
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _kill_chromium_under(root_dir):
+    """Reap every live Chromium group whose profile dir is under ``root_dir``."""
+    for pgid in sorted(_chromium_pgids_under(root_dir)):
+        _terminate_group(pgid)
+
+
 async def start_browser(headless=None, user_data_dir=None):
     """Launch a clean Chromium and connect zendriver. Replaces ``zd.start()``.
 
@@ -275,6 +339,11 @@ async def start_browser(headless=None, user_data_dir=None):
 
     owns_profile = user_data_dir is None and not PROFILE_PATH
     profile = user_data_dir or PROFILE_PATH or tempfile.mkdtemp(prefix="zd_script_")
+
+    # Reap any still-open Chromium from an interrupted previous run of this
+    # script so this launch opens its own debug port instead of handing off
+    # to the stale instance holding the profile lock.
+    _kill_chromium_under(profile)
 
     if owns_profile:
         # Fresh temp directory — just seed it.

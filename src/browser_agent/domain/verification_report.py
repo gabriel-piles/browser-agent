@@ -38,7 +38,7 @@ class VerificationReport(BaseModel):
     )
     observed_pdf_total: int = Field(
         default=0,
-        description="How many distinct file_url rows the DB has across all paths.",
+        description="How many distinct core_file_url rows the DB has across all paths.",
     )
     coverage_complete: bool = Field(
         default=False,
@@ -65,5 +65,5 @@ class VerificationReport(BaseModel):
     )
     html_missing_records: list[str] = Field(
         default_factory=list,
-        description="source_urls of records that downloaded a document but missed the required HTML capture (html_filename empty or the referenced file missing from downloads/).",
+        description="source_urls of records that downloaded a document but missed the required HTML capture (core_html_filename empty or the referenced file missing from downloads/).",
     )

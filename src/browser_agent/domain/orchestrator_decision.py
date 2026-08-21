@@ -17,11 +17,16 @@ class OrchestratorDecision(BaseModel):
         "accept_gap",
         "abort",
         "finish",
+        "refresh",
     ] = Field(description="What to do next")
     subtask_id: str = ""
     focus: str = Field(
         default="",
         description="Repair/replan instruction for the next agent turn",
+    )
+    subtask_ids: list[str] = Field(
+        default_factory=list,
+        description="Subtasks whose existing emitted scripts to re-execute (refresh action)",
     )
     reasoning: str = Field(
         description="Why this action was chosen over alternatives",

@@ -23,8 +23,8 @@ def _db_path() -> Path:
     return _PATH_CACHE
 
 
-SUBSTR_PROMPT = "pdf_filename (or ? to list, * to dump all, empty to quit) > "
-URL_KEYS = {"source_url", "file_url", "source_page", "source_page_url"}
+SUBSTR_PROMPT = "core_pdf_filename (or ? to list, * to dump all, empty to quit) > "
+URL_KEYS = {"source_url", "core_file_url", "source_page", "core_source_page_url"}
 SINGLE_LINE_KEYS = URL_KEYS | {k for k in ()}
 
 
@@ -56,19 +56,19 @@ def header(text: str, width: int = 64) -> str:
 
 
 def render_card(record: dict, width: int = 64) -> str:
-    rows = [header(f"pdf_filename = {record.get('pdf_filename', '<missing>')}", width)]
+    rows = [header(f"core_pdf_filename = {record.get('core_pdf_filename', '<missing>')}", width)]
     keys = [
         "source_url",
         "task_slug",
         "scraped_at",
-        "pdf_id",
-        "pdf_name",
-        "pdf_type",
-        "file_url",
-        "pdf_filename",
-        "html_filename",
+        "core_pdf_id",
+        "core_pdf_name",
+        "core_pdf_type",
+        "core_file_url",
+        "core_pdf_filename",
+        "core_html_filename",
         "source_page",
-        "source_page_url",
+        "core_source_page_url",
     ]
     for k in keys:
         if k in record and record[k] not in (None, ""):
@@ -101,10 +101,10 @@ def render_kv_boxed(key: str, value: str, width: int) -> str:
 def list_filenames(conn: sqlite3.Connection) -> None:
     seen = []
     for row in all_rows(conn):
-        fn = parsed(row).get("pdf_filename")
+        fn = parsed(row).get("core_pdf_filename")
         if fn and fn not in seen:
             seen.append(fn)
-    print(f"\n{len(seen)} pdf_filename values:\n")
+    print(f"\n{len(seen)} core_pdf_filename values:\n")
     for fn in seen:
         print(f"  • {fn}")
     print()
@@ -122,7 +122,7 @@ def find(conn: sqlite3.Connection, query: str) -> list[dict]:
     out = []
     for row in all_rows(conn):
         rec = parsed(row)
-        if query.lower() in rec.get("pdf_filename", "").lower():
+        if query.lower() in rec.get("core_pdf_filename", "").lower():
             out.append(rec)
     return out
 
@@ -130,10 +130,10 @@ def find(conn: sqlite3.Connection, query: str) -> list[dict]:
 def summary(conn: sqlite3.Connection) -> None:
     rows = all_rows(conn)
     slugs = sorted({r["task_slug"] for r in rows})
-    with_fn = sum(1 for r in rows if parsed(r).get("pdf_filename"))
+    with_fn = sum(1 for r in rows if parsed(r).get("core_pdf_filename"))
     print(header(f"metadata.db — {len(rows)} rows", 64))
     print(f"  task_slugs : {', '.join(slugs)}")
-    print(f"  rows with pdf_filename : {with_fn}")
+    print(f"  rows with core_pdf_filename : {with_fn}")
     print(f"  DB path    : {_db_path()}\n")
 
 

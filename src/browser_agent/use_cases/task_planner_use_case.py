@@ -64,7 +64,7 @@ class TaskPlannerUseCase:
         await self._deps.browser_session.close()
 
     async def _run_agent(self, agent: Agent, prompt: str, message_history: list | None = None) -> Any:
-        agent_logger.info(
+        agent_logger.bind(agent="task_planner").info(
             "task planner running prompt_tokens={t} messages={m}",
             t=len(prompt) // 4,
             m=len(message_history) if message_history else 0,
@@ -75,6 +75,7 @@ class TaskPlannerUseCase:
             self._deps,
             usage_limits=_usage_limits(),
             message_history=message_history,
+            agent_name="task_planner",
         )
 
     @staticmethod

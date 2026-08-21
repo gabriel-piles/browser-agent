@@ -41,18 +41,18 @@ def _missing_html_records(
     missing: list[str] = []
     for source_url, _slug, data_json in rows:
         data = parse_row_data(data_json)
-        if not (data.get("pdf_filename") or "").strip():
+        if not (data.get("core_pdf_filename") or "").strip():
             continue
-        html_name = (data.get("html_filename") or "").strip()
+        html_name = (data.get("core_html_filename") or "").strip()
         if html_name:
             if (downloads_path / html_name).is_file():
                 continue
-            missing.append(f"{source_url} (html_filename set but file missing from downloads/)")
+            missing.append(f"{source_url} (core_html_filename set but file missing from downloads/)")
             continue
-        if not require_html_files and (data.get("source_html") or "").strip():
+        if not require_html_files and (data.get("core_source_html") or "").strip():
             continue
         missing.append(
-            f"{source_url} (downloaded document has no captured HTML; set html_filename to a save_page_html result)"
+            f"{source_url} (downloaded document has no captured HTML; set core_html_filename to a save_page_html result)"
         )
     return missing
 

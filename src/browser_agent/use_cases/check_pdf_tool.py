@@ -79,7 +79,7 @@ def _query_db(db_path: Path, candidate_url: str) -> tuple[str, dict[str, Any], s
         conn.close()
     for source_url, data_json in rows:
         data = parse_row_data(data_json)
-        stored = data.get("file_url", "") or ""
+        stored = data.get("core_file_url", "") or ""
         match = PdfUrlMatcher.match(candidate_url, stored)
         if match.matched:
             return source_url, data, match.mode
@@ -93,7 +93,7 @@ def _check_file(
 ) -> PdfCheckResult:
     """Check the downloaded file for the DB row and return the result."""
     source_url, data, match_mode = row
-    db_filename = data.get("pdf_filename", "") or ""
+    db_filename = data.get("core_pdf_filename", "") or ""
     norm_name, orig_name = PdfUrlMatcher.expected_filenames_for(request.url)
     file_path, used_name = _resolve_file(deps, norm_name, orig_name, db_filename)
     if file_path is None or not file_path.is_file():
