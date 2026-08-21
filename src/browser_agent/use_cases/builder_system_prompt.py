@@ -1074,6 +1074,22 @@ does inline extraction only (no ``load_discovered_links()`` call).
     f) Rate limiting: ``await tab.sleep(1.5)`` between listing-page
        navigations (the download helpers already throttle between
        downloads).
+   g) Paginated listings — PER-PAGE HTML CAPTURE. When the listing
+      paginates (``__doPostBack``/next/previous buttons, ``label_Total``-style
+      counters), capture EACH page's HTML BEFORE navigating away from it,
+      with an explicit distinct filename:
+      ``result = await save_page_html(tab, out_dir, listing_url, filename=f"<task_slug>_p{page}.html")``
+      and stamp ``Path(result["saved_path"]).name`` from THAT page into
+      every ``save_record`` data dict for rows collected on that page.
+      Order per page: (1) ``extract_rows(...)``, (2) ``save_page_html(...)``
+      for the current page, (3) click next / postback. NEVER call
+      ``save_page_html`` once with the bare listing URL after the walk:
+      the helper derives the default filename from ``sha1(source_url)``
+      and SKIPS writing when the file already exists, so all pages
+      collapse into ONE stale capture (usually page 1) and every row's
+      ``core_html_filename`` points at HTML that does not contain its
+      rows. Verification FAILS any record whose ``core_html_filename``
+      file does not contain the row's ``document_ref``.
 
 Processing script contract:
   - When a discovery script was emitted (links in the DB):

@@ -9,8 +9,23 @@ from browser_agent.domain.script_tools_feedback import ScriptToolsFeedback
 from browser_agent.domain.subtask_spec import SubtaskSpec
 from browser_agent.domain.verification_report import VerificationReport
 from browser_agent.domain.verification_request import VerificationRequest
+from browser_agent.use_cases.html_row_association import html_contains_record, row_needle
 from browser_agent.use_cases.metadata_db import parse_row_data, query_rows
 from browser_agent.use_cases.scraping_gap_map_builder import ScrapingGapMapBuilder
+
+
+def _html_content_problem(data: dict, downloads_path: Path) -> str | None:
+    """Return a reason string when the row's core_html_filename exists but does not contain its document_ref."""
+    html_name = (data.get("core_html_filename") or "").strip()
+    if not html_name:
+        return None
+    path = downloads_path / html_name
+    if not path.is_file():
+        return None  # existence already reported by the caller
+    needle = row_needle(data)
+    if not needle or html_contains_record(path, needle):
+        return None
+    return "core_html_filename file does not contain this row's document_ref (wrong-page/shared capture)"
 
 
 def _missing_html_records(
@@ -46,9 +61,11 @@ def _missing_html_records(
         html_name = (data.get("core_html_filename") or "").strip()
         if html_name:
             if (downloads_path / html_name).is_file():
+                problem = _html_content_problem(data, downloads_path)
+                if problem is None:
+                    continue
+                missing.append(f"{source_url} ({problem})")
                 continue
-            missing.append(f"{source_url} (core_html_filename set but file missing from downloads/)")
-            continue
         if not require_html_files and (data.get("core_source_html") or "").strip():
             continue
         missing.append(

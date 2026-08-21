@@ -6,8 +6,7 @@ from pydantic_ai import Agent, UsageLimits
 
 from browser_agent.agent_logging import (
     agent_logger,
-    estimate_output_letters,
-    record_llm_estimate,
+    record_llm_usage,
 )
 from browser_agent.configuration import (
     AGENT_INPUT_TOKEN_LIMIT,
@@ -44,8 +43,9 @@ class OrchestratorUseCase:
             t=len(summary) // 4,
         )
         run = await agent.run(summary, usage_limits=_usage_limits())
+        u = run.usage
+        record_llm_usage("orchestrator", u.input_tokens or 0, u.output_tokens or 0, u.requests or 0)
         output = getattr(run, "output", None)
-        record_llm_estimate("orchestrator", len(summary), estimate_output_letters(output))
         if isinstance(output, OrchestratorDecision):
             return output
         raise RuntimeError(f"Orchestrator returned unsupported type: {type(output).__name__}")

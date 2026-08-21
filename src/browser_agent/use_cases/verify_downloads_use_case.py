@@ -58,6 +58,7 @@ class VerifyDownloadsUseCase:
             run = await self._run_agent(agent, request.render_prompt())
             report = self._coerce_result(run)
             report = self._splice_tool_results(report)
+            report = self._recompute_missing_count(report)
             self._log_usage(run)
             return report
         finally:
@@ -73,6 +74,12 @@ class VerifyDownloadsUseCase:
             if result.url not in seen:
                 merged.append(result)
         return report.model_copy(update={"pdf_results": merged})
+
+    @staticmethod
+    def _recompute_missing_count(report: VerificationReport) -> VerificationReport:
+        """Override the LLM-authored missing_count with the true non-present count."""
+        missing = sum(1 for r in report.pdf_results if r.verdict != "present")
+        return report.model_copy(update={"missing_count": missing})
 
     async def _run_agent(self, agent: Agent, prompt: str) -> Any:
         agent_logger.bind(agent="verifier").info(

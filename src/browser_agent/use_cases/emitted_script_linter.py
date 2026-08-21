@@ -161,6 +161,39 @@ def _check_html_capture(python_code: str, require_files: bool = False) -> list[L
     ]
 
 
+def _check_pagination_per_page_html(python_code: str) -> list[LintFinding]:
+    """Rule 20: paginated listings must capture each page's HTML with an explicit filename.
+
+    ``save_page_html`` derives its default filename from ``sha1(source_url)`` and
+    skips writing when the file exists — one bare call after a pagination walk
+    collapses every page into ONE stale capture (usually page 1), leaving rows
+    whose ``core_html_filename`` does not contain their data.
+    """
+    if re.search(r"['\"]core_html_filename['\"]", python_code) is None:
+        return []
+    if re.search(r"__doPostBack\(|nextButton|previousButton|label_Total", python_code) is None:
+        return []
+    for match in re.finditer(r"\bsave_page_html\s*\(", python_code):
+        if re.search(r"\bfilename\s*=", _call_args(python_code, match.end() - 1)):
+            return []
+    return [
+        LintFinding(
+            rule="20",
+            severity="error",
+            message=(
+                "paginated listing: save_page_html is called WITHOUT filename= — the helper names "
+                "files sha1(source_url)[:12] and SKIPS existing files, so all pages collapse into ONE "
+                "stale capture (usually page 1) and every row's core_html_filename points at HTML that "
+                "does not contain its rows. Capture EACH page BEFORE navigating away: "
+                'result = await save_page_html(tab, out_dir, listing_url, filename=f"<task_slug>_p{page}.html") '
+                "and stamp Path(result['saved_path']).name from THAT page into every save_record data dict "
+                "for rows collected on that page (order per page: extract_rows, save_page_html, click next)."
+            ),
+            line=_line_of(python_code, python_code.find("save_page_html")),
+        )
+    ]
+
+
 def _check_ready_selector(python_code: str) -> list[LintFinding]:
     """Reject heading/title ready_selectors — they bind with the initial shell and pass the gate early."""
     out: list[LintFinding] = []
@@ -1471,6 +1504,7 @@ class EmittedScriptLinter:
             _check_tab_select_misuse,
             _check_download_status,
             _check_html_capture,
+            _check_pagination_per_page_html,
             _check_http_imports,
             _check_playwright_selectors,
             _check_el_text_content,
@@ -1486,7 +1520,6 @@ class EmittedScriptLinter:
             _check_direct_zendriver_import,
             _check_global_gather_timeout,
             _check_retry_phase,
-            _check_gate_lock,
             _check_tab_recycling,
             _check_handwritten_extraction,
             _check_case_sensitive_extension_selector,

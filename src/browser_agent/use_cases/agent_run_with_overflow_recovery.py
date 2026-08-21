@@ -20,7 +20,7 @@ from pydantic_ai import Agent
 from pydantic_ai.exceptions import UnexpectedModelBehavior, UserError as _UserError
 from pydantic_ai.usage import UsageLimitExceeded
 
-from browser_agent.agent_logging import estimate_output_letters, record_llm_estimate, record_llm_usage
+from browser_agent.agent_logging import record_llm_usage
 
 _FINALIZE_DIRECTIVE = (
     "\n\nIMPORTANT: your context is full. Emit your final structured result now without further tool calls. "
@@ -28,6 +28,31 @@ _FINALIZE_DIRECTIVE = (
     "The JSON must match the output schema exactly."
 )
 _TRUNCATED_HISTORY_WINDOW = 6
+
+
+def _usage_of(holder: Any) -> Any:
+    """Return the usage object whether ``usage`` is a property or a method."""
+    usage = holder.usage
+    return usage() if callable(usage) else usage
+
+
+def _usage_counts(usage: Any) -> tuple[int, int, int]:
+    """Extract ``(input_tokens, output_tokens, requests)`` with zero guards."""
+    return (
+        getattr(usage, "input_tokens", 0) or 0,
+        getattr(usage, "output_tokens", 0) or 0,
+        getattr(usage, "requests", 0) or 0,
+    )
+
+
+def _failed_usage_counts(agent_run: Any) -> tuple[int, int, int]:
+    """Usage of the overflowed attempt; zeros when unavailable."""
+    if agent_run is None:
+        return 0, 0, 0
+    try:
+        return _usage_counts(_usage_of(agent_run))
+    except Exception:
+        return 0, 0, 0
 
 
 async def run_agent_with_recovery(
@@ -48,6 +73,7 @@ async def run_agent_with_recovery(
     """
     agent_run = None
     result = None
+    failed = (0, 0, 0)
     try:
         async with agent.iter(
             prompt,
@@ -61,16 +87,10 @@ async def run_agent_with_recovery(
         result = run.result
     except (UnexpectedModelBehavior, UsageLimitExceeded):
         partial: list[Any] = list(agent_run.all_messages()) if agent_run else []
+        failed = _failed_usage_counts(agent_run)
         result = await _retry(agent, prompt, deps, usage_limits, message_history, partial)
-    record_llm_estimate(agent_name, len(prompt), estimate_output_letters(getattr(result, "output", None)))
-    usage = getattr(result, "usage", None)
-    if callable(usage):
-        real = usage()
-        record_llm_usage(
-            agent_name,
-            getattr(real, "input_tokens", 0) or 0,
-            getattr(real, "output_tokens", 0) or 0,
-        )
+    fin = _usage_counts(_usage_of(result))
+    record_llm_usage(agent_name, failed[0] + fin[0], failed[1] + fin[1], failed[2] + fin[2])
     return result
 
 

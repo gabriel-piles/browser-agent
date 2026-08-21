@@ -148,8 +148,8 @@ accumulated into `pdf_results` for you. Concentrate on the analysis only.
 - overall_assessment: 2-3 sentence summary measured against the prompt.
 - pdf_results: may be left empty; the driver fills it from the tool's
   real objects. Add entries only for candidates you want to annotate.
-- missing_count: how many reconciler rows + check_pdf results have a
-  verdict other than "present".
+- missing_count: computed automatically by the driver from `pdf_results`;
+  do not set it (like `pdf_results`, the driver fills it).
 - missing_coverage: one MissingCoverage per declared path that is not
   fully covered — navigation_path, expected_total (site-advertised
   count, 0 if unknown), observed_total (distinct core_file_url rows for the
