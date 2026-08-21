@@ -243,11 +243,14 @@ def _chromium_pgid(entry: str, root: Path) -> tuple[int, int] | None:
         return None
     if not any(b"chrom" in a for a in args):
         return None
-    ud = next(
-        (a.split(b"=", 1)[1].decode("utf-8", errors="replace") for a in args if a.startswith(b"--user-data-dir=")),
-        None,
-    )
-    if ud is None or not Path(ud).resolve().is_relative_to(root):
+    # Arch's /usr/bin/chromium wrapper execs the real binary with the whole
+    # flag set as ONE argv entry ("/usr/lib/chromium/chromium --flag ..."),
+    # so match the flag anywhere in any entry, not just as an exact prefix.
+    blob = next((a for a in args if b"--user-data-dir=" in a), None)
+    if blob is None:
+        return None
+    ud = blob.split(b"--user-data-dir=", 1)[1].split(None, 1)[0].decode("utf-8", errors="replace")
+    if not Path(ud).resolve().is_relative_to(root):
         return None
     try:
         return pid, os.getpgid(pid)

@@ -176,6 +176,7 @@ class GenerateScriptDriver:
             return 2
         finally:
             await heartbeat.stop()
+            kill_chromium_under(run_path)
 
     def _read_task(self, argv: list[str], run: RunConfig) -> str:
         return self._task_reader.read(argv, run)

@@ -47,6 +47,8 @@ from pathlib import Path
 
 from loguru import logger
 
+from browser_agent.adapters.browser.clean_browser_launcher import kill_chromium_under
+
 from browser_agent.domain.processing_self_check_result import ProcessingSelfCheckResult
 from browser_agent.domain.smoke_test_result import SmokeTestResult
 
@@ -89,6 +91,20 @@ def _restore_run_config(path: Path | None, content: str | None) -> None:
     """Restore original ``run_config.py`` content (no-op if nothing was swapped)."""
     if path is not None and content is not None:
         path.write_text(content, encoding="utf-8")
+
+
+def _reap_scratch_chromium(profile_dir: Path) -> None:
+    """Best-effort: terminate Chromium whose ``--user-data-dir`` is under ``profile_dir``.
+
+    The smoke-test subprocess starts Chromium in its own process group
+    (``start_new_session=True`` in the script's ``start_browser``), so killing
+    the script's group leaves the browser alive on any exit path. Reap it so
+    no visible window survives the smoke test or self-check.
+    """
+    try:
+        kill_chromium_under(profile_dir)
+    except Exception as exc:
+        logger.warning("Chromium reap failed under {dir}: {exc}", dir=profile_dir, exc=exc)
 
 
 async def smoke_test_script(
@@ -148,6 +164,7 @@ async def smoke_test_script(
         return SmokeTestResult(success=False, output=output, timed_out=False)
     finally:
         _restore_run_config(run_config_path, original_run_config)
+        _reap_scratch_chromium(scratch_dir / "profile")
 
 
 async def processing_self_check(
@@ -208,6 +225,7 @@ async def processing_self_check(
         output = stdout.decode("utf-8", errors="replace") if stdout else ""
     finally:
         _restore_run_config(run_config_path, original_run_config)
+        _reap_scratch_chromium(scratch / "profile")
     downloaded_rows, record_count, violations, has_download_intent = _analyze_records(db_path)
     ok = _self_check_ok(downloaded_rows, record_count, violations, has_download_intent)
     return ProcessingSelfCheckResult(
