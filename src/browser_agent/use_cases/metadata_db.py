@@ -60,6 +60,35 @@ def query_rows(db_path: Path, run: str | None = None) -> list[tuple[str, str, st
         conn.close()
 
 
+def count_discovered_links(db_path: Path) -> int:
+    """Count rows in ``discovered_links``; 0 when the file/table is missing."""
+    uri = f"file:{db_path.as_posix()}?mode=ro"
+    if not db_path.exists():
+        return 0
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        return conn.execute("SELECT COUNT(*) FROM discovered_links").fetchone()[0]
+    except sqlite3.OperationalError:
+        return 0
+    finally:
+        conn.close()
+
+
+def discovered_link_counts(db_path: Path) -> dict[str, int]:
+    """Map ``filter_label`` to row count in ``discovered_links``; {} when missing."""
+    uri = f"file:{db_path.as_posix()}?mode=ro"
+    if not db_path.exists():
+        return {}
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        rows = conn.execute("SELECT filter_label, COUNT(*) FROM discovered_links GROUP BY filter_label").fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    finally:
+        conn.close()
+    return {label: count for label, count in rows}
+
+
 def parse_row_data(raw: str | None) -> dict[str, Any]:
     """Decode the ``metadata.data`` JSON blob of one row, returning ``{}`` on failure."""
     if not raw:

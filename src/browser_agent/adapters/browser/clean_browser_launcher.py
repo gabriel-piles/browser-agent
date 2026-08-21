@@ -33,7 +33,7 @@ from pathlib import Path
 import zendriver as zd
 from loguru import logger
 
-from browser_agent.configuration import CHROMIUM_NO_SANDBOX
+from browser_agent.configuration import CHROMIUM_NO_SANDBOX, CHROMIUM_WINDOW_POSITION
 
 # ---------------------------------------------------------------------------
 # Stealth JS injected on every document (same as ZendriverBrowserSession).
@@ -142,6 +142,8 @@ def launch_chromium(
         args.append(f"--user-agent={user_agent}")
     if extension_dir is not None:
         args.append(f"--load-extension={extension_dir}")
+    if CHROMIUM_WINDOW_POSITION:
+        args.append(f"--window-position={CHROMIUM_WINDOW_POSITION}")
 
     logger.info("launching clean Chromium: {}", " ".join(args))
     # ``start_new_session`` puts Chromium and its forked children in one

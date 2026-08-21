@@ -111,6 +111,11 @@ MAX_VALIDATION_ATTEMPTS = 3
 # refuses and directs the agent to emit. Guards against the agent looping
 # on a dead selector and inflating context until the LLM request times out.
 MAX_EXPLORE_CALLS = 30
+# Explore-call budget for the dedicated discovery-completeness verifier:
+# ~23 manifest targets × (navigate + repeated infinite-scroll) exceeds the
+# generic MAX_EXPLORE_CALLS budget above, so only the discovery branch runs
+# with this raised limit.
+DISCOVERY_VERIFICATION_EXPLORE_LIMIT = 60
 # Consecutive empty explore_page results (extract returning 0 elements, or
 # inspect erroring with "no element matches") before the tool refuses and
 # directs the agent to emit or run analyze.
@@ -120,6 +125,9 @@ MAX_EMPTY_EXPLORE_RESULTS = 3
 # navigate during inspection and the generated script. Set the env
 # var to ``1`` / ``true`` for headless runs.
 ZENDRIVER_HEADLESS = os.environ.get("ZENDRIVER_HEADLESS", "false").lower() in {"1", "true", "yes"}
+# Optional Chromium window placement, e.g. "2560,0" to open windows on a
+# secondary monitor. Set in the project .env. Empty = no placement flag.
+CHROMIUM_WINDOW_POSITION = os.environ.get("CHROMIUM_WINDOW_POSITION", "")
 # NopeCHA CAPTCHA-solver extension. Opt-in: the extension only loads when
 # ``NOPECHA_ENABLED`` is truthy. ``NOPECHA_KEY`` is optional — the free tier
 # (100 solves/day, keyed by IP) needs no key; a paid key raises the limit.
