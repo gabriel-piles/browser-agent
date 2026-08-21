@@ -48,6 +48,11 @@ ZD_RUNTIME_ERROR_PATTERNS: list[tuple[str, str, str]] = [
         "You awaited a synchronous VALUE instead of a coroutine. zendriver element properties (el.text, el.text_all, el.attrs, el.id) and the SYNC helpers save_record/load_discovered_links/mark_link_processed return plain values — never await them (rule 4/11). Fix: await get_text(el, tab) (rule 0) for text, read attributes without await via el.attrs.get('href'), and use await el.apply('(el) => el.textContent') for full subtree text.",
     ),
     (
+        "was never awaited",
+        "coroutine never awaited",
+        "You CALLED an async function without awaiting it, then used the coroutine as a value (e.g. len(rows) on fetch_all_rows(...)). Fix: prefix the call with await — rows = await fetch_all_rows(tab) — inside your async main(); never pass a bare call of an async def to len()/print()/comparisons.",
+    ),
+    (
         "TypeError: object NoneType can't be used in 'await' expression",
         "save_record sync",
         "save_record is synchronous (rule 11) — awaiting None raises TypeError. Fix: call it bare: save_record(url, {...}), never await save_record(...).",

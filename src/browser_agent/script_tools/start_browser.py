@@ -58,6 +58,7 @@ _EMITTED_HEADLESS = os.environ.get("ZENDRIVER_HEADLESS", "false").lower() in {"1
 _CHROMIUM_BIN = "/usr/bin/chromium"
 _REAL_CHROMIUM_PROFILE = Path.home() / ".config" / "chromium"
 _CHROMIUM_NO_SANDBOX = os.environ.get("CHROMIUM_NO_SANDBOX", "").lower() in {"1", "true", "yes"} or os.geteuid() == 0
+_CHROMIUM_WINDOW_POSITION = os.environ.get("CHROMIUM_WINDOW_POSITION", "")
 
 # Bounded wait for Chromium's --remote-debugging-port to accept connections.
 _STARTUP_TIMEOUT_S = 10.0
@@ -131,6 +132,12 @@ def _build_chromium_args(port, profile, headless):
         args.append("--headless=new")
     if NOPECHA_EXTENSION_DIR:
         args.append(f"--load-extension={NOPECHA_EXTENSION_DIR}")
+    if _CHROMIUM_WINDOW_POSITION:
+        # Wayland compositors ignore --window-position; force XWayland so
+        # the flag is honored (mirrors clean_browser_launcher).
+        if os.environ.get("WAYLAND_DISPLAY") or os.environ.get("XDG_SESSION_TYPE") == "wayland":
+            args.append("--ozone-platform=x11")
+        args.append(f"--window-position={_CHROMIUM_WINDOW_POSITION}")
     return args
 
 

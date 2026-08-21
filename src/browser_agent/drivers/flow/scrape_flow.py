@@ -188,7 +188,10 @@ class ScrapeFlow:
                 logger.error("subtask {id}: repair_noop — dead end", id=spec.subtask_id)
                 decision = await self._orchestrator.decide(self._failure_summary(state, spec.subtask_id))
                 self._state_store.log_decision(decision, f"repair_noop:{spec.subtask_id}")
+                counter_before = state.plan_counter
                 state = await self._apply_decision(decision, state, spec.subtask_id)
+                if state.plan_counter != counter_before:
+                    return await self._run_subtasks(state)
                 self._log_plan_progress(state)
                 continue
 
@@ -208,7 +211,10 @@ class ScrapeFlow:
 
             decision = await self._orchestrator.decide(self._failure_summary(state, spec.subtask_id))
             self._state_store.log_decision(decision, f"failure:{spec.subtask_id}")
+            counter_before = state.plan_counter
             state = await self._apply_decision(decision, state, spec.subtask_id)
+            if state.plan_counter != counter_before:
+                return await self._run_subtasks(state)
             self._log_plan_progress(state)
 
         statuses = {r.subtask_id: r.status for r in state.records}
@@ -265,22 +271,20 @@ class ScrapeFlow:
                 "previous_plan": state.plan.model_dump(),
                 "succeeded_subtask_ids": succeeded,
             },
-            indent=2,
         )
 
     def _reset_records(self, state, new_plan) -> None:
-        # Keep succeeded records; reset others
-        succeeded_ids = {r.subtask_id for r in state.records if r.status == "succeeded"}
+        """Keep succeeded records; reset the rest for the new plan."""
         state.plan = new_plan
-        state.records = [r for r in state.records if r.subtask_id in succeeded_ids]
         for spec in new_plan.subtasks:
-            if spec.subtask_id not in succeeded_ids:
-                existing = self._find_record_by_id(state, spec.subtask_id)
-                if existing is not None:
-                    existing.attempts = 0
-                    existing.repair_decisions = 0
-                    existing.script_hash = ""
-                    existing.status = "pending"
+            record = self._find_record_by_id(state, spec.subtask_id)
+            if record is None:
+                continue
+            if record.status != "succeeded":
+                record.attempts = 0
+                record.repair_decisions = 0
+                record.script_hash = ""
+                record.status = "pending"
 
     def _deadline_check(self) -> None:
         elapsed = time.monotonic() - self._start_time

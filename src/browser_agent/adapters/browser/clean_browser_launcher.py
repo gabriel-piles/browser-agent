@@ -114,6 +114,16 @@ def reset_profile(profile_dir: Path) -> None:
     seed_profile_if_empty(profile_dir)
 
 
+def _wayland_session() -> bool:
+    """True when the process runs under a Wayland session.
+
+    Wayland compositors own window placement, so Chromium silently
+    ignores ``--window-position``. Callers force ``--ozone-platform=x11``
+    (XWayland) alongside the flag so it is honored.
+    """
+    return bool(os.environ.get("WAYLAND_DISPLAY")) or os.environ.get("XDG_SESSION_TYPE") == "wayland"
+
+
 def launch_chromium(
     port: int,
     user_data_dir: str | Path,
@@ -143,6 +153,8 @@ def launch_chromium(
     if extension_dir is not None:
         args.append(f"--load-extension={extension_dir}")
     if CHROMIUM_WINDOW_POSITION:
+        if _wayland_session():
+            args.append("--ozone-platform=x11")
         args.append(f"--window-position={CHROMIUM_WINDOW_POSITION}")
 
     logger.info("launching clean Chromium: {}", " ".join(args))
