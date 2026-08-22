@@ -1471,6 +1471,30 @@ def _check_empty_file_url(python_code: str) -> list[LintFinding]:
     return out
 
 
+_INLINE_URL_HASH_MSG = (
+    "Never build download filenames with hashlib.sha1(url.encode()) — it skips "
+    "canonical-URL normalization, so the saved core_pdf_filename will not match "
+    "the verifier's expected name and every repair attempt fails the same way. "
+    "Derive filename stems with pdf_id_for(url) / doc_id_for(url) from "
+    "script_tools._file_utils (or use the return value of the download helper)."
+)
+
+
+def _check_inline_url_hash(python_code: str) -> list[LintFinding]:
+    """Flag inline ``sha1(<url>.encode())`` filename hashing (rule 21).
+
+    ``pdf_id_for``/``doc_id_for`` canonicalize the URL before hashing;
+    scripts that inline the hash produce filenames the deterministic
+    self-check rejects (canonical_filename violation), and the model
+    reliably repeats the mistake across repairs unless called out here.
+    """
+    out: list[LintFinding] = []
+    for match in re.finditer(r"\bsha1\s*\(\s*[\w.\[\]]+\.encode\s*\(\s*\)\s*\)", python_code):
+        line = python_code.count("\n", 0, match.start()) + 1
+        out.append(LintFinding(rule="21", severity="error", message=_INLINE_URL_HASH_MSG, line=line))
+    return out
+
+
 class EmittedScriptLinter:
     """Lint the RAW LLM python_code (before emit transforms)."""
 
@@ -1527,6 +1551,7 @@ class EmittedScriptLinter:
             _check_empty_file_url,
             _check_handwritten_input_set,
             _check_hardcoded_row_filter,
+            _check_inline_url_hash,
         )
 
     def lint(self, python_code: str, kind: str = "processing") -> list[LintFinding]:

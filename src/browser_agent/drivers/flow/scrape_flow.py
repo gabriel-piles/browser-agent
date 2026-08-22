@@ -99,6 +99,20 @@ class ScrapeFlow:
             try:
                 context = self._plan_context(task, replans)
                 plan = await planner.execute(task, context=context)
+                if self._discovery_only(plan):
+                    replans += 1
+                    state = OrchestratorState(plan=plan, plan_counter=replans + 1, replans=replans, records=[])
+                    self._state_store.write_plan(state.plan_counter, plan)
+                    self._state_store.save(state)
+                    logger.warning(
+                        'plan has no kind="processing" subtask — a discovery-only plan never '
+                        "saves records; replanning ({n}/{max})",
+                        n=replans,
+                        max=_MAX_REPLANS,
+                    )
+                    if replans >= _MAX_REPLANS:
+                        return state
+                    continue
             finally:
                 await planner.close()
 
@@ -328,6 +342,18 @@ class ScrapeFlow:
             if s.subtask_id == subtask_id:
                 return s
         raise ValueError(f"subtask {subtask_id} not found in plan")
+
+    @staticmethod
+    def _discovery_only(plan) -> bool:
+        """True when a plan collects links but never processes them.
+
+        A plan whose subtasks are all ``kind="discovery"`` can never
+        produce ``save_record`` rows, yet every subtask succeeds and the
+        flow reports finished with an empty metadata table. Deterministic
+        guard: force a replan that adds a processing subtask.
+        """
+        subtasks = plan.subtasks
+        return bool(subtasks) and all(s.kind == "discovery" for s in subtasks)
 
     def _plan_summary(self, state) -> str:
         import json

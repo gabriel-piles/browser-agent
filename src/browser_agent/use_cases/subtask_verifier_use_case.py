@@ -152,7 +152,7 @@ class SubtaskVerifierUseCase:
 
         session = ZendriverBrowserSession(
             headless=ZENDRIVER_HEADLESS,
-            user_data_dir=self._run_path / "profile_builder",
+            user_data_dir=self._run_path / "profile_verifier",
         )
         model = OpenCodeZenAdapter().get_model()
         deps = VerificationAgentDeps(
@@ -256,7 +256,7 @@ class SubtaskVerifierUseCase:
         return VerificationAgentDeps(
             browser_session=ZendriverBrowserSession(
                 headless=ZENDRIVER_HEADLESS,
-                user_data_dir=self._run_path / "profile_builder",
+                user_data_dir=self._run_path / "profile_verifier",
             ),
             db_path=self._db_path,
             downloads_path=self._downloads_path,

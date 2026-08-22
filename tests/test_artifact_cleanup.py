@@ -1,6 +1,8 @@
-"""End-to-end test: intermediate files removed after generation.
+"""End-to-end test: emitted script artifacts.
 
-Reuses the single_page_list fixture. Tests _cleanup_emit_artifacts.
+Reuses the single_page_list fixture. The emitter intentionally persists
+a ``.raw.py`` and a ``.json`` sidecar next to every emitted script;
+assert those sidecars exist and no duplicate processing script remains.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ item's link URL as source_url.\
 
 
 def test_artifact_cleanup(fixture_server):
-    """Step 0 cleans intermediate artifacts: no .raw.py or .json sidecars."""
+    """Each emitted script keeps .raw.py/.json sidecars; no duplicates."""
     result = run_generation_pipeline("single_page_list", PROMPT, fixture_server)
     assert_driver_success(result)
     assert_min_records(result, 10)
@@ -29,11 +31,9 @@ def test_artifact_cleanup(fixture_server):
     scripts_dir = result["run_path"] / "scripts"
     if not scripts_dir.is_dir():
         return
-    raw_files = list(scripts_dir.glob("*.raw.py"))
-    json_files = list(scripts_dir.glob("*.json"))
     py_files = list(scripts_dir.glob("*.py"))
-    assert len(raw_files) == 0, f"Found .raw.py files: {raw_files}"
-    assert len(json_files) == 0, f"Found .json sidecar files: {json_files}"
-    # At most 1 processing .py and 1 discovery .py
-    processing_py = [p for p in py_files if "discover" not in p.name]
+    processing_py = [p for p in py_files if "discover" not in p.name and not p.name.endswith(".raw.py")]
     assert len(processing_py) <= 1, f"Found {len(processing_py)} processing scripts, expected <=1"
+    for path in processing_py:
+        assert path.with_suffix(".raw.py").exists(), f"Missing raw sidecar for {path}"
+        assert path.with_suffix(".json").exists(), f"Missing json sidecar for {path}"

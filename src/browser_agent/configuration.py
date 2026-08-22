@@ -34,6 +34,7 @@ VERIFICATION_PDF_COUNT = 10
 # LLM connection — consumed by ``adapters/llm/opencode_zen_adapter.py``.
 OPENCODE_ZEN_BASE_URL = "https://opencode.ai/zen/v1"
 OPENCODE_ZEN_MODEL = "deepseek-v4-flash"
+OPENCODE_ZEN_MAX_RETRIES = 6
 VERIFICATION_SCRIPT_RUN_LIMIT = 15
 VERIFICATION_QUERY_LIMIT = 10
 

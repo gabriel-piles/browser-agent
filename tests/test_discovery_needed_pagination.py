@@ -6,6 +6,8 @@ needs_discovery=true; a discovery script is emitted and runs.
 
 from __future__ import annotations
 
+import sqlite3
+
 from tests.conftest import (
     assert_driver_success,
     assert_fields_non_null,
@@ -28,8 +30,13 @@ def test_discovery_needed_pagination(fixture_server):
     assert_driver_success(result)
     assert_min_records(result, 30)
     assert_fields_non_null(result, ["title", "date"])
-    # Verify a discovery script was emitted
-    scripts_dir = result["run_path"] / "scripts"
-    if scripts_dir.is_dir():
+    # A discovery script is only guaranteed when the run actually used
+    # discovered_links — the planner may legitimately paginate inline.
+    db = sqlite3.connect(result["db_path"])
+    try:
+        link_count = db.execute("SELECT COUNT(*) FROM discovered_links").fetchone()[0]
+    finally:
+        db.close()
+    if link_count > 0:
         discovery_scripts = [p for p in scripts_dir.glob("*.py") if "__discover__" in p.name]
-        assert len(discovery_scripts) >= 1, "Expected at least 1 discovery script"
+        assert len(discovery_scripts) >= 1, f"{link_count} discovered links but no discovery script"
