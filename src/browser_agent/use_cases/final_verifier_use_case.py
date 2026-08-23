@@ -17,7 +17,7 @@ class FinalVerifierUseCase:
     async def verify(self, task_prompt: str) -> None:
         from browser_agent.configuration import ZENDRIVER_HEADLESS
         from browser_agent.adapters.browser.zendriver_browser_session import ZendriverBrowserSession
-        from browser_agent.adapters.llm.opencode_zen_adapter import OpenCodeZenAdapter
+        from browser_agent.adapters.llm.llm_adapter_factory import build_llm
         from browser_agent.adapters.execution.subprocess_read_script_runner import SubprocessReadScriptRunner
         from browser_agent.use_cases.reconcile_downloads_use_case import ReconcileDownloadsUseCase
         from browser_agent.use_cases.verify_downloads_use_case import VerifyDownloadsUseCase
@@ -49,7 +49,7 @@ class FinalVerifierUseCase:
             headless=ZENDRIVER_HEADLESS,
             user_data_dir=self._run_path / "profile",
         )
-        model = OpenCodeZenAdapter().get_model()
+        model = build_llm().get_model()
         deps = VerificationAgentDeps(
             browser_session=session,
             db_path=db_path,

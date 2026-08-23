@@ -22,9 +22,9 @@ class OrchestratorUseCase:
     """LLM-only judgment agent — no AgentDeps, no tools, no browser."""
 
     def __init__(self) -> None:
-        from browser_agent.adapters.llm.opencode_zen_adapter import OpenCodeZenAdapter
+        from browser_agent.adapters.llm.llm_adapter_factory import build_llm
 
-        self._model = OpenCodeZenAdapter().get_model()
+        self._model = build_llm().get_model()
 
     def _build_agent(self) -> Agent[None, OrchestratorDecision]:
         return Agent(

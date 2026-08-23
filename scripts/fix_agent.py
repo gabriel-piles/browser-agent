@@ -20,7 +20,7 @@ from pathlib import Path
 from loguru import logger
 from pydantic_ai import Agent
 
-from browser_agent.adapters.llm.ollama_adapter import OllamaAdapter
+from browser_agent.adapters.llm.llm_adapter_factory import build_llm
 from browser_agent.domain.scenario_result import ScenarioResult
 
 FIXTURES_ROOT = Path(__file__).parent / "fixtures"
@@ -84,7 +84,7 @@ Rules:
 def diagnose_and_fix(result: ScenarioResult, scenario_prompt: str) -> dict | None:
     """Diagnose a failure and return a patch dict, or None on error."""
     try:
-        model = OllamaAdapter().get_model()
+        model = build_llm().get_model()
     except Exception as exc:
         logger.warning("[robustness] fix agent: could not init LLM: {exc}", exc=exc)
         return None

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 
-from browser_agent.adapters.llm.ollama_adapter import OllamaAdapter
+from browser_agent.adapters.llm.llm_adapter_factory import build_llm
 from browser_agent.adapters.runs_config_loader import RunsConfigLoader
 from browser_agent.drivers.console.propose_console import ProposeConsole
 from browser_agent.drivers.paths.run_paths import RunPaths
@@ -66,7 +66,7 @@ class ProposeDriver:
         """Build the use case and call ``propose_with_catalog`` for the active run."""
         use_case = ProposeMappingUseCase(
             client=self._uwazi.build(),
-            llm=OllamaAdapter(),
+            llm=build_llm(),
         )
         return await use_case.propose_with_catalog(
             template_name=run_config.template,

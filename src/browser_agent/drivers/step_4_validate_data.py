@@ -31,7 +31,7 @@ import sqlite3
 
 from loguru import logger
 
-from browser_agent.adapters.llm.ollama_adapter import OllamaAdapter
+from browser_agent.adapters.llm.llm_adapter_factory import build_llm
 from browser_agent.drivers.matching.default_value_validator import DefaultValueValidator
 from browser_agent.drivers.classification.existing_entities_fetcher import ExistingEntitiesFetcher
 from browser_agent.drivers.matching.match_context_loader import MatchContextLoader
@@ -153,7 +153,7 @@ class MatchDriver:
 
     async def _process_all_thesauri(self, groups: list[dict], context) -> None:
         """Process every group (one per Uwazi property) into its own YAML file."""
-        llm = OllamaAdapter()
+        llm = build_llm()
         for group in groups:
             prop = group["property"]
             out_path = self._paths.default_thesaurus_path(prop.name)

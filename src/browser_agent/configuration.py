@@ -6,14 +6,27 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 
 # Load ``.env`` from the project root once at import time so every
-# ``os.environ.get(...)`` below (and the ``OllamaAdapter``) sees the
-# operator-provided secrets. ``python-dotenv`` is already a runtime
-# dependency. Existing shell env vars win by default (``override=False``).
+# ``os.environ.get(...)`` below sees the operator-provided secrets.
+# Existing shell env vars win by default (``override=False``).
 load_dotenv(PROJECT_ROOT / ".env")
 
-# LLM connection — consumed by ``adapters/llm/ollama_adapter.py``.
-OLLAMA_BASE_URL = "https://ollama.com/v1"
-ORCHESTRATOR_MODEL = "deepseek-v4-flash:0731-cloud"
+# --- LLM provider selection ---
+# Every agent (orchestrator, planner, explorer, writer, verifiers) runs on the
+# same model through one provider. Switch provider by changing ``LLM_PROVIDER``
+# to any name in ``LLM_PROVIDERS``; the matching adapter lives in
+# ``adapters/llm/`` (add new providers there and to both constants below).
+LLM_PROVIDERS = ("ollama", "opencode", "openrouter")
+LLM_PROVIDER = "opencode"
+# Environment variable that carries each provider's API key (set in .env).
+LLM_PROVIDER_ENV_KEYS = {
+    "ollama": "OLLAMA_API_KEY",
+    "opencode": "OPENCODE_ZEN_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+}
+# The single model identifier every adapter sends to its provider. Adapters
+# may remap it to a provider-specific catalog name (see ollama_adapter).
+MODEL = "deepseek-v4-flash"
+LLM_MAX_RETRIES = 6
 MAX_LLM_CALLS = 70
 EXPLORER_MAX_LLM_CALLS = 30
 WRITER_MAX_LLM_CALLS = 40
@@ -28,13 +41,7 @@ ORCHESTRATOR_MAX_LLM_CALLS = 15
 # leaves 32k for input (system prompt + compacted tool returns), which is
 # ample since the compactor bounds prompt size to COMPACT_INPUT_TOKEN_BUDGET.
 MAX_OUTPUT_TOKENS = 96_000
-VERIFICATION_MODEL = "deepseek-v4-flash:0731-cloud"
 VERIFICATION_PDF_COUNT = 10
-
-# LLM connection — consumed by ``adapters/llm/opencode_zen_adapter.py``.
-OPENCODE_ZEN_BASE_URL = "https://opencode.ai/zen/v1"
-OPENCODE_ZEN_MODEL = "deepseek-v4-flash"
-OPENCODE_ZEN_MAX_RETRIES = 6
 VERIFICATION_SCRIPT_RUN_LIMIT = 15
 VERIFICATION_QUERY_LIMIT = 10
 

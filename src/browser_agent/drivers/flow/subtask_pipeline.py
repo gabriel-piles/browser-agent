@@ -295,7 +295,7 @@ class SubtaskPipeline:
         from browser_agent.adapters.execution.curl_cffi_pdf_downloader_adapter import (
             CurlCffiPdfDownloaderAdapter,
         )
-        from browser_agent.adapters.llm.opencode_zen_adapter import OpenCodeZenAdapter
+        from browser_agent.adapters.llm.llm_adapter_factory import build_llm
         from browser_agent.use_cases.script_builder_use_case import ScriptBuilderUseCase
         from browser_agent.use_cases.agent_deps import AgentDeps
         from browser_agent.configuration import ZENDRIVER_HEADLESS
@@ -306,7 +306,7 @@ class SubtaskPipeline:
         )
         await session.start()
         deps = AgentDeps(
-            llm=OpenCodeZenAdapter(),
+            llm=build_llm(),
             browser_session=session,
             script_runner=InProcessScriptRunnerAdapter(
                 browser_session=session,

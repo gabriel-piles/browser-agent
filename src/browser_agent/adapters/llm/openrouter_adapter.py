@@ -1,4 +1,4 @@
-"""LlmPort backed by OpenCode Zen's OpenAI-compatible endpoint."""
+"""LlmPort backed by OpenRouter's OpenAI-compatible endpoint."""
 
 from __future__ import annotations
 
@@ -12,12 +12,12 @@ from browser_agent.adapters.llm.retrying_chat_model import RetryingChatModel
 from browser_agent.configuration import LLM_MAX_RETRIES, MODEL
 from browser_agent.ports.llm_port import LlmPort
 
-_BASE_URL = "https://opencode.ai/zen/v1"
-_API_KEY_ENV = "OPENCODE_ZEN_API_KEY"
+_BASE_URL = "https://openrouter.ai/api/v1"
+_API_KEY_ENV = "OPENROUTER_API_KEY"
 
 
-class OpenCodeZenAdapter(LlmPort):
-    """An :class:`LlmPort` backed by OpenCode Zen's OpenAI-compatible endpoint."""
+class OpenRouterAdapter(LlmPort):
+    """An :class:`LlmPort` backed by OpenRouter's OpenAI-compatible endpoint."""
 
     def __init__(self) -> None:
         self.model_name = MODEL

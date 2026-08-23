@@ -2,7 +2,7 @@
 
 Reads the failure history to understand what patterns are failing,
 then generates a new scenario description + HTML fixtures that probe
-a gap not yet covered. Uses the project's ``OllamaAdapter.get_model()``
+a gap not yet covered. Uses the project's ``build_llm().get_model()``
 + ``pydantic_ai.Agent(output_type=dict)`` for structured JSON output.
 
 The generated scenario is written to ``scripts/fixtures/<name>/``.
@@ -17,7 +17,7 @@ from pathlib import Path
 from loguru import logger
 from pydantic_ai import Agent
 
-from browser_agent.adapters.llm.ollama_adapter import OllamaAdapter
+from browser_agent.adapters.llm.llm_adapter_factory import build_llm
 from browser_agent.domain.expected_output import ExpectedOutput
 from browser_agent.domain.robustness_scenario import RobustnessScenario
 
@@ -70,7 +70,7 @@ Rules:
 def generate_next_scenario(difficulty: int, failure_history: list[dict]) -> RobustnessScenario | None:
     """Generate the next scenario at the given difficulty level."""
     try:
-        model = OllamaAdapter().get_model()
+        model = build_llm().get_model()
     except Exception as exc:
         logger.warning("[robustness] could not init LLM for scenario generation: {exc}", exc=exc)
         return None

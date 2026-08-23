@@ -1,34 +1,34 @@
+"""LlmPort backed by an OpenAI-compatible Ollama endpoint."""
+
 from __future__ import annotations
 
 import os
 
 from pydantic_ai.models import Model
+from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.ollama import OllamaProvider
 
-from browser_agent.configuration import OLLAMA_BASE_URL, ORCHESTRATOR_MODEL
+from browser_agent.configuration import MODEL
 from browser_agent.ports.llm_port import LlmPort
+
+_BASE_URL = "https://ollama.com/v1"
+_API_KEY_ENV = "OLLAMA_API_KEY"
+# The ollama.com cloud endpoint routes by a suffixed catalog id; remap the
+# shared configuration ``MODEL`` onto its ollama-specific name when needed.
+_MODEL_IDS = {"deepseek-v4-flash": "deepseek-v4-flash:0731-cloud"}
 
 
 class OllamaAdapter(LlmPort):
     """An :class:`LlmPort` backed by an OpenAI-compatible Ollama endpoint."""
 
-    def __init__(
-        self,
-        model: str | None = None,
-        ollama_base_url: str | None = None,
-        ollama_api_key: str | None = None,
-    ) -> None:
-        self.model_name = model or ORCHESTRATOR_MODEL
-        self.ollama_base_url = ollama_base_url or OLLAMA_BASE_URL
-        self.ollama_api_key = ollama_api_key or os.environ.get("OLLAMA_API_KEY")
-        if not self.ollama_api_key:
-            raise RuntimeError("OLLAMA_API_KEY must be set in the environment or .env file")
+    def __init__(self) -> None:
+        self.model_name = _MODEL_IDS.get(MODEL, MODEL)
+        self.api_key = os.environ.get(_API_KEY_ENV)
+        if not self.api_key:
+            raise RuntimeError(f"{_API_KEY_ENV} must be set in the environment or .env file")
 
     def get_model(self) -> Model:
-        provider = OllamaProvider(base_url=self.ollama_base_url, api_key=self.ollama_api_key)
-        # pydantic-ai accepts any OpenAI-compatible endpoint via
-        # ``OpenAIChatModel``; OllamaProvider wires the base URL and
-        # auth header for us.
-        from pydantic_ai.models.openai import OpenAIChatModel
-
+        # OllamaProvider wires the base URL and auth header for us; any
+        # OpenAI-compatible endpoint works through ``OpenAIChatModel``.
+        provider = OllamaProvider(base_url=_BASE_URL, api_key=self.api_key)
         return OpenAIChatModel(self.model_name, provider=provider)
