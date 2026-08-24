@@ -16,7 +16,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 # to any name in ``LLM_PROVIDERS``; the matching adapter lives in
 # ``adapters/llm/`` (add new providers there and to both constants below).
 LLM_PROVIDERS = ("ollama", "opencode", "openrouter")
-LLM_PROVIDER = "ollama"
+LLM_PROVIDER = "opencode"
 # Environment variable that carries each provider's API key (set in .env).
 LLM_PROVIDER_ENV_KEYS = {
     "ollama": "OLLAMA_API_KEY",
