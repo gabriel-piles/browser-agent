@@ -122,7 +122,10 @@ _STATIC_CHECK_PATTERNS: list[tuple[re.Pattern[str], str]] = [
             r"(?!.*['\"]core_html_filename['\"])"
         ),
         "save_record(...) is missing the 'core_html_filename' key (rule 13/14). "
-        "When the task downloads PDFs you MUST also save the page HTML and link it: "
+        "When the task downloads PDFs you MUST also save the HTML of the page "
+        "richest in metadata about each downloaded document — its own page, or "
+        "the preceding listing/metadata-table page when that carries more of "
+        "the record's fields — and link it: "
         "call result = await save_page_html(tab, out_dir, page_url) (add "
         'ready_selector="<metadata element CSS>" on SPA pages where metadata '
         "binds after load — name the late-bound metadata ITEM element (the "

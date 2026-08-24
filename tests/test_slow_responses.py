@@ -19,7 +19,7 @@ PROMPT = """\
 Navigate to http://127.0.0.1:{PORT}/?scenario=slow_responses and extract the \
 title and date for every document item (10 items). The server may respond slowly \
 to some requests — be patient and wait for the page to fully load before extracting. \
-Save each item to save_record with the item's link URL as source_url.\
+Save each item to save_record with the item's link URL as core_id.\
 """
 
 

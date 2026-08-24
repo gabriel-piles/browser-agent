@@ -24,7 +24,7 @@ title and document type for every item (14 items). Items link to files with mixe
 extensions: .pdf, .PDF, .doc, .DOC, and .html. Download all PDF files (both .pdf \
 and .PDF extensions — treat them case-insensitively). For .doc and .DOC files, \
 download them as supporting documents. For .html links, just save the metadata. \
-Save each item to save_record with the item's link URL as source_url and include \
+Save each item to save_record with the item's link URL as core_id and include \
 the document type (pdf/doc/html) in the data.\
 """
 

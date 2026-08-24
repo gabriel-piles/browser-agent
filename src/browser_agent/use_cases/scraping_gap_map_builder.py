@@ -49,7 +49,7 @@ class ScrapingGapMapBuilder:
         field_counts: dict[str, Counter[str]] = {f: Counter() for f in _GAP_FIELDS}
         sources: list[str] = []
         year_state: dict[tuple[str, str], int] = {}
-        for source_url, _slug, data_json in rows:
+        for core_id, _slug, data_json in rows:
             data = parse_row_data(data_json)
             url = data.get("core_file_url")
             if url:
@@ -63,7 +63,7 @@ class ScrapingGapMapBuilder:
             if year and state:
                 year_state[(year, state)] = year_state.get((year, state), 0) + 1
             if len(sources) < _MAX_SOURCE_ANCHORS:
-                sources.append(source_url)
+                sources.append(core_id)
         return file_urls, field_counts, sources, year_state
 
     def _render(

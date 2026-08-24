@@ -456,7 +456,7 @@ does inline extraction only (no ``load_discovered_links()`` call).
 
    Signatures::
 
-      def save_record(source_url: str, data: dict) -> None          # SYNC — do NOT await
+      def save_record(core_id: str, data: dict) -> None          # SYNC — do NOT await
       def load_failed_downloads() -> list[tuple[str, dict]]
       async def save_page_html(tab, save_path, source_url, filename=None, card_selector=None, ready_selector=None) -> dict
       async def download_pdf_curl_cffi(url, save_path, tab=None) -> dict
@@ -638,7 +638,7 @@ does inline extraction only (no ``load_discovered_links()`` call).
 
         # --- retry phase (rule 8a) ---
         failed = load_failed_downloads()
-        for source_url, data in failed:
+        for core_id, data in failed:
             if data.get("core_download_status") == "load_failed":
                 page_url = data.get("core_source_page_url", "")
                 if page_url:
@@ -706,10 +706,10 @@ does inline extraction only (no ``load_discovered_links()`` call).
 
 11. Metadata persistence — call ``save_record`` per entity AS IT IS
     SCRAPED (crash-resilient: a killed run at page 3000 keeps the first
-    2999 rows; it is sync, lint-enforced never-await). ``source_url`` is
+    2999 rows; it is sync, lint-enforced never-await). ``core_id`` is
     the PRIMARY KEY (upsert, not duplicate): for a single-page listing
     where each item has its own link, use the ITEM's link URL (e.g.
-    ``urljoin(page_url, href)``) as ``source_url`` — NEVER the listing
+    ``urljoin(page_url, href)``) as ``core_id`` — NEVER the listing
     page URL for all items, or upsert collapses N items into 1 row; for
     a multi-page page-scrape use the page URL; for a per-PDF download
     use ``f"{page_url}/pdf/{pdf_id}"`` with ``pdf_id = pdf_id_for(file_url)``
@@ -732,7 +732,7 @@ does inline extraction only (no ``load_discovered_links()`` call).
     name files. Use ``pdf_id_for(file_url)`` ONCE at discovery and reuse
     it as the DB key, the stored ``core_pdf_id``, and the filename stem —
     never inline ``hashlib`` (the helper percent-canonicalizes; the
-    inline hash does not). ``source_url`` MUST be content-stable, never
+    inline hash does not). ``core_id`` MUST be content-stable, never
     a position index. Every downloaded file is one row. Store the
     downloaded file's basename (``Path(result["saved_path"]).name``) in
     ``core_pdf_filename`` for BOTH PDFs and non-PDF documents
@@ -745,11 +745,22 @@ does inline extraction only (no ``load_discovered_links()`` call).
     a percent-encoded absolute URL. NEVER rename the downloaded file;
     store ``Path(result["saved_path"]).name`` verbatim as ``core_pdf_filename``.
 
-14. HTML capture — when the task downloads PDFs, also save the HTML of
-    the page where each PDF was found via
-    ``save_page_html(tab, out_dir, page_url)``. Store
+14. HTML capture — when the task downloads PDFs, AUTOMATICALLY save the
+    HTML of the page richest in METADATA ABOUT EACH downloaded document
+    via ``save_page_html(tab, out_dir, page_url)`` — this default applies
+    without any task-prompt instruction. Two candidate shapes: (a) the
+    document's own page (where the download link lives), or (b) an earlier
+    listing/table/index page whose rows carry the document's descriptive
+    metadata (title/date/status/author...). Decide per site DURING
+    EXPLORATION by comparing candidate pages and picking the one whose
+    captured HTML actually contains more of the metadata fields being
+    stored; when the download page itself carries little metadata, capture
+    the metadata-table/listing page instead. NEVER leave
+    ``core_html_filename`` empty merely because the download page had no
+    metadata — capture the metadata-bearing page instead. Store
     ``Path(result["saved_path"]).name`` as ``core_html_filename`` and the
-    page URL as ``core_source_page_url`` in the ``save_record`` data dict.
+    chosen page's URL as ``core_source_page_url`` in the ``save_record``
+    data dict.
     On SPA pages where metadata renders AFTER initial load (Aurelia/
     React shells whose captured HTML shows ``<!--anchor-->`` instead of
     content), pass ``ready_selector`` naming the LATE-BOUND METADATA
@@ -1063,7 +1074,7 @@ does inline extraction only (no ``load_discovered_links()`` call).
        ``core_source_html``, ``core_source_page_url`` (the listing-page URL),
        plus the existing download-discipline keys
        (``core_pdf_filename``/``core_download_status``/``core_download_error``).
-       ``source_url`` (PK) =
+       ``core_id`` (PK) =
        ``f"{listing_url}/{document_ref}/{language}/{file_type}"``
        (content-stable; never a position index — rule 13).
     e) Missing-translation: if a language variant is absent, SKIP it
@@ -1158,7 +1169,7 @@ IDEMPOTENCY — Your emitted script MUST be idempotent:
   Path(result["saved_path"]).exists() or the helper's "skipped" key).
 - Only process discovered_links rows with status="discovered"
   (load_discovered_links() only returns undiscovered rows).
-- save_record upserts by source_url — calling it with the same source_url
+- save_record upserts by core_id — calling it with the same core_id
   twice produces one row, not a duplicate. Never error on already-existing
   data.
 - The script can be re-run safely against a run directory that already

@@ -64,11 +64,11 @@ class ReconcileDownloadsUseCase:
         try:
             if self._task_slug is not None:
                 return conn.execute(
-                    "SELECT source_url, task_slug, data FROM metadata WHERE task_slug = ?",
+                    "SELECT core_id, task_slug, data FROM metadata WHERE task_slug = ?",
                     (self._task_slug,),
                 ).fetchall()
             return conn.execute(
-                "SELECT source_url, task_slug, data FROM metadata",
+                "SELECT core_id, task_slug, data FROM metadata",
             ).fetchall()
         finally:
             conn.close()
@@ -76,7 +76,7 @@ class ReconcileDownloadsUseCase:
     def _discovered_unprocessed_findings(self, rows: list[tuple[str, str, str]]) -> list[CorpusFinding]:
         """Diff ``discovered_links`` (status='discovered') vs ``metadata`` rows.
 
-        A discovered URL is "handled" if a metadata.source_url equals it
+        A discovered URL is "handled" if a metadata.core_id equals it
         or starts with ``<url>/pdf/`` (the per-PDF keying convention).
         Unhandled → discovered_unprocessed; handled but still
         status='discovered' → stale_link_status. Absent table → no findings.
@@ -105,7 +105,7 @@ class ReconcileDownloadsUseCase:
 
     @staticmethod
     def _is_handled_url(url: str, handled: set[str]) -> bool:
-        """True if ``url`` has a matching metadata.source_url (exact or /pdf/ prefix)."""
+        """True if ``url`` has a matching metadata.core_id (exact or /pdf/ prefix)."""
         if url in handled:
             return True
         prefix = url + "/pdf/"
@@ -139,22 +139,22 @@ class ReconcileDownloadsUseCase:
         return {p.name for p in self._downloads_path.iterdir() if p.is_file()}
 
     def _reconcile_row(self, row: tuple[str, str, str], disk_files: set[str]) -> ReconciledPdf:
-        source_url, _slug, data_json = row
+        core_id, _slug, data_json = row
         data = parse_row_data(data_json)
         download_status = data.get("core_download_status", "") or ""
         file_url = data.get("core_file_url", "") or ""
         if not file_url:
             return ReconciledPdf(
-                source_url=source_url,
+                core_id=core_id,
                 verdict="empty_pdf_url",
                 notes="row has no core_file_url",
                 download_status=download_status,
             )
-        return self._check_file_for_url(source_url, file_url, data, disk_files, download_status)
+        return self._check_file_for_url(core_id, file_url, data, disk_files, download_status)
 
     def _check_file_for_url(
         self,
-        source_url: str,
+        core_id: str,
         file_url: str,
         data: dict[str, Any],
         disk_files: set[str],
@@ -166,7 +166,7 @@ class ReconcileDownloadsUseCase:
         filename_mismatch = bool(db_filename) and db_filename != expected_norm
         if matched is None:
             return ReconciledPdf(
-                source_url=source_url,
+                core_id=core_id,
                 file_url=file_url,
                 db_pdf_filename=db_filename,
                 expected_filename=expected_norm,
@@ -179,7 +179,7 @@ class ReconcileDownloadsUseCase:
                 download_status=download_status,
             )
         return self._validate_matched(
-            source_url,
+            core_id,
             file_url,
             db_filename,
             expected_norm,
@@ -204,7 +204,7 @@ class ReconcileDownloadsUseCase:
 
     def _validate_matched(
         self,
-        source_url: str,
+        core_id: str,
         file_url: str,
         db_filename: str,
         expected: str,
@@ -219,7 +219,7 @@ class ReconcileDownloadsUseCase:
         )
         verdict = self._row_verdict(integrity)
         return ReconciledPdf(
-            source_url=source_url,
+            core_id=core_id,
             file_url=file_url,
             db_pdf_filename=db_filename,
             expected_filename=expected,

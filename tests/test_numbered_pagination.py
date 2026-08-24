@@ -20,7 +20,7 @@ There are 5 pages with 10 items each (50 total). Each item has an h3 a link \
 and a span.date — extract both from the listing page. The page has numbered \
 links (1 2 3 4 5) plus Prev/Next buttons. Use the a.next button to paginate \
 through ALL pages — it links to ?page=N+1. The last page has no Next button. \
-Save each item to save_record with the item's link URL as source_url. \
+Save each item to save_record with the item's link URL as core_id. \
 Use HTTP (not HTTPS) for all URLs.\
 """
 

@@ -20,7 +20,7 @@ Navigate to http://127.0.0.1:{PORT}/?scenario=discovery_needed and extract the \
 title and date for every document item across ALL pages. There are 3 pages with \
 10 items each (30 total). Use the a.next button to paginate — it links to \
 ?page=N+1. The last page has no Next button. Save each item to save_record with \
-the item's link URL as source_url.\
+the item's link URL as core_id.\
 """
 
 

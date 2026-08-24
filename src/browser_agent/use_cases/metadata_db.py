@@ -28,7 +28,7 @@ def ensure_metadata_schema(db_path: Path) -> None:
     try:
         conn.execute(
             "CREATE TABLE IF NOT EXISTS metadata "
-            "(source_url TEXT PRIMARY KEY, task_slug TEXT NOT NULL, "
+            "(core_id TEXT PRIMARY KEY, task_slug TEXT NOT NULL, "
             "scraped_at TEXT NOT NULL, data TEXT NOT NULL)"
         )
         conn.execute(
@@ -42,7 +42,7 @@ def ensure_metadata_schema(db_path: Path) -> None:
 
 
 def query_rows(db_path: Path, run: str | None = None) -> list[tuple[str, str, str]]:
-    """Return ``(source_url, task_slug, data_json)`` rows from ``metadata.db``.
+    """Return ``(core_id, task_slug, data_json)`` rows from ``metadata.db``.
 
     When ``run`` is not None the rows are filtered by ``task_slug``;
     pass None to read every row in the table.
@@ -52,10 +52,10 @@ def query_rows(db_path: Path, run: str | None = None) -> list[tuple[str, str, st
     try:
         if run is not None:
             return conn.execute(
-                "SELECT source_url, task_slug, data FROM metadata WHERE task_slug = ?",
+                "SELECT core_id, task_slug, data FROM metadata WHERE task_slug = ?",
                 (run,),
             ).fetchall()
-        return conn.execute("SELECT source_url, task_slug, data FROM metadata").fetchall()
+        return conn.execute("SELECT core_id, task_slug, data FROM metadata").fetchall()
     finally:
         conn.close()
 

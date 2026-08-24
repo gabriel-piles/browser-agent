@@ -21,7 +21,7 @@ title and category for every document item across ALL filter values. There are \
 archived. The "archived" category returns 0 items — handle this gracefully \
 without crashing. The other 3 categories have 5 items each (15 total). Iterate \
 all 4 filter values. Save each item to save_record with the item's link URL \
-as source_url and include the category in the data.\
+as core_id and include the category in the data.\
 """
 
 

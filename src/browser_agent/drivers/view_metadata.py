@@ -24,7 +24,7 @@ def _db_path() -> Path:
 
 
 SUBSTR_PROMPT = "core_pdf_filename (or ? to list, * to dump all, empty to quit) > "
-URL_KEYS = {"source_url", "core_file_url", "source_page", "core_source_page_url"}
+URL_KEYS = {"core_id", "core_file_url", "source_page", "core_source_page_url"}
 SINGLE_LINE_KEYS = URL_KEYS | {k for k in ()}
 
 
@@ -38,12 +38,12 @@ def connect() -> sqlite3.Connection:
 
 
 def all_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    return conn.execute("SELECT source_url, task_slug, scraped_at, data FROM metadata ORDER BY scraped_at").fetchall()
+    return conn.execute("SELECT core_id, task_slug, scraped_at, data FROM metadata ORDER BY scraped_at").fetchall()
 
 
 def parsed(row: sqlite3.Row) -> dict:
     data = json.loads(row["data"]) if row["data"] else {}
-    return {"source_url": row["source_url"], "task_slug": row["task_slug"], "scraped_at": row["scraped_at"], **data}
+    return {"core_id": row["core_id"], "task_slug": row["task_slug"], "scraped_at": row["scraped_at"], **data}
 
 
 def is_url_key(key: str) -> bool:
@@ -58,7 +58,7 @@ def header(text: str, width: int = 64) -> str:
 def render_card(record: dict, width: int = 64) -> str:
     rows = [header(f"core_pdf_filename = {record.get('core_pdf_filename', '<missing>')}", width)]
     keys = [
-        "source_url",
+        "core_id",
         "task_slug",
         "scraped_at",
         "core_pdf_id",

@@ -17,7 +17,7 @@ PROMPT = """\
 Navigate to http://127.0.0.1:{PORT}/?scenario=iframe_content and extract the \
 title and date for every document item (10 items). The items are rendered \
 inside an <iframe> — you must switch to the iframe context to access them. \
-Save each item to save_record with the item's link URL as source_url.\
+Save each item to save_record with the item's link URL as core_id.\
 """
 
 

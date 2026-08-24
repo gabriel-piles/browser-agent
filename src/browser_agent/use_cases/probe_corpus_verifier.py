@@ -20,7 +20,7 @@ _DbRow = tuple[str, str, str]
 def _row_document_urls(data_json: str) -> list[str]:
     """Return the download URLs recorded in a row's data blob (deduped).
 
-    A row's ``source_url`` PK is often a synthesized page/ref/lang key;
+    A row's ``core_id`` PK is often a synthesized page/ref/lang key;
     the real document URL lives in ``data.core_file_url``.
     """
     data = parse_row_data(data_json)
@@ -47,39 +47,39 @@ class ProbeCorpusVerifier:
         return ProbeResult(
             source_url=source_url,
             verdict=verdict,
-            matched_row_source_url=matched or "",
+            matched_row_core_id=matched or "",
         )
 
     @staticmethod
     def _matches(
         source_url: str,
-        row_source_url: str,
+        row_core_id: str,
         data_json: str,
     ) -> bool:
         """Return True when a candidate source_url counts as captured by a row.
 
         Satisfaction is any of: an exact URL match on the row's
-        ``source_url``, an exact match on a document URL stored in the
+        ``core_id``, an exact match on a document URL stored in the
         row's ``data`` blob (``core_file_url``), or a
-        prefix match against the row ``source_url`` (a listing page).
+        prefix match against the row ``core_id`` (a listing page).
         Only the row PK is prefix-matched — never ``core_file_url`` values.
         """
-        if PdfUrlMatcher.match(source_url, row_source_url).matched:
+        if PdfUrlMatcher.match(source_url, row_core_id).matched:
             return True
         if any(PdfUrlMatcher.match(source_url, url).matched for url in _row_document_urls(data_json)):
             return True
-        return _prefix_match(source_url, row_source_url)
+        return _prefix_match(source_url, row_core_id)
 
     def _match_row(self, source_url: str, rows: list[_DbRow]) -> str | None:
-        """Return the matched row source_url, or ``None`` when no row matches.
+        """Return the matched row core_id, or ``None`` when no row matches.
 
         A candidate counts as captured when it matches the row's
-        ``source_url`` OR the document URL stored in its ``data`` blob
+        ``core_id`` OR the document URL stored in its ``data`` blob
         (``core_file_url``) — the same URL the reconciler
         verifies against disk — or is a listing-page prefix of the row PK.
         """
         for row_source, _slug, data_json in rows:
-            if self._matches(source_url, row_source_url=row_source, data_json=data_json):
+            if self._matches(source_url, row_core_id=row_source, data_json=data_json):
                 return row_source
         return None
 
@@ -87,7 +87,7 @@ class ProbeCorpusVerifier:
 def _prefix_match(candidate: str, stored: str) -> bool:
     """Return True when ``candidate`` (a listing page) prefixes a row's PK.
 
-    Processing rows are saved with ``source_url`` shaped as
+    Processing rows are saved with ``core_id`` shaped as
     ``f"{listing_url}/{document_ref}/{language}/{file_type}"`` (see the
     builder's system prompt), so a listing-page probe URL is satisfied
     when a row was captured from that page. Never prefix-match a bare

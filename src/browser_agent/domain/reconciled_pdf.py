@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 class ReconciledPdf(BaseModel):
     """Deterministic verdict for one DB row + its on-disk file."""
 
-    source_url: str = Field(default="", description="The DB row's source_url.")
+    core_id: str = Field(default="", description="The DB row's core_id.")
     file_url: str = Field(default="", description="The core_file_url stored in the row data.")
     db_pdf_filename: str = Field(default="", description="The core_pdf_filename the step-0 LLM wrote.")
     expected_filename: str = Field(default="", description="Filename recomputed from core_file_url.")

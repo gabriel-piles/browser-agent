@@ -93,7 +93,7 @@ download.
    site exposes that have no DB row at all. Tells you if the PDF is in
    the DB, if the file was downloaded, and if it is a valid PDF.
 4. query_db(sql_query) — read-only SELECT against `metadata.db` to
-   inventory coverage. Schema: metadata(source_url TEXT, task_slug TEXT,
+   inventory coverage. Schema: metadata(core_id TEXT, task_slug TEXT,
    data TEXT); discovered_links(url TEXT PRIMARY KEY, filter_label TEXT,
    status TEXT, discovered_at TEXT); `data` is JSON whose agent-instrumented
    keys include core_file_url, core_pdf_filename, core_pdf_id, core_pdf_name,

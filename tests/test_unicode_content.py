@@ -17,7 +17,7 @@ PROMPT = """\
 Navigate to http://127.0.0.1:{PORT}/?scenario=unicode_content and extract the \
 title and date for every document item (10 items). Titles contain non-ASCII \
 characters (accents, CJK, emoji). Extract the Unicode text correctly — no \
-mojibake. Save each item to save_record with the item's link URL as source_url.\
+mojibake. Save each item to save_record with the item's link URL as core_id.\
 """
 
 

@@ -21,7 +21,7 @@ PROMPT = """\
 Navigate to http://127.0.0.1:{PORT}/?scenario=no_discovery and extract the title \
 and date for every document item on the page (10 items). Each item is in a \
 div.item with an h3 a link to a PDF and a span.date. Download every PDF (10 PDFs). \
-Save each item to save_record with the item's link URL as source_url, \
+Save each item to save_record with the item's link URL as core_id, \
 download_status="downloaded", and the downloaded filename. This is a single \
 page — do NOT paginate, scroll, or click anything.\
 """

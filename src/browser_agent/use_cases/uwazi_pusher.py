@@ -113,7 +113,7 @@ class UwaziPusher:
                     )
             elif row.action is SyncAction.SKIP:
                 with lock:
-                    self._record_skip(out, row.language, row.source_url, row.skip_reason or "skipped_by_plan")
+                    self._record_skip(out, row.language, row.core_id, row.skip_reason or "skipped_by_plan")
                     print(
                         f"  [{i}/{total}] {progress.format_prefix()} | skipped {row.language} '{row.title}': {row.skip_reason}"
                     )
@@ -121,7 +121,7 @@ class UwaziPusher:
         except Exception as exc:  # noqa: BLE001 - any failure is recorded
             with lock:
                 progress.end_active()
-                self._record_error(out, row.language, row.source_url, str(exc))
+                self._record_error(out, row.language, row.core_id, str(exc))
 
     def _create_entity(self, client: UwaziClient, row, mapping: UwaziMapping) -> str:
         """Create a fresh Uwazi entity for one CREATE row, return the new shared id."""
@@ -202,12 +202,12 @@ class UwaziPusher:
         bucket = out.per_language_counts.setdefault(language, {})
         bucket[action.value] = bucket.get(action.value, 0) + 1
 
-    def _record_skip(self, out: ApplyResult, language: str, source_url: str, reason: str) -> None:
+    def _record_skip(self, out: ApplyResult, language: str, core_id: str, reason: str) -> None:
         """Append one skip row to the apply result and bump the per-language count."""
-        out.skip_reasons = out.skip_reasons + ((language, source_url, reason),)
+        out.skip_reasons = out.skip_reasons + ((language, core_id, reason),)
         self._record_result(out, language, SyncAction.SKIP)
 
     @staticmethod
-    def _record_error(out: ApplyResult, language: str, source_url: str, message: str) -> None:
+    def _record_error(out: ApplyResult, language: str, core_id: str, message: str) -> None:
         """Append one error row to the apply result."""
-        out.error_rows = out.error_rows + ((language, source_url, message),)
+        out.error_rows = out.error_rows + ((language, core_id, message),)

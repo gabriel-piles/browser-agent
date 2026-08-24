@@ -181,18 +181,18 @@ class MatchDriver:
         print(f"  source fields:  {field_count} with extracted values")
 
     def _query_metadata_rows(self) -> list[tuple[str, str, str]]:
-        """Return ``(source_url, task_slug, data_json)`` rows from the run's metadata.db."""
+        """Return ``(core_id, task_slug, data_json)`` rows from the run's metadata.db."""
         conn = sqlite3.connect(str(self._paths.metadata_db_path()))
         try:
-            return conn.execute("SELECT source_url, task_slug, data FROM metadata").fetchall()
+            return conn.execute("SELECT core_id, task_slug, data FROM metadata").fetchall()
         finally:
             conn.close()
 
     def _print_metadata_summary(self) -> None:
         """Print the per-row metadata fields available in the run's metadata.db."""
         SectionPrinter().heading("Scraped metadata")
-        for source_url, task_slug, data_json in self._query_metadata_rows():
-            print(f"  {source_url} ({task_slug}): {_extract_field_names(data_json)}")
+        for core_id, task_slug, data_json in self._query_metadata_rows():
+            print(f"  {core_id} ({task_slug}): {_extract_field_names(data_json)}")
 
 
 def main() -> None:

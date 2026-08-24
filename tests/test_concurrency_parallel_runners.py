@@ -17,7 +17,7 @@ from tests.conftest import (
 PROMPT = """\
 Navigate to http://127.0.0.1:{PORT}/?scenario=concurrency and extract the title \
 and date for every document item (50 items). Each item links to a detail page. \
-Save each item to save_record with the item's link URL as source_url. Use \
+Save each item to save_record with the item's link URL as core_id. Use \
 parallel processing to visit detail pages concurrently.\
 """
 

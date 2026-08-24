@@ -20,7 +20,7 @@ the title and category for every document item across ALL filter values. \
 There are 3 categories in a <select> dropdown: reports, resolutions, measures. \
 Each category has 5 items (15 total). Each <option> has a data-count attribute \
 showing the expected item count. Iterate ALL 3 filter values. Save each item \
-to save_record with the item's link URL as source_url and include the category.\
+to save_record with the item's link URL as core_id and include the category.\
 """
 
 

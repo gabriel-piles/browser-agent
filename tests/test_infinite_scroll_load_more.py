@@ -20,7 +20,7 @@ title and date for every document item. There are 30 items total across 3 pages.
 Click the "Load more" button to load additional items — the button fetches more \
 items via AJAX and appends them to the list. Keep clicking until the button \
 disappears (all 30 items loaded). Save each item to save_record with the item's \
-link URL as source_url.\
+link URL as core_id.\
 """
 
 

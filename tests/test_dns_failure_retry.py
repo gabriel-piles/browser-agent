@@ -19,7 +19,7 @@ Navigate to http://127.0.0.1:{PORT}/?scenario=dns_failure and extract the \
 title and date for every document item (10 items). The page has broken \
 sub-resources (images/iframes from a non-existent domain) — ignore them and \
 extract the content. Save each item to save_record with the item's link URL \
-as source_url.\
+as core_id.\
 """
 
 

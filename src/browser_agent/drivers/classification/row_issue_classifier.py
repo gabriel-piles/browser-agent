@@ -44,7 +44,7 @@ class RowIssueClassifier:
         thesaurus_lookup_by_property: dict,
         registry_template: UwaziTemplate | None = None,
     ) -> tuple[dict[str, int], list[tuple[str, str, list[str]]]]:
-        """Return ``(action counts, [(source_url, title, issues), ...])`` for the rows."""
+        """Return ``(action counts, [(core_id, title, issues), ...])`` for the rows."""
         entities_by_key = self._index_for(mapping)
         return self._classify_rows(
             records, mapping, template, thesaurus_lookup_by_property, entities_by_key, registry_template
@@ -62,7 +62,7 @@ class RowIssueClassifier:
     def classify_one(
         self,
         record: dict,
-        source_url: str,
+        core_id: str,
         mapping: UwaziMapping,
         template: UwaziTemplate,
         thesaurus_lookup_by_property: dict,
@@ -70,13 +70,11 @@ class RowIssueClassifier:
         registry_template: UwaziTemplate | None = None,
     ) -> tuple[str, list[str]]:
         """Return ``(action, issues)`` for one parsed metadata row."""
-        key_value = resolve_key_value(record, source_url, mapping.identity, mapping)
+        key_value = resolve_key_value(record, core_id, mapping.identity, mapping)
         shared_id = self._entities_fetcher.find_existing_shared_id(mapping, key_value, entities_by_key)
         action = "update" if shared_id else "create"
         issues = (
-            self._issue_detector.detect(
-                record, source_url, mapping, template, thesaurus_lookup_by_property, registry_template
-            )
+            self._issue_detector.detect(record, core_id, mapping, template, thesaurus_lookup_by_property, registry_template)
             if action == "create"
             else []
         )
@@ -105,18 +103,18 @@ class RowIssueClassifier:
         entities_by_key: dict[str, str],
         registry_template: UwaziTemplate | None = None,
     ) -> tuple[dict[str, int], list[tuple[str, str, list[str]]]]:
-        """Return ``(action counts, [(source_url, title, issues), ...])`` for the rows."""
+        """Return ``(action counts, [(core_id, title, issues), ...])`` for the rows."""
         counts: dict[str, int] = {"create": 0, "update": 0, "skip": 0}
         issues: list[tuple[str, str, list[str]]] = []
-        for source_url, _task_slug, raw_data in records:
+        for core_id, _task_slug, raw_data in records:
             record = self._parse_record(raw_data)
-            record.setdefault("core_pdf_filename", resolve_pdf_filename(record, source_url, self._downloads_dir))
+            record.setdefault("core_pdf_filename", resolve_pdf_filename(record, core_id, self._downloads_dir))
             action, row_issues = self.classify_one(
-                record, source_url, mapping, template, thesaurus_lookup_by_property, entities_by_key, registry_template
+                record, core_id, mapping, template, thesaurus_lookup_by_property, entities_by_key, registry_template
             )
             counts[action] = counts.get(action, 0) + 1
             if action == "create" and row_issues:
-                issues.append((source_url, self.row_title(record, mapping), row_issues))
+                issues.append((core_id, self.row_title(record, mapping), row_issues))
         return counts, issues
 
     def _parse_record(self, raw_data) -> dict:

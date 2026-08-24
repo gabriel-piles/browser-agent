@@ -62,15 +62,15 @@ def _ensure_schema(conn) -> None:
     """Create the ``metadata`` table if it does not exist (fixed schema)."""
     conn.execute(
         "CREATE TABLE IF NOT EXISTS metadata "
-        "(source_url TEXT PRIMARY KEY, task_slug TEXT NOT NULL, "
+        "(core_id TEXT PRIMARY KEY, task_slug TEXT NOT NULL, "
         "scraped_at TEXT NOT NULL, data TEXT NOT NULL)"
     )
 
 
-def save_record(source_url: str, data: dict) -> None:
+def save_record(core_id: str, data: dict) -> None:
     """Persist one entity's metadata into the shared SQLite store.
 
-    Upserts by source_url: re-running the scraper updates existing
+    Upserts by core_id: re-running the scraper updates existing
     records instead of creating duplicates. The table schema is fixed
     so downstream scripts can query it without knowing which scraper
     produced the data. Keys prefixed ``core_`` are agent-instrumented
@@ -78,7 +78,7 @@ def save_record(source_url: str, data: dict) -> None:
     task prompt's extraction spec.
 
     When downloading multiple files per page (PDFs, images), call this
-    once per FILE with a content-stable source_url derived from the
+    once per FILE with a content-stable core_id derived from the
     file's own URL — for PDFs use ``f"{page_url}/pdf/{pdf_id}"`` where
     ``pdf_id = pdf_id_for(file_url)`` (the same canonicalized hash the
     download helper uses for the filename; import it from
@@ -87,7 +87,7 @@ def save_record(source_url: str, data: dict) -> None:
     the URL first so the percent-encoded and raw-unicode forms of the
     same PDF collapse to one id (and one DB row); the inline hash skips
     that and creates a duplicate. NEVER use a position index
-    (``{i}``, ``#row3``): the metadata table keys on source_url, so a
+    (``{i}``, ``#row3``): the metadata table keys on core_id, so a
     position-based key makes a re-run with a different scheme create a
     duplicate row for the same file instead of upserting. The on-disk
     filename is derived by the download helper from the file's download
@@ -139,7 +139,7 @@ def save_record(source_url: str, data: dict) -> None:
     SOURCE PAGE URL, never the file download URL (``core_file_url``).
     Omit when no HTML was captured.
     """
-    source_url = _canonical_url(source_url)
+    core_id = _canonical_url(core_id)
     if isinstance(data, dict):
         _pu = data.get("core_file_url")
         if isinstance(_pu, str):
@@ -151,8 +151,8 @@ def save_record(source_url: str, data: dict) -> None:
         conn.execute("PRAGMA busy_timeout=5000")
         _ensure_schema(conn)
         conn.execute(
-            "INSERT OR REPLACE INTO metadata (source_url, task_slug, scraped_at, data) VALUES (?, ?, ?, ?)",
-            (source_url, task_slug, datetime.datetime.now(datetime.UTC).isoformat(), json.dumps(data, ensure_ascii=False)),
+            "INSERT OR REPLACE INTO metadata (core_id, task_slug, scraped_at, data) VALUES (?, ?, ?, ?)",
+            (core_id, task_slug, datetime.datetime.now(datetime.UTC).isoformat(), json.dumps(data, ensure_ascii=False)),
         )
         conn.commit()
     finally:
@@ -176,14 +176,14 @@ def load_failed_downloads() -> list[tuple[str, dict]]:
     try:
         conn.execute("PRAGMA busy_timeout=5000")
         _ensure_schema(conn)
-        rows = conn.execute("SELECT source_url, data FROM metadata").fetchall()
+        rows = conn.execute("SELECT core_id, data FROM metadata").fetchall()
     finally:
         conn.close()
     pending = []
-    for source_url, raw in rows:
+    for core_id, raw in rows:
         data = json.loads(raw)
         if data.get("core_download_status") == "no_files":
             continue
         if data.get("core_download_status") == "failed" or not data.get("core_pdf_filename"):
-            pending.append((source_url, data))
+            pending.append((core_id, data))
     return pending

@@ -19,7 +19,7 @@ PROMPT = """\
 Navigate to http://127.0.0.1:{PORT}/?scenario=long_text and extract the title \
 and description for every document item (5 items). Each item has a very long \
 title (500 chars) and description (2000 chars). Extract the FULL text without \
-truncation. Save each item to save_record with the item's link URL as source_url.\
+truncation. Save each item to save_record with the item's link URL as core_id.\
 """
 
 

@@ -27,7 +27,7 @@ title and date for every document item from the LISTING PAGES directly. There ar
 on the listing page — do NOT navigate to each detail page. Use the a.next button to \
 paginate through ALL pages — it links to ?p=N+1. The last page has no Next button \
 (it is disabled). Save each item to save_record with the item's link URL \
-(urljoin of page URL and href) as source_url. This is a large scrape — \
+(urljoin of page URL and href) as core_id. This is a large scrape — \
 persist records as you go (save_record per item, not batch at the end).\
 """
 

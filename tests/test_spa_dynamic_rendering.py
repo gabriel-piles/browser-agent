@@ -19,7 +19,7 @@ Navigate to http://127.0.0.1:{PORT}/?scenario=spa_dynamic and extract the title 
 and date for every document item (10 items). The items are rendered dynamically \
 via JavaScript after a 1500ms delay — wait for the page to fully load and the \
 items to appear in the DOM before extracting. Save each item to save_record with \
-the item's link URL as source_url.\
+the item's link URL as core_id.\
 """
 
 

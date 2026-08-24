@@ -25,7 +25,7 @@ class SyncPlanRow(BaseModel):
 
     action: SyncAction
     language: str = Field(description="ISO language code; ``default_language`` when the mapping does not pin one.")
-    source_url: str = Field(description="Original source URL — used as the natural key when no explicit key is set.")
+    core_id: str = Field(description="Row core_id — natural key when no explicit key is set.")
     title: str = Field(description="Entity title; becomes ``title`` on Uwazi.")
     metadata: dict = Field(default_factory=dict, description="Property name -> value dict, post-thesaurus-substitution.")
     pdf_path: str | None = Field(default=None, description="Local PDF path, if any, to upload as the primary file.")

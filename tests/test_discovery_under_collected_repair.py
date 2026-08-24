@@ -21,7 +21,7 @@ values. There is a <select> dropdown with categories, but one category is \
 hidden behind a "More filters" button — click the button to reveal all \
 options. There are 4 categories with 5 items each (20 total). Iterate ALL \
 filter values. Save each item to save_record with the item's link URL as \
-source_url and include the category.\
+core_id and include the category.\
 """
 
 

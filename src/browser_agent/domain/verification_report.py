@@ -65,5 +65,5 @@ class VerificationReport(BaseModel):
     )
     html_missing_records: list[str] = Field(
         default_factory=list,
-        description="source_urls of records that downloaded a document but missed the required HTML capture (core_html_filename empty or the referenced file missing from downloads/).",
+        description="core_ids of records that downloaded a document but missed the required HTML capture (core_html_filename empty or the referenced file missing from downloads/).",
     )

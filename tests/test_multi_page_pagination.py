@@ -4,7 +4,7 @@ Scenario: 5 pages with 10 items each (50 total). Each page has a
 Next button linking to ?page=N+1. Last page has no Next button.
 
 Tests: pagination loop, link collection across pages, save_record
-with unique source_url per item, termination on missing Next button.
+with unique core_id per item, termination on missing Next button.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ Navigate to http://127.0.0.1:{PORT}/?scenario=multi_page_pagination and extract 
 title and date for every document item across ALL pages. There are 5 pages with \
 10 items each (50 total). Use the a.next button to paginate — it links to \
 ?page=N+1. The last page has no Next button. Save each item to save_record with \
-the item's link URL (urljoin of the page URL and the href) as the source_url.\
+the item's link URL (urljoin of the page URL and the href) as the core_id.\
 """
 
 

@@ -17,7 +17,7 @@ PROMPT = """\
 Navigate to http://127.0.0.1:{PORT}/?scenario=connection_reset and extract the \
 title and date for every document item (10 items). Some requests may get a \
 connection reset — retry failed requests. Save each item to save_record with \
-the item's link URL as source_url.\
+the item's link URL as core_id.\
 """
 
 

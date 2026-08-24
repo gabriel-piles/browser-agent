@@ -63,7 +63,7 @@ def _run_check(deps: VerificationAgentDeps, request: PdfCheckRequest) -> PdfChec
 
 
 def _query_db(db_path: Path, candidate_url: str) -> tuple[str, dict[str, Any], str] | None:
-    """Return ``(source_url, data_dict, match_mode)`` for the matching row.
+    """Return ``(core_id, data_dict, match_mode)`` for the matching row.
 
     Tries normalized equality first, then a path/basename suffix match,
     so a candidate recorded under a different URL form is reconciled
@@ -73,16 +73,16 @@ def _query_db(db_path: Path, candidate_url: str) -> tuple[str, dict[str, Any], s
     conn = sqlite3.connect(uri, uri=True)
     try:
         rows = conn.execute(
-            "SELECT source_url, data FROM metadata",
+            "SELECT core_id, data FROM metadata",
         ).fetchall()
     finally:
         conn.close()
-    for source_url, data_json in rows:
+    for core_id, data_json in rows:
         data = parse_row_data(data_json)
         stored = data.get("core_file_url", "") or ""
         match = PdfUrlMatcher.match(candidate_url, stored)
         if match.matched:
-            return source_url, data, match.mode
+            return core_id, data, match.mode
     return None
 
 
@@ -92,7 +92,7 @@ def _check_file(
     row: tuple[str, dict[str, Any], str],
 ) -> PdfCheckResult:
     """Check the downloaded file for the DB row and return the result."""
-    source_url, data, match_mode = row
+    core_id, data, match_mode = row
     db_filename = data.get("core_pdf_filename", "") or ""
     norm_name, orig_name = PdfUrlMatcher.expected_filenames_for(request.url)
     file_path, used_name = _resolve_file(deps, norm_name, orig_name, db_filename)
@@ -100,7 +100,7 @@ def _check_file(
         return PdfCheckResult(
             url=request.url,
             found_in_db=True,
-            db_source_url=source_url,
+            db_core_id=core_id,
             pdf_filename=db_filename,
             file_exists=False,
             verdict="file_not_downloaded",
@@ -114,7 +114,7 @@ def _check_file(
     return PdfCheckResult(
         url=request.url,
         found_in_db=True,
-        db_source_url=source_url,
+        db_core_id=core_id,
         pdf_filename=used_name,
         file_exists=True,
         file_size_bytes=integrity.file_size,
@@ -165,7 +165,7 @@ def _format_result(result: PdfCheckResult, deps: VerificationAgentDeps) -> str:
     lines = [f"# PDF Check: {result.verdict}"]
     lines.append(f"# URL: {result.url}")
     lines.append(f"# found_in_db: {result.found_in_db}")
-    lines.append(f"# db_source_url: {result.db_source_url}")
+    lines.append(f"# db_core_id: {result.db_core_id}")
     lines.append(f"# pdf_filename: {result.pdf_filename}")
     lines.append(f"# file_exists: {result.file_exists}")
     lines.append(f"# file_size: {result.file_size_bytes} bytes")

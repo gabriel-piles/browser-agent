@@ -34,7 +34,7 @@ _THESAURUS_TYPES = (FieldType.SELECT, FieldType.MULTI_SELECT, FieldType.RELATION
 _ENTITY_BATCH = 200
 
 
-def resolve_pdf_filename(record: dict, source_url: str, downloads_dir: Path | None) -> str | None:
+def resolve_pdf_filename(record: dict, core_id: str, downloads_dir: Path | None) -> str | None:
     """Return the absolute local PDF path for one record, or ``None``.
 
     Non-PDF documents (``.doc``/``.docx``/``.rtf``/…) return ``None`` —
@@ -95,7 +95,7 @@ def resolve_supporting_filename(record: dict, raw_filename: str, downloads_dir: 
     return None
 
 
-def resolve_key_value(record: dict, source_url: str, identity, mapping: UwaziMapping) -> str | None:
+def resolve_key_value(record: dict, core_id: str, identity, mapping: UwaziMapping) -> str | None:
     """Return the per-row key value from ``identity.key_field``.
 
     The identity check is always: read ``key_field`` from the record and
@@ -104,7 +104,7 @@ def resolve_key_value(record: dict, source_url: str, identity, mapping: UwaziMap
     fallback key so a row can still be matched against Uwazi.
     """
     value = _key_from_record(record, identity.key_field)
-    return value if value is not None else source_url
+    return value if value is not None else core_id
 
 
 def _key_from_record(record: dict, key_field: str | None) -> str | None:
@@ -115,19 +115,19 @@ def _key_from_record(record: dict, key_field: str | None) -> str | None:
     return None if value is None else str(value)
 
 
-def _title_of_record(record: dict, source_url: str, mapping: UwaziMapping) -> str:
+def _title_of_record(record: dict, core_id: str, mapping: UwaziMapping) -> str:
     """Return the entity title for one record, falling back to the source URL."""
     title_prop = mapping.title_property()
     if title_prop is not None and title_prop.source:
         title = resolve_source_value(record, title_prop.source)
         if title:
             return str(title)
-    return source_url
+    return core_id
 
 
 def _row_action(
     record,
-    source_url,
+    core_id,
     mapping,
     entities_by_key,
     registry_entities_by_key=None,
@@ -150,7 +150,7 @@ def _row_action(
         return SyncAction.SKIP, "no_file_url"
     if not mapping.identity.key_property:
         return SyncAction.CREATE, None
-    key_value = resolve_key_value(record, source_url, mapping.identity, mapping)
+    key_value = resolve_key_value(record, core_id, mapping.identity, mapping)
     if not key_value:
         return SyncAction.CREATE, None
     key = str(key_value).strip()
@@ -254,7 +254,7 @@ def _fetch_all_entities_by_template(client: UwaziClient, template_name: str, lan
 
 def _build_plan_row(
     record,
-    source_url,
+    core_id,
     mapping,
     entities_by_key,
     transformer,
@@ -269,25 +269,25 @@ def _build_plan_row(
 ) -> SyncPlanRow:
     """Transform one record into one :class:`SyncPlanRow`."""
     raw_filename = record.get("core_pdf_filename") or ""
-    pdf_path = resolve_pdf_filename(record, source_url, downloads_dir)
+    pdf_path = resolve_pdf_filename(record, core_id, downloads_dir)
     record["core_pdf_filename"] = pdf_path
     html_path = resolve_html_filename(record, downloads_dir)
     supporting_path = resolve_supporting_filename(record, raw_filename, downloads_dir)
     action, skip_reason = _row_action(
         record,
-        source_url,
+        core_id,
         mapping,
         entities_by_key,
         registry_entities_by_key=registry_entities_by_key,
         primary_entities_by_key=primary_entities_by_key,
     )
-    key_value = resolve_key_value(record, source_url, mapping.identity, mapping)
+    key_value = resolve_key_value(record, core_id, mapping.identity, mapping)
     registry_metadata: dict = {}
     primary_shared_id: str | None = None
     if mapping.registry_template and registry_transformer is not None and action is not SyncAction.SKIP:
         registry_metadata = registry_transformer.build_registry_metadata_for_row(
             record,
-            source_url,
+            core_id,
             mapping,
             thesaurus_lookup_by_property,
             thesaurus_parents,
@@ -298,11 +298,11 @@ def _build_plan_row(
     return SyncPlanRow(
         action=action,
         language=mapping.default_language,
-        source_url=source_url,
-        title=_title_of_record(record, source_url, mapping),
+        core_id=core_id,
+        title=_title_of_record(record, core_id, mapping),
         metadata=transformer.build_for_row(
             record,
-            source_url,
+            core_id,
             mapping,
             thesaurus_lookup_by_property,
             thesaurus_parents,
@@ -354,7 +354,7 @@ def _plan_rows(records, mapping, client, thesaurus_lookup_by_property, downloads
     return tuple(
         _build_plan_row(
             parse_row_data(raw_data),
-            source_url,
+            core_id,
             mapping,
             entities_by_key,
             transformer,
@@ -366,7 +366,7 @@ def _plan_rows(records, mapping, client, thesaurus_lookup_by_property, downloads
             primary_entities_by_key=primary_entities_by_key,
             registry_transformer=registry_transformer,
         )
-        for source_url, _task_slug, raw_data in records
+        for core_id, _task_slug, raw_data in records
     )
 
 

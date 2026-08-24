@@ -46,21 +46,21 @@ class RefreshAssessmentBuilder:
             return []
 
     def _failed_documents(self) -> list[FailedDocument]:
-        rows = self._query("SELECT source_url, task_slug, data FROM metadata")
+        rows = self._query("SELECT core_id, task_slug, data FROM metadata")
         docs: list[FailedDocument] = []
-        for source_url, task_slug, raw in rows:
-            doc = self._gap(source_url, task_slug, parse_row_data(raw))
+        for core_id, task_slug, raw in rows:
+            doc = self._gap(core_id, task_slug, parse_row_data(raw))
             if doc is not None:
                 docs.append(doc)
         return docs
 
-    def _gap(self, source_url: str, task_slug: str, data: dict[str, object]) -> FailedDocument | None:
+    def _gap(self, core_id: str, task_slug: str, data: dict[str, object]) -> FailedDocument | None:
         """Mirror rule-8a retry semantics; ``None`` when nothing to retry."""
         reason = self._gap_reason(data)
         if reason == "":
             return None
         return FailedDocument(
-            source_url=source_url,
+            core_id=core_id,
             file_url=str(data.get("core_file_url", "")),
             download_status=str(data.get("core_download_status", "")),
             download_error=str(data.get("core_download_error", "")),

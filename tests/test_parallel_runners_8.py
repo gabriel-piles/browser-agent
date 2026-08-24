@@ -18,7 +18,7 @@ from tests.conftest import (
 PROMPT = """\
 Navigate to http://127.0.0.1:{PORT}/?scenario=concurrency and extract the title \
 and date for every document item (50 items). Save each item to save_record \
-with the item's link URL as source_url. Use parallel processing.\
+with the item's link URL as core_id. Use parallel processing.\
 """
 
 
@@ -32,6 +32,6 @@ def test_parallel_runners_8(fixture_server):
     if not db_path.exists():
         return
     conn = sqlite3.connect(str(db_path))
-    rows = conn.execute("SELECT source_url, COUNT(*) FROM metadata GROUP BY source_url HAVING COUNT(*) > 1").fetchall()
+    rows = conn.execute("SELECT core_id, COUNT(*) FROM metadata GROUP BY core_id HAVING COUNT(*) > 1").fetchall()
     conn.close()
-    assert len(rows) == 0, f"Found {len(rows)} duplicate source_urls"
+    assert len(rows) == 0, f"Found {len(rows)} duplicate core_ids"

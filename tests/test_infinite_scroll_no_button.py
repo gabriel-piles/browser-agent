@@ -18,7 +18,7 @@ Navigate to http://127.0.0.1:{PORT}/?scenario=scroll_load_no_button and extract 
 the title and date for every document item (30 items total). Items are loaded \
 dynamically by scrolling to the bottom of the page — there is NO "Load more" \
 button. Scroll down repeatedly until no new items appear. Save each item to \
-save_record with the item's link URL as source_url.\
+save_record with the item's link URL as core_id.\
 """
 
 

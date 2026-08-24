@@ -24,7 +24,7 @@ class ProbeResult(BaseModel):
 
     source_url: str = Field(description="The source_url under verification.")
     verdict: ProbeVerdict = Field(description="The deterministic verdict for this URL.")
-    matched_row_source_url: str = Field(
+    matched_row_core_id: str = Field(
         default="",
-        description="The metadata.db row source_url that matched, or '' when none.",
+        description="The metadata.db row core_id that matched, or '' when none.",
     )

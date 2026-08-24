@@ -79,7 +79,7 @@ class ScriptBuilderUseCase:
         parts.append(
             "**Idempotency reminder**: skip downloads whose target file already exists; "
             "only process discovered_links rows with status='discovered'; "
-            "save_record upserts by source_url — never error on already-existing data."
+            "save_record upserts by core_id — never error on already-existing data."
         )
         return "\n".join(parts)
 

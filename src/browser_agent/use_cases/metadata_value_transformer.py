@@ -31,7 +31,7 @@ _DEFAULT_DATE_FORMATS: tuple[str, ...] = ("%Y-%m-%d", "%Y/%m/%d", "%d-%m-%Y", "%
 
 def build_metadata_for_row(
     record: dict,
-    source_url: str,
+    core_id: str,
     mapping: UwaziMapping,
     thesaurus_lookup_by_property: dict[str, dict[str, str | None]],
     thesaurus_parents: dict[str, dict[str, str | None]] | None = None,
@@ -40,7 +40,7 @@ def build_metadata_for_row(
 ) -> dict:
     """Build the post-transform metadata dict for one record (module-level convenience)."""
     return MetadataValueTransformer(template=template).build_for_row(
-        record, source_url, mapping, thesaurus_lookup_by_property, thesaurus_parents, relationship_title_to_id
+        record, core_id, mapping, thesaurus_lookup_by_property, thesaurus_parents, relationship_title_to_id
     )
 
 
@@ -54,7 +54,7 @@ class MetadataValueTransformer:
     def build_for_row(
         self,
         record: dict,
-        source_url: str,
+        core_id: str,
         mapping: UwaziMapping,
         thesaurus_lookup_by_property: dict[str, dict[str, str | None]],
         thesaurus_parents: dict[str, dict[str, str | None]] | None = None,
@@ -84,7 +84,7 @@ class MetadataValueTransformer:
             out[prop.name] = self._property_value(
                 record,
                 prop,
-                source_url,
+                core_id,
                 thesaurus_parents,
                 relationship_title_to_id,
                 thesaurus_lookup_by_property,
@@ -94,7 +94,7 @@ class MetadataValueTransformer:
     def build_registry_metadata_for_row(
         self,
         record: dict,
-        source_url: str,
+        core_id: str,
         mapping: UwaziMapping,
         thesaurus_lookup_by_property: dict[str, dict[str, str | None]],
         thesaurus_parents: dict[str, dict[str, str | None]] | None = None,
@@ -130,7 +130,7 @@ class MetadataValueTransformer:
             out[prop.name] = self._property_value(
                 record,
                 prop,
-                source_url,
+                core_id,
                 thesaurus_parents,
                 relationship_title_to_id,
                 thesaurus_lookup_by_property,
@@ -170,7 +170,7 @@ class MetadataValueTransformer:
         self,
         record,
         prop,
-        source_url,
+        core_id,
         thesaurus_parents,
         relationship_title_to_id,
         thesaurus_lookup_by_property=None,

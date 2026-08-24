@@ -25,7 +25,7 @@ class RowIssueDetector:
     def detect(
         self,
         record: dict,
-        source_url: str,
+        core_id: str,
         mapping: UwaziMapping,
         template: UwaziTemplate,
         thesaurus_lookup_by_property: dict,
@@ -36,8 +36,8 @@ class RowIssueDetector:
             issue
             for issue in (
                 self._title_issue(record, mapping),
-                self._key_issue(record, source_url, mapping),
-                self._required_issue(record, source_url, mapping, template, thesaurus_lookup_by_property, registry_template),
+                self._key_issue(record, core_id, mapping),
+                self._required_issue(record, core_id, mapping, template, thesaurus_lookup_by_property, registry_template),
                 self._pdf_issue(record, mapping),
             )
             if issue is not None
@@ -49,9 +49,9 @@ class RowIssueDetector:
             return None
         return "empty title (no source field maps to the Uwazi title property)"
 
-    def _key_issue(self, record: dict, source_url: str, mapping: UwaziMapping) -> str | None:
+    def _key_issue(self, record: dict, core_id: str, mapping: UwaziMapping) -> str | None:
         """Return the key issue for ``record``, or ``None`` when the key resolves."""
-        key_value = resolve_key_value(record, source_url, mapping.identity, mapping)
+        key_value = resolve_key_value(record, core_id, mapping.identity, mapping)
         if key_value and str(key_value).strip():
             return None
         return "empty key_value (the entity cannot be matched on Uwazi)"
@@ -59,18 +59,18 @@ class RowIssueDetector:
     def _required_issue(
         self,
         record: dict,
-        source_url: str,
+        core_id: str,
         mapping: UwaziMapping,
         template: UwaziTemplate,
         thesaurus_lookup_by_property: dict,
         registry_template: UwaziTemplate | None = None,
     ) -> str | None:
         """Return the required-properties issue, or ``None`` when every required is filled."""
-        metadata = build_metadata_for_row(record, source_url, mapping, thesaurus_lookup_by_property, template=template)
+        metadata = build_metadata_for_row(record, core_id, mapping, thesaurus_lookup_by_property, template=template)
         missing = [n for n in template.required_property_names() if not self._entities_fetcher.has_value(metadata.get(n))]
         if missing and mapping.registry_template and registry_template is not None:
             registry_metadata = MetadataValueTransformer(template=registry_template).build_registry_metadata_for_row(
-                record, source_url, mapping, thesaurus_lookup_by_property
+                record, core_id, mapping, thesaurus_lookup_by_property
             )
             missing = [n for n in missing if not self._entities_fetcher.has_value(registry_metadata.get(n))]
         if not missing:

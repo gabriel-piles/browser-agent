@@ -18,7 +18,7 @@ PROMPT = """\
 Navigate to http://127.0.0.1:{PORT}/?scenario=mixed_content and extract the \
 title for every document item (10 items). Some items link to PDFs and some to \
 HTML pages. Download all PDF files (5 PDFs). For HTML links, just save the \
-metadata. Save each item to save_record with the item's link URL as source_url.\
+metadata. Save each item to save_record with the item's link URL as core_id.\
 """
 
 

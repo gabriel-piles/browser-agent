@@ -22,7 +22,7 @@ Navigate to http://127.0.0.1:{PORT}/?scenario=missing_fields and extract the \
 title, date, and author for every document item (10 items). Some items may not \
 have an author — for those, set author to null or empty string. Do NOT crash on \
 missing elements. Save each item to save_record with the item's link URL as \
-source_url.\
+core_id.\
 """
 
 

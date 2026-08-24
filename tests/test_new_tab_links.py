@@ -17,7 +17,7 @@ PROMPT = """\
 Navigate to http://127.0.0.1:{PORT}/?scenario=new_tab and extract the title \
 and date for every document item (10 items). Each link has target="_blank" — \
 handle this by using the href directly or removing the target attribute before \
-clicking. Save each item to save_record with the item's link URL as source_url.\
+clicking. Save each item to save_record with the item's link URL as core_id.\
 """
 
 

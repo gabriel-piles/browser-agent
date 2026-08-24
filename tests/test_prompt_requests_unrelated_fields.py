@@ -17,7 +17,7 @@ PROMPT = """\
 Navigate to http://127.0.0.1:{PORT}/?scenario=single_page_list and extract the \
 title, date, author, and ISBN for every document item (10 items). The ISBN \
 field may not exist on the page — set it to null if not found. Save each item \
-to save_record with the item's link URL as source_url.\
+to save_record with the item's link URL as core_id.\
 """
 
 

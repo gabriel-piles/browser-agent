@@ -20,7 +20,7 @@ title and date for every document item from the listing page. There is a \
 search form with a text input (id='search') and submit button. The page \
 shows 10 items by default (empty search). Each item has an h3 a link and a \
 span.date. Extract the title and date from the listing page. Save each item \
-to save_record with the item's link URL as source_url. Use HTTP (not HTTPS).\
+to save_record with the item's link URL as core_id. Use HTTP (not HTTPS).\
 """
 
 

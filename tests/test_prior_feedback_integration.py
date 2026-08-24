@@ -17,7 +17,7 @@ from browser_agent.configuration import RUNS_PATH
 PROMPT = """\
 Navigate to http://127.0.0.1:{PORT}/?scenario=single_page_list and extract the \
 title and date for every document item (10 items). Save each item to \
-save_record with the item's link URL as source_url.\
+save_record with the item's link URL as core_id.\
 """
 
 _PRIOR_REPORT = """# Prior Run Report

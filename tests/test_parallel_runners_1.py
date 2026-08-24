@@ -16,7 +16,7 @@ from tests.conftest import (
 PROMPT = """\
 Navigate to http://127.0.0.1:{PORT}/?scenario=concurrency and extract the title \
 and date for every document item (50 items). Save each item to save_record \
-with the item's link URL as source_url.\
+with the item's link URL as core_id.\
 """
 
 

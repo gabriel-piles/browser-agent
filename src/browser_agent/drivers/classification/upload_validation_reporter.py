@@ -31,8 +31,8 @@ class UploadValidationReporter:
             print("  no issues found in new entities")
             return
         print(f"  {len(issues)} new row(s) have issues:")
-        for source_url, title, row_issues in issues:
-            line = f"    - {title!r} ({source_url})" if title else f"    - ({source_url})"
+        for core_id, title, row_issues in issues:
+            line = f"    - {title!r} ({core_id})" if title else f"    - ({core_id})"
             print(line)
             for issue in row_issues:
                 print(f"        * {issue}")

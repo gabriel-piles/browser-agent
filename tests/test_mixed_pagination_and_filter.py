@@ -19,7 +19,7 @@ title, category, and date for every document item. There are 2 categories in a \
 <select> dropdown: reports and resolutions. Each category has 3 pages with 5 \
 items per page (30 total). Iterate both categories, paginating within each. \
 Changing the filter resets to page 1. Save each item to save_record with the \
-item's link URL as source_url and include the category.\
+item's link URL as core_id and include the category.\
 """
 
 

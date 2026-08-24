@@ -16,7 +16,7 @@ from tests.conftest import (
 PROMPT = """\
 Navigate to http://127.0.0.1:{PORT}/?scenario=single_item and extract the title \
 and date for the document item on the page (1 item). Save it to save_record \
-with the item's link URL as source_url. Do NOT paginate.\
+with the item's link URL as core_id. Do NOT paginate.\
 """
 
 

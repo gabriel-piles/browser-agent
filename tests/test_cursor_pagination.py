@@ -20,7 +20,7 @@ title and date for every document item across ALL pages (30 items). This site \
 uses cursor-based pagination: the URL has ?after=<last_id>. The page shows 10 \
 items and a link with the next cursor (a.next-cursor). Follow the cursor links \
 to paginate through all 3 pages. Save each item to save_record with the item's \
-link URL as source_url.\
+link URL as core_id.\
 """
 
 

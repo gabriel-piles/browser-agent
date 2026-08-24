@@ -19,7 +19,7 @@ Navigate to http://127.0.0.1:{PORT}/?scenario=shadow_dom and extract the title \
 and date for every document item (10 items). The items are rendered inside a \
 Shadow DOM — use shadow-piercing selectors or shadowRoot.querySelector to \
 access them. Save each item to save_record with the item's link URL as \
-source_url.\
+core_id.\
 """
 
 

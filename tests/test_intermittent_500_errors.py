@@ -18,7 +18,7 @@ Navigate to http://127.0.0.1:{PORT}/?scenario=intermittent_500 and extract the \
 title and date for every document item across ALL pages (50 items, 5 pages). \
 Some pages may return HTTP 500 on the first request — retry failed pages. Use \
 the a.next button to paginate. Save each item to save_record with the item's \
-link URL as source_url.\
+link URL as core_id.\
 """
 
 

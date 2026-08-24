@@ -18,7 +18,7 @@ Navigate to http://127.0.0.1:{PORT}/?scenario=rate_limit_429 and extract the \
 title and date for every document item across ALL pages (30 items, 3 pages). \
 The server may return HTTP 429 with a Retry-After header — wait and retry. Use \
 the a.next button to paginate. Save each item to save_record with the item's \
-link URL as source_url.\
+link URL as core_id.\
 """
 
 

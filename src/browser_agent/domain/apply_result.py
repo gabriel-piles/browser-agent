@@ -23,9 +23,9 @@ class ApplyResult(BaseModel):
     )
     skip_reasons: tuple[tuple[str, str, str], ...] = Field(
         default_factory=tuple,
-        description="(language, source_url, reason) tuples for rows the apply pipeline refused.",
+        description="(language, core_id, reason) tuples for rows the apply pipeline refused.",
     )
     error_rows: tuple[tuple[str, str, str], ...] = Field(
         default_factory=tuple,
-        description="(language, source_url, message) tuples for rows that failed mid-flight.",
+        description="(language, core_id, message) tuples for rows that failed mid-flight.",
     )

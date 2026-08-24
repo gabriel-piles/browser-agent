@@ -79,7 +79,7 @@ class ReconcilerReportWriter:
         return header + ("\n" + "\n".join(rows) if rows else "")
 
     def _table_row(self, r: ReconciledPdf) -> str:
-        url = _short(r.file_url or r.source_url)
+        url = _short(r.file_url or r.core_id)
         dl_status = r.download_status or "-"
         return (
             f"| {url} | {r.verdict} | {r.match_mode} | "

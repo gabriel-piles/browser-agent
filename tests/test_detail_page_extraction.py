@@ -22,7 +22,7 @@ for every document (10 items). The listing page has 10 items, each linking to a 
 detail page at /doc/N. Navigate to EACH detail page and extract the title, date, \
 author, and description. Each detail page also has a PDF link — download every \
 PDF (5 PDFs available). Save each item to save_record with the detail page URL \
-as source_url and include all extracted fields in the data.\
+as core_id and include all extracted fields in the data.\
 """
 
 

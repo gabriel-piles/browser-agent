@@ -21,7 +21,7 @@ Navigate to http://127.0.0.1:{PORT}/?scenario=nested_fields and extract the \
 title, author, date, and tags for every document item (10 items). Each item has \
 a title, a span.author, a span.date, and a span.tags containing comma-separated \
 tags. Store the tags as a list in the save_record data. Save each item to \
-save_record with the item's link URL as source_url.\
+save_record with the item's link URL as core_id.\
 """
 
 

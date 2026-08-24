@@ -21,7 +21,7 @@ Navigate to http://127.0.0.1:{PORT}/?scenario=cloudflare_protection and extract 
 the title and date for every document item (10 items). The page may show a \
 "Checking your browser" challenge before redirecting to the real content — \
 wait for the page to fully load and the items to appear before extracting. \
-Save each item to save_record with the item's link URL as source_url.\
+Save each item to save_record with the item's link URL as core_id.\
 """
 
 

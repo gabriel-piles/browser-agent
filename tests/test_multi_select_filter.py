@@ -20,7 +20,7 @@ title, category, and year for every document item. There are TWO <select> \
 dropdowns: "category" (3 values: reports, resolutions, measures) and "year" \
 (3 values: 2022, 2023, 2024). Iterate ALL 9 combinations of both filters (the \
 Cartesian product). Each combination has 5 items (45 total). Save each item to \
-save_record with the item's link URL as source_url and include the category \
+save_record with the item's link URL as core_id and include the category \
 and year in the data.\
 """
 

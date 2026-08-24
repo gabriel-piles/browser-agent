@@ -40,10 +40,10 @@ class ApplyResultPrinter:
         if not skip_rows:
             return
         print(f"  skips: {len(skip_rows)}")
-        for language, source_url, reason in skip_rows:
-            print(f"    - {language} {source_url}: {reason}")
+        for language, core_id, reason in skip_rows:
+            print(f"    - {language} {core_id}: {reason}")
         counts: dict[str, int] = {}
-        for _language, _source_url, reason in skip_rows:
+        for _language, _core_id, reason in skip_rows:
             counts[reason] = counts.get(reason, 0) + 1
         summary = ", ".join(f"{reason}={n}" for reason, n in sorted(counts.items()))
         print(f"  skip reasons: {summary}")
@@ -54,5 +54,5 @@ class ApplyResultPrinter:
         if not error_rows:
             return
         print(f"  errors: {len(error_rows)}")
-        for language, source_url, message in error_rows:
-            print(f"    - {language} {source_url}: {message}")
+        for language, core_id, message in error_rows:
+            print(f"    - {language} {core_id}: {message}")

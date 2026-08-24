@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 class FailedDocument(BaseModel):
     """A retryable download gap surfaced by a refresh pass."""
 
-    source_url: str
+    core_id: str
     file_url: str = ""
     download_status: str = ""
     download_error: str = ""

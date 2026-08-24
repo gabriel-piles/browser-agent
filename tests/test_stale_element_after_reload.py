@@ -19,7 +19,7 @@ Navigate to http://127.0.0.1:{PORT}/?scenario=stale_element and extract the \
 title and date for every document item (10 items). The page re-renders its \
 item list 2 seconds after loading — wait for the DOM to settle before \
 extracting. Save each item to save_record with the item's link URL as \
-source_url.\
+core_id.\
 """
 
 

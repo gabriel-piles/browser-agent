@@ -20,7 +20,7 @@ title and date for every document item across ALL pages. There are 5 pages with 
 10 items each (50 total). Use the a.next button to paginate. On the LAST page, \
 the Next button is present but has class="next disabled" and NO href — do NOT \
 click it, stop pagination there. Save each item to save_record with the item's \
-link URL as source_url.\
+link URL as core_id.\
 """
 
 

@@ -50,7 +50,7 @@ class ProbeVerificationReportWriter:
     def _row(self, result: ProbeResult) -> str:
         """Return one markdown table row for a single probe result."""
         url = _short(result.source_url)
-        matched = _inline(result.matched_row_source_url)
+        matched = _inline(result.matched_row_core_id)
         return f"| {url} | {result.verdict.value} | {matched} |"
 
 

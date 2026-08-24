@@ -54,7 +54,7 @@ def _missing_html_records(
     task_slug: str,
     require_html_files: bool,
 ) -> list[str]:
-    """Return source_urls whose downloaded document lacks the required HTML.
+    """Return core_ids whose downloaded document lacks the required HTML.
 
     Deterministic, no-LLM gate on the ``metadata`` table. For every row of
     this subtask that downloaded a document file on disk:
@@ -74,7 +74,7 @@ def _missing_html_records(
     except sqlite3.OperationalError:
         return []
     missing: list[str] = []
-    for source_url, _slug, data_json in rows:
+    for core_id, _slug, data_json in rows:
         data = parse_row_data(data_json)
         if not (data.get("core_pdf_filename") or "").strip():
             continue
@@ -84,12 +84,12 @@ def _missing_html_records(
                 problem = _html_content_problem(data, downloads_path)
                 if problem is None:
                     continue
-                missing.append(f"{source_url} ({problem})")
+                missing.append(f"{core_id} ({problem})")
                 continue
         if not require_html_files and (data.get("core_source_html") or "").strip():
             continue
         missing.append(
-            f"{source_url} (downloaded document has no captured HTML; set core_html_filename to a save_page_html result)"
+            f"{core_id} (downloaded document has no captured HTML; set core_html_filename to a save_page_html result)"
         )
     return missing
 

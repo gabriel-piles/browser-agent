@@ -18,7 +18,7 @@ PROMPT = """\
 Navigate to http://127.0.0.1:{PORT}/?scenario=single_page_list and extract the \
 title and date for every document item (10 items). Each item is in a div.item \
 with an h3 a link and a span.date. Save each item to save_record with the \
-item's link URL as source_url.\
+item's link URL as core_id.\
 """
 
 
