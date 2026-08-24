@@ -28,10 +28,11 @@ def build_llm() -> LlmPort:
 
 
 def _check_provider_keys(active: str) -> None:
-    """Warn about every missing key; break only if the active key is absent."""
-    for provider, env_var in LLM_PROVIDER_ENV_KEYS.items():
-        if os.environ.get(env_var):
-            continue
-        logger.warning("Missing API key {env_var} for LLM provider '{provider}'", env_var=env_var, provider=provider)
-        if provider == active:
-            raise RuntimeError(f"{env_var} must be set in the environment or .env file (LLM_PROVIDER is '{active}')")
+    """Raise only when the active provider lacks its API key.
+
+    Non-active providers are ignored; their adapters fail on their own if
+    ever selected, so warning about them up front is noise.
+    """
+    env_var = LLM_PROVIDER_ENV_KEYS.get(active)
+    if env_var and not os.environ.get(env_var):
+        raise RuntimeError(f"{env_var} must be set in the environment or .env file (LLM_PROVIDER is '{active}')")
