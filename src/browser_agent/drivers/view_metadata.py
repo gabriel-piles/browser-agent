@@ -61,7 +61,6 @@ def render_card(record: dict, width: int = 64) -> str:
         "core_id",
         "task_slug",
         "scraped_at",
-        "core_pdf_id",
         "core_pdf_name",
         "core_pdf_type",
         "core_file_url",

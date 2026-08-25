@@ -729,8 +729,8 @@ does inline extraction only (no ``load_discovered_links()`` call).
 13. PDF file naming — the download helpers derive the on-disk filename
     from the URL (``pdf_<sha1(canonical_url)[:12]>.pdf`` via
     ``pdf_id_for``; ``doc_<...><ext>`` via ``doc_id_for``); you do NOT
-    name files. Use ``pdf_id_for(file_url)`` ONCE at discovery and reuse
-    it as the DB key, the stored ``core_pdf_id``, and the filename stem —
+    Use ``pdf_id_for(file_url)`` ONCE at discovery and reuse
+    it as the DB key and the filename stem —
     never inline ``hashlib`` (the helper percent-canonicalizes; the
     inline hash does not). ``core_id`` MUST be content-stable, never
     a position index. Every downloaded file is one row. Store the

@@ -93,7 +93,7 @@ def save_record(core_id: str, data: dict) -> None:
     filename is derived by the download helper from the file's download
     URL (``<pdf_id_for(url)>.pdf``); read it from the helper's result
     dict (``result["saved_path"]``) and store it in ``data`` as
-    ``core_pdf_id`` / ``core_pdf_filename``. Keep the human label and
+    ``core_pdf_filename``. Keep the human label and
     type in ``core_pdf_name`` / ``core_pdf_type``. The path is a pure
     function of the canonical URL so the download helper's existence
     check means "already downloaded this URL".
