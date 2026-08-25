@@ -41,7 +41,7 @@ class UwaziMapping(BaseModel):
     )
 
     publish: bool = Field(default=False, description="Whether to publish created entities (vs leave them as drafts).")
-    upload_pdf: bool = Field(default=False, description="Whether to attach the local PDF file when one exists.")
+    upload_pdf: bool = Field(default=True, description="Whether to attach the local PDF file when one exists.")
     registry_template: str | None = Field(
         default=None, description="Name of the scraper-registry Uwazi template; None disables the registry flow."
     )

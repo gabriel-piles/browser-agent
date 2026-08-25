@@ -25,7 +25,7 @@ class LlmMappingDraft(BaseModel):
     select_filtering_name: str | None = None
     select_filtering_options: list[str] = Field(default_factory=list)
     publish: bool = False
-    upload_pdf: bool = False
+    upload_pdf: bool = True
     skipped: list[dict] = Field(default_factory=list)
 
     def to_identity(self) -> IdentityConfig:
