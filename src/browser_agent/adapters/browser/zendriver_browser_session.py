@@ -102,7 +102,7 @@ class ZendriverBrowserSession(BrowserSessionPort):
                 click_any_checkbox=False,
                 allow_reload=False,
                 interactive_pause=True,
-                interactive_timeout_seconds=120.0,
+                interactive_timeout_seconds=900.0,
                 nopecha_solve_seconds=NOPECHA_SOLVE_TIMEOUT_S if NOPECHA_ENABLED else 0.0,
             )
         )

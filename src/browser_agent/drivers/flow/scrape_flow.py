@@ -199,7 +199,7 @@ class ScrapeFlow:
                 continue
 
             if record.status == "repair_noop":
-                logger.error("subtask {id}: repair_noop — dead end", id=spec.subtask_id)
+                logger.warning("subtask {id}: repair_noop — dead end", id=spec.subtask_id)
                 decision = await self._orchestrator.decide(self._failure_summary(state, spec.subtask_id))
                 self._state_store.log_decision(decision, f"repair_noop:{spec.subtask_id}")
                 counter_before = state.plan_counter

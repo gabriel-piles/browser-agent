@@ -41,26 +41,24 @@ def record_llm_usage(agent_name: str, input_tokens: int, output_tokens: int, req
     _LLM_INPUT_TOKENS += input_tokens
     _LLM_OUTPUT_TOKENS += output_tokens
     agent_logger.bind(agent=agent_name).info(
-        "LLM   usage call={n} req={r} in_tok={i} out_tok={o} | run total in={ti} out={to} total={tt}",
+        "LLM   usage call={n} req={r} in_tok={i} out_tok={o} | run total in={ti} out={to}",
         n=_LLM_CALLS,
         r=_LLM_REQUESTS,
         i=input_tokens,
         o=output_tokens,
         ti=_LLM_INPUT_TOKENS,
         to=_LLM_OUTPUT_TOKENS,
-        tt=_LLM_INPUT_TOKENS + _LLM_OUTPUT_TOKENS,
     )
 
 
 def log_llm_total_summary() -> None:
     """Log the final cumulative real-usage block at end of run."""
     agent_logger.info(
-        "LLM   FINAL USAGE calls={c} requests={r} in_tokens={i} out_tokens={o} total_tokens={t}",
+        "LLM   FINAL USAGE calls={c} requests={r} in_tokens={i} out_tokens={o}",
         c=_LLM_CALLS,
         r=_LLM_REQUESTS,
         i=_LLM_INPUT_TOKENS,
         o=_LLM_OUTPUT_TOKENS,
-        t=_LLM_INPUT_TOKENS + _LLM_OUTPUT_TOKENS,
     )
 
 
