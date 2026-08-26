@@ -69,6 +69,7 @@ class SubtaskPipeline:
                 )
             finally:
                 await bsession.close()
+                delete_profile_dir(profile_dir)
             if result == "succeeded":
                 record.status = "succeeded"
                 return record
@@ -99,8 +100,11 @@ class SubtaskPipeline:
             record.status = "execution_failed"
             return None
         record.attempts += 1
-        exec_report = await self._run_subtask_script(subtask.subtask_id, script_path)
-        exec_report.script_path = _relativize(exec_report.script_path, self._run_path)
+        exec_report = await self._run_subtask_script(
+            subtask.subtask_id,
+            script_path,
+            filter_labels=subtask.filter_labels,
+        )
         self._state_store.write_report(subtask.subtask_id, "execution_report", exec_report)
         if exec_report.exit_code != 0:
             record.status = "execution_failed"
@@ -144,8 +148,11 @@ class SubtaskPipeline:
                 if record.status == "repair_noop":
                     return "repair_noop", last_feedback
                 continue
-
-            exec_report = await self._run_subtask_script(subtask.subtask_id, emit_result.script_path)
+            exec_report = await self._run_subtask_script(
+                subtask.subtask_id,
+                emit_result.script_path,
+                filter_labels=subtask.filter_labels,
+            )
             try:
                 exec_report.script_path = str(Path(exec_report.script_path).relative_to(self._run_path))
             except ValueError:
@@ -176,19 +183,12 @@ class SubtaskPipeline:
         record.status = last_status
         return record.status, last_feedback
 
-    async def _run_subtask_script(self, subtask_id, script_path):
-        """Run the emitted script, then reap any Chromium it left behind.
-
-        The script's Chromium (``run_path/profile``) runs in its own
-        process group, so the executor's group kill never touches it; a
-        crashed or timed-out script would otherwise orphan the window.
-        Reaping after the subprocess exits is safe: only that script's
-        browser can be using the run profile at this point.
-        """
-        from browser_agent.adapters.browser.clean_browser_launcher import kill_chromium_under
+    async def _run_subtask_script(self, subtask_id, script_path, filter_labels=None):
+        """Run the emitted script, then reap any Chromium it left behind."""
+        from browser_agent.adapters.browser.clean_browser_launcher import delete_profile_dir, kill_chromium_under
 
         try:
-            return await self._executor.run(subtask_id, script_path)
+            return await self._executor.run(subtask_id, script_path, filter_labels=filter_labels)
         finally:
             kill_chromium_under(self._run_path / "profile")
 
@@ -200,11 +200,19 @@ class SubtaskPipeline:
 
     async def _lint_repair_loop(self, subtask, script, builder, max_repairs):
         for _ in range(max_repairs):
-            findings = [f for f in self._linter.lint(script.python_code, kind=subtask.kind) if f.severity == "error"]
+            findings = [
+                f
+                for f in self._linter.lint(script.python_code, kind=subtask.kind, filter_labels=subtask.filter_labels)
+                if f.severity == "error"
+            ]
             if not findings:
                 return script, []
             script = await builder.repair(format_lint_repair(findings))
-        findings = [f for f in self._linter.lint(script.python_code, kind=subtask.kind) if f.severity == "error"]
+        findings = [
+            f
+            for f in self._linter.lint(script.python_code, kind=subtask.kind, filter_labels=subtask.filter_labels)
+            if f.severity == "error"
+        ]
         return script, findings
 
     def _emit(self, subtask, script, record, state):

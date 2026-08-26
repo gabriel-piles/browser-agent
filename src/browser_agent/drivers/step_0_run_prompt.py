@@ -66,7 +66,7 @@ class GenerateScriptDriver:
         # (matching both ``profile`` and ``profile_builder`` dirs under the run
         # path) so this run's planner and subtask sessions start clean instead
         # of handing off to a stale instance holding the profile lock.
-        from browser_agent.adapters.browser.clean_browser_launcher import kill_chromium_under
+        from browser_agent.adapters.browser.clean_browser_launcher import delete_profile_dir, kill_chromium_under
 
         kill_chromium_under(run_path)
         ScriptToolsCopier().copy(run_path)
@@ -177,6 +177,9 @@ class GenerateScriptDriver:
         finally:
             await heartbeat.stop()
             kill_chromium_under(run_path)
+            delete_profile_dir(run_path / "profile")
+            delete_profile_dir(run_path / "profile_builder")
+            delete_profile_dir(run_path / "profile_verifier")
 
     def _read_task(self, argv: list[str], run: RunConfig) -> str:
         return self._task_reader.read(argv, run)

@@ -75,12 +75,14 @@ step.
   or when a section is independently verifiable. Use kind="discovery" for
   link-collection subtasks that populate discovered_links; use
   kind="processing" for subtasks that read links, extract metadata, and
-  download files. Each SubtaskSpec must be fully self-contained (description
-  includes target URL, selectors, mechanics, and exactly what the script
-  should do). List subtasks in dependency order (use depends_on when one
-  subtask's discovered_links are consumed by another).
+  download files. When partitioning a discovery set across multiple processing
+  subtasks, set ``filter_labels`` on each processing SubtaskSpec (e.g.
+  ``["session_2", "session_3"]`` or bucket labels) and instruct the discovery
+  script to call ``save_discovered_link(url, filter_label)`` with matching labels.
+  Each SubtaskSpec must be fully self-contained (description includes target URL,
+  selectors, mechanics, and exactly what the script should do). List subtasks in
+  dependency order (use depends_on when one subtask's discovered_links are consumed by another).
   expected_document_count should reflect advertised counts when available.
-
   Step 7 — COLLECT SAMPLE URLS. Collect 3-5 DIRECT DOCUMENT file URLs
   during exploration — the actual downloadable file link (e.g. an
   E/HRC/resolutions/A-HRC-RES-1-1.doc href or a document-download API
@@ -113,12 +115,14 @@ replacing a session number), confirm the exact href by extracting the
 specific element with a refined selector — outliers exist (e.g. a
 "first-regular-session" path where siblings use "regular-session").
 
-Rule 18 — Replan discipline: when the prompt says THE PREVIOUS PLAN
-NEEDS REVISION, re-plan for the ORIGINAL TASK in that prompt — same
-site, same target URL, same document set and sessions. Change only
-what the Focus requires. Keep subtask_ids of already-succeeded
-subtasks unchanged so their saved results are preserved. NEVER
-substitute a different site, document body, or session.
+Rule 18 — Replan and Incremental Subtask discipline: when the prompt says
+THE PREVIOUS PLAN NEEDS REVISION or asks for an INCREMENTAL GAP-FILL SUBTASK,
+re-plan for the ORIGINAL TASK in that prompt — same site, same target URL,
+same document set and sessions. Keep subtask_ids of already-succeeded
+subtasks unchanged so their saved scripts and results are preserved. When
+instructed to add an incremental subtask, retain all existing subtasks
+and append a new SubtaskSpec covering only the missing targets/ranges/documents.
+NEVER substitute a different site, document body, or session.
 
 OUTPUT CONTRACT — your reply MUST be a single JSON object matching the
 ScrapePlan schema:
@@ -139,7 +143,7 @@ Each SubtaskSpec has:
   pdf_download_strategy — "curl_cffi" or "browser_fetch"
   expected_document_count — advertised count (0 if unknown)
   depends_on            — subtask_ids that must finish first
-
+  filter_labels         — list of filter_label strings assigned to this subtask
 HARD RULES:
 - Exactly ONE script per subtask. Never combine two subtasks into one script.
 - Split when page formats differ across sections/sessions/years or when a

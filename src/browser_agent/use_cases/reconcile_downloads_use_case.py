@@ -162,27 +162,29 @@ class ReconcileDownloadsUseCase:
     ) -> ReconciledPdf:
         db_filename = data.get("core_pdf_filename", "") or ""
         expected_norm, expected_orig = PdfUrlMatcher.expected_filenames_for(file_url)
-        matched, mode = self._match_on_disk(expected_norm, expected_orig, disk_files)
-        filename_mismatch = bool(db_filename) and db_filename != expected_norm
+        expected = db_filename or expected_norm or expected_orig
+        doc_stem, pdf_stem = PdfUrlMatcher.stems_for(file_url)
+        matched, mode = self._match_on_disk(expected, db_filename, doc_stem, pdf_stem, disk_files)
+        filename_mismatch = bool(db_filename) and db_filename.rsplit(".", 1)[0] not in (doc_stem, pdf_stem)
         if matched is None:
             return ReconciledPdf(
                 core_id=core_id,
                 file_url=file_url,
                 db_pdf_filename=db_filename,
-                expected_filename=expected_norm,
+                expected_filename=expected,
                 matched_filename="",
                 match_mode=mode,
                 file_exists=False,
                 filename_mismatch=filename_mismatch,
                 verdict="file_not_downloaded",
-                notes=f"expected {expected_norm} (also tried {expected_orig}); not on disk",
+                notes=self._missing_note(expected, db_filename, doc_stem, pdf_stem),
                 download_status=download_status,
             )
         return self._validate_matched(
             core_id,
             file_url,
             db_filename,
-            expected_norm,
+            expected,
             matched,
             mode,
             filename_mismatch,
@@ -191,16 +193,36 @@ class ReconcileDownloadsUseCase:
 
     def _match_on_disk(
         self,
-        norm: str,
-        orig: str,
+        expected_url: str,
+        db_filename: str,
+        doc_stem: str,
+        pdf_stem: str,
         disk_files: set[str],
     ) -> tuple[Path | None, str]:
-        norm_path = self._downloads_path / norm
-        if norm in disk_files:
-            return norm_path, "normalized"
-        if orig and orig != norm and orig in disk_files:
-            return self._downloads_path / orig, "original"
+        """Locate the on-disk file for the row; return ``(path, mode)``.
+
+        Exact expected/DB names win (mode ``normalized``/``original``);
+        otherwise any file whose basename starts with the URL's
+        ``doc_<hash>`` or ``pdf_<hash>`` stem matches (mode ``stem``) —
+        the body-typed names (``doc_<hash>.pdf``, ``doc_<hash>.docx``,
+        …) the downloaders now produce for extensionless URLs.
+        """
+        if expected_url and expected_url in disk_files:
+            return self._downloads_path / expected_url, "normalized"
+        if db_filename and db_filename != expected_url and db_filename in disk_files:
+            return self._downloads_path / db_filename, "original"
+        for stem in (doc_stem, pdf_stem):
+            if not stem:
+                continue
+            hit = next((f for f in disk_files if f.startswith(stem)), None)
+            if hit is not None:
+                return self._downloads_path / hit, "stem"
         return None, "missing"
+
+    @staticmethod
+    def _missing_note(expected: str, db_filename: str, doc_stem: str, pdf_stem: str) -> str:
+        tried = ", ".join(n for n in (expected, db_filename, f"{doc_stem}.*", f"{pdf_stem}.*") if n)
+        return f"expected {tried}; not on disk"
 
     def _validate_matched(
         self,
@@ -213,7 +235,10 @@ class ReconcileDownloadsUseCase:
         filename_mismatch: bool,
         download_status: str,
     ) -> ReconciledPdf:
-        is_document = bool(file_ext_for(file_url))
+        # Classify by the ACTUAL file: a body-typed name (doc_<hash>.pdf)
+        # under a doc_ stem is a document download even when the URL has
+        # no extension, and must be validated as one (existence+size).
+        is_document = bool(file_ext_for(file_url)) or matched.name.startswith("doc_")
         integrity = (
             PdfIntegrityValidator.validate_document(matched) if is_document else PdfIntegrityValidator.validate(matched)
         )

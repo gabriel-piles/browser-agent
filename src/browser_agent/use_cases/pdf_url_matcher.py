@@ -12,7 +12,7 @@ import hashlib
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit, unquote, quote
 
-from browser_agent.adapters.execution.file_ops import file_ext_for, file_filename_for
+from browser_agent.adapters.execution.file_ops import doc_id_for, file_ext_for, file_filename_for, pdf_filename_for
 
 
 def expected_pdf_filename(url: str) -> str:
@@ -26,7 +26,7 @@ def expected_pdf_filename(url: str) -> str:
     *before* hashing, so callers MUST pass the normalized (``https``)
     form.
     """
-    return f"pdf_{hashlib.sha1(PdfUrlMatcher.normalize(url).encode()).hexdigest()[:12]}.pdf"
+    return pdf_filename_for(url)
 
 
 @dataclass(frozen=True)
@@ -81,9 +81,32 @@ class PdfUrlMatcher:
         is what a naive hash of the stored URL gives. Both names are
         identical for a given ``url`` because each helper canonicalizes
         the URL before hashing.
+
+        For a URL with a recognized document extension the name is
+        ``doc_<hash><ext>``. An EXTENSIONLESS URL carries no derivable
+        name — the on-disk file is typed by BODY content (``.pdf`` for a
+        PDF body, ``.doc`` for an OLE2 body, …) and the DB-recorded
+        ``core_pdf_filename`` is authoritative — so the sentinel
+        ``("", "")`` is returned and callers must match by stem
+        (:meth:`stems_for`) instead.
         """
-        name = file_filename_for(url) if file_ext_for(url) else expected_pdf_filename(url)
+        if not file_ext_for(url):
+            return "", ""
+        name = file_filename_for(url)
         return name, name
+
+    @staticmethod
+    def stems_for(url: str) -> tuple[str, str]:
+        """Return ``(doc_<hash>, pdf_<hash>)`` for ``url`` — both id stems.
+
+        The ``doc_<hash>`` and ``pdf_<hash>`` prefixes hash the same
+        canonical URL, so files recorded under either stem (with ANY
+        extension, e.g. the body-typed ``doc_<hash>.pdf``) resolve to
+        the same row. Used by the reconciler/check_pdf/self-check to
+        match on-disk files for extensionless URLs where the expected
+        full name is not derivable.
+        """
+        return doc_id_for(url), f"pdf_{doc_id_for(url)[4:]}"
 
     @staticmethod
     def is_document(url: str) -> bool:

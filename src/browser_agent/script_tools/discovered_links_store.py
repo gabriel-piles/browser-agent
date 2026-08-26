@@ -13,6 +13,7 @@ advances them to ``status='processed'``.
 from __future__ import annotations
 
 import datetime
+import json
 import os
 import sqlite3
 import sys
@@ -49,12 +50,29 @@ def _resolve_db_path() -> str:
 
 
 def _ensure_schema(conn) -> None:
-    """Create the ``discovered_links`` table if it does not exist."""
+    """Create the ``discovered_links`` table and index if they do not exist."""
     conn.execute(
         "CREATE TABLE IF NOT EXISTS discovered_links "
         "(url TEXT PRIMARY KEY, filter_label TEXT NOT NULL DEFAULT '', "
         "status TEXT NOT NULL DEFAULT 'discovered', discovered_at TEXT NOT NULL)"
     )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_discovered_links_status_label ON discovered_links(status, filter_label)")
+
+
+def _resolve_default_filter_labels() -> list[str] | None:
+    """Resolve filter label(s) from environment variable if present."""
+    raw = os.environ.get("BROWSER_AGENT_SUBTASK_FILTER_LABELS")
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list) and parsed:
+            return [str(x) for x in parsed]
+        if isinstance(parsed, str) and parsed:
+            return [parsed]
+    except Exception:
+        return [raw] if raw else None
+    return None
 
 
 def save_discovered_link(url: str, filter_label: str = "") -> None:
@@ -86,24 +104,46 @@ def save_discovered_link(url: str, filter_label: str = "") -> None:
         conn.close()
 
 
-def load_discovered_links() -> list[tuple[str, str]]:
+def _build_load_query(filter_label: str | list[str] | None) -> tuple[str, list]:
+    if filter_label is None:
+        filter_label = _resolve_default_filter_labels()
+    if filter_label is None:
+        return "SELECT url, filter_label FROM discovered_links WHERE status='discovered'", []
+    if isinstance(filter_label, str):
+        return "SELECT url, filter_label FROM discovered_links WHERE status='discovered' AND filter_label=?", [filter_label]
+    labels = list(filter_label)
+    if not labels:
+        return "SELECT url, filter_label FROM discovered_links WHERE status='discovered'", []
+    placeholders = ",".join("?" for _ in labels)
+    return (
+        f"SELECT url, filter_label FROM discovered_links WHERE status='discovered' AND filter_label IN ({placeholders})",
+        labels,
+    )
+
+
+def load_discovered_links(filter_label: str | list[str] | None = None) -> list[tuple[str, str]]:
     """Return ``[(url, filter_label)]`` rows not yet processed (status='discovered')."""
     conn = sqlite3.connect(_resolve_db_path(), timeout=5)
     try:
         _ensure_schema(conn)
-        rows = conn.execute("SELECT url, filter_label FROM discovered_links WHERE status='discovered'").fetchall()
-        return rows
+        sql, params = _build_load_query(filter_label)
+        return conn.execute(sql, params).fetchall()
     finally:
         conn.close()
 
 
-def mark_link_processed(url: str) -> None:
+def mark_link_processed(url: str, filter_label: str | None = None) -> None:
     """Set ``status='processed'`` so re-runs skip already-handled links."""
     canon = _canonical_url(url)
     conn = sqlite3.connect(_resolve_db_path(), timeout=5)
     try:
         _ensure_schema(conn)
-        conn.execute("UPDATE discovered_links SET status='processed' WHERE url=?", (canon,))
+        if filter_label is not None:
+            conn.execute(
+                "UPDATE discovered_links SET status='processed' WHERE url=? AND filter_label=?", (canon, filter_label)
+            )
+        else:
+            conn.execute("UPDATE discovered_links SET status='processed' WHERE url=?", (canon,))
         conn.commit()
     finally:
         conn.close()

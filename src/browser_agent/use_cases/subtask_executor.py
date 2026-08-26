@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import signal
 import sys
@@ -18,7 +19,12 @@ _SUBTASK_RUN_TIMEOUT_S = int(os.environ.get("SCRAPER_RUN_TIMEOUT_S", str(6 * 360
 class SubtaskExecutor:
     """Run one emitted .py script as a subprocess, return a report."""
 
-    async def run(self, subtask_id: str, script_path: Path) -> ScriptExecutionReport:
+    async def run(
+        self,
+        subtask_id: str,
+        script_path: Path,
+        filter_labels: list[str] | None = None,
+    ) -> ScriptExecutionReport:
         import time
 
         headless = "true" if _headless_env() else "false"
@@ -28,6 +34,8 @@ class SubtaskExecutor:
             "ZENDRIVER_HEADLESS": headless,
             "BROWSER_AGENT_TASK_SLUG": subtask_id,
         }
+        if filter_labels:
+            env["BROWSER_AGENT_SUBTASK_FILTER_LABELS"] = json.dumps(filter_labels)
         cmd = [sys.executable, str(script_path)]
         t0 = time.monotonic()
         output_lines: list[str] = []

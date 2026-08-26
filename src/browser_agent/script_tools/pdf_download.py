@@ -7,9 +7,9 @@ Two strategies: curl_cffi (Chrome TLS impersonation) and browser_fetch
 only ``download_pdf_browser`` work without curl_cffi installed.
 
 Non-PDF documents (``.doc``/``.docx``/``.rtf``/…) use the same two
-strategies via the ``download_file_*`` twins; the only differences are
-the on-disk name (``file_filename_for``, a pure function of the URL)
-and the skipped PDF magic check (a non-PDF body must not raise).
+strategies via the ``download_file_*`` twins; the on-disk name is
+derived from the fetched BODY content (``content_filename_for``) and
+an unsupported body raises instead of writing any file.
 """
 
 from __future__ import annotations
@@ -24,9 +24,11 @@ from urllib.parse import urljoin, urlsplit
 from script_tools._file_utils import (
     _assert_pdf_magic,
     _existing_size,
+    _find_matching,
     _pdf_filename_for,
     _write_atomic,
-    file_filename_for,
+    content_filename_for,
+    doc_id_for,
 )
 
 _PDF_DOWNLOAD_TIMEOUT_S = 90.0
@@ -193,18 +195,13 @@ def _resolve_download_dir(save_path):
     return save_dir
 
 
-async def _download_curl(url, save_path, tab, check_magic):
-    """Shared curl_cffi download loop: cookie sharing, retries, optional magic check.
+async def _fetch_curl_body(url, tab):
+    """Fetch the body for ``url`` via curl_cffi; return bytes, no write.
 
-    Returns the standard result dict on success; raises ``RuntimeError``
-    on final failure. When ``check_magic`` is true, the body must pass
-    :func:`_assert_pdf_magic` (PDF path); when false (supporting
-    documents) the body is written as-is.
-
-    When the 403 streak hits the limit, ``_track_download_outcome``
-    pauses for the operator to clear Cloudflare. After the challenge
-    clears, cookies are re-fetched from the tab and the download
-    retries with the fresh session.
+    Extracted from the old :func:`_download_curl` so ``download_file_*``
+    can sniff the body before deriving a file name. Cookie sharing,
+    retries, and the Cloudflare 403-streak pause are preserved. Raises
+    ``RuntimeError`` on final failure.
     """
     from curl_cffi import AsyncSession
 
@@ -245,15 +242,26 @@ async def _download_curl(url, save_path, tab, check_magic):
                 if attempt < _PDF_DOWNLOAD_RETRIES:
                     await asyncio.sleep(_PDF_DOWNLOAD_RETRY_DELAY_S * attempt)
                 continue
-            _write_atomic(save_path, body)
-            if check_magic:
-                _assert_pdf_magic(save_path, body, url)
             await _track_download_outcome(None, tab=tab, url=url)
-            return {"size": len(body), "skipped": False, "reason": "downloaded", "saved_path": str(save_path)}
+            return body
         cleared = await _track_download_outcome(last_exc, tab=tab, url=url)
         if not cleared:
             raise last_exc
     raise last_exc
+
+
+async def _download_curl(url, save_path, tab, check_magic):
+    """Shared curl_cffi download loop: fetch body, write, optional magic check.
+
+    Thin wrapper around :func:`_fetch_curl_body` — writes the body
+    atomically and optionally validates PDF magic. Returns the standard
+    result dict on success; raises ``RuntimeError`` on final failure.
+    """
+    body = await _fetch_curl_body(url, tab)
+    _write_atomic(save_path, body)
+    if check_magic:
+        _assert_pdf_magic(save_path, body, url)
+    return {"size": len(body), "skipped": False, "reason": "downloaded", "saved_path": str(save_path)}
 
 
 async def download_pdf_curl_cffi(url, save_path, tab=None):
@@ -307,20 +315,28 @@ async def download_file_curl_cffi(url, save_path, tab=None):
     """Download a non-PDF document (``.doc``/``.docx``/``.rtf``/…) into directory ``save_path``.
 
     Identical contract to :func:`download_pdf_curl_cffi` (retries,
-    cookie sharing, idempotent skip-by-path, same result dict) except:
-    the on-disk name is ``doc_<sha1(canonical_url)[:12]><ext>``
-    (``file_filename_for``) and the body is NOT validated as PDF.
+    cookie sharing, idempotent skip-by-stem, same result dict) except:
+    the on-disk name is derived from the fetched BODY content
+    (``content_filename_for`` — a PDF body gets ``.pdf``, an OLE2 body
+    ``.doc``, etc.). An unsupported body raises ``RuntimeError`` and
+    no file is written, so the caller records the failed row.
     """
     save_dir = _resolve_download_dir(save_path)
     url = _resolve_url(url, tab)
-    save_path = save_dir / file_filename_for(url)
-
-    existing = _existing_size(save_path)
-    if existing > 0:
-        return {"size": existing, "skipped": True, "reason": "already_downloaded", "saved_path": str(save_path)}
+    stem = doc_id_for(url)
+    existing = _find_matching(save_dir, f"{stem}.*")
+    if existing is not None and _existing_size(existing) > 0:
+        size = _existing_size(existing)
+        return {"size": size, "skipped": True, "reason": "already_downloaded", "saved_path": str(existing)}
 
     await asyncio.sleep(random.uniform(_DOWNLOAD_DELAY_MIN_S, _DOWNLOAD_DELAY_MAX_S))
-    return await _download_curl(url, save_path, tab, check_magic=False)
+    body = await _fetch_curl_body(url, tab)
+    name = content_filename_for(url, body)
+    if not name:
+        raise RuntimeError(f"unsupported content type for {url} (first 8 bytes: {body[:8]!r}); file not saved")
+    save_path = save_dir / name
+    _write_atomic(save_path, body)
+    return {"size": len(body), "skipped": False, "reason": "downloaded", "saved_path": str(save_path)}
 
 
 async def _fetch_pdf_via_cdp_navigation(tab, url):
@@ -417,46 +433,54 @@ async def _fetch_pdf_once(tab, url):
         raise RuntimeError(f"fetch failed for {url}: {exc}") from exc
 
 
-async def _try_browser_fetch(tab, url, save_path, check_magic=True):
-    """Try CDP-bypass fetch, then in-tab fetch; write ``save_path`` atomically.
+async def _fetch_browser_body(tab, url) -> bytes:
+    """Fetch the body for ``url`` via the browser chain; return bytes, no write.
 
-    The CDP path (:func:`_fetch_pdf_via_cdp_navigation`) is CORS/CSP-proof
-    and uses the real TLS fingerprint + cookies, so it is tried first.
-    The in-tab ``fetch()`` (:func:`_fetch_pdf_once`) is faster for
-    same-origin, non-gated resources and is tried second.  Each path is
-    retried up to ``_PDF_DOWNLOAD_RETRIES`` times.  Returns a result
-    dict with ``saved_path``; raises ``RuntimeError`` on final failure.
-    When ``check_magic`` is true the body must pass :func:`_assert_pdf_magic`
-    (PDF path); supporting documents skip it.
+    Extracted from the old :func:`_download_browser` so ``download_file_*``
+    can sniff the body before deriving a file name. Tries the CDP bypass
+    (:func:`_fetch_pdf_via_cdp_navigation`), then the in-tab ``fetch()``
+    (:func:`_fetch_pdf_once`), then the curl_cffi fallback
+    (:func:`_try_curl_cffi`). Cloudflare 403-streak pause tracking is
+    preserved via :func:`_track_download_outcome`. Raises
+    ``RuntimeError`` on final failure.
     """
-    for _fetch, _decode in (
-        (_fetch_pdf_via_cdp_navigation, False),
-        (_fetch_pdf_once, True),
-    ):
-        last_exc = None
-        for attempt in range(1, _PDF_DOWNLOAD_RETRIES + 1):
-            try:
-                result = await _fetch(tab, url)
-                if not result:
-                    raise RuntimeError(f"empty response for {url}")
-                body = base64.b64decode(result) if _decode else result
-                _write_atomic(save_path, body)
-                if check_magic:
-                    _assert_pdf_magic(save_path, body, url)
-                return {"size": len(body), "skipped": False, "reason": "downloaded", "saved_path": str(save_path)}
-            except RuntimeError as exc:
-                last_exc = exc
-                if attempt < _PDF_DOWNLOAD_RETRIES:
-                    await asyncio.sleep(_PDF_DOWNLOAD_RETRY_DELAY_S * attempt)
+    last_exc = None
+    for _cf_round in range(_CF_MAX_RETRIES + 1):
+        try:
+            for _fetch, _decode in (
+                (_fetch_pdf_via_cdp_navigation, False),
+                (_fetch_pdf_once, True),
+            ):
+                for attempt in range(1, _PDF_DOWNLOAD_RETRIES + 1):
+                    try:
+                        result = await _fetch(tab, url)
+                        if not result:
+                            raise RuntimeError(f"empty response for {url}")
+                        body = base64.b64decode(result) if _decode else result
+                        await _track_download_outcome(None, tab=tab, url=url)
+                        return body
+                    except RuntimeError as exc:
+                        last_exc = exc
+                        if attempt < _PDF_DOWNLOAD_RETRIES:
+                            await asyncio.sleep(_PDF_DOWNLOAD_RETRY_DELAY_S * attempt)
+            body = await _try_curl_cffi(url)
+            await _track_download_outcome(None, tab=tab, url=url)
+            return body
+        except RuntimeError as exc:
+            last_exc = exc
+            cleared = await _track_download_outcome(exc, tab=tab, url=url)
+            if not cleared:
+                if _is_http_403(exc) and _consecutive_403 < _BLOCK_STREAK_LIMIT:
+                    await asyncio.sleep(_BLOCK_COOLDOWN_S)
+                raise
+            continue
     raise last_exc
 
 
-async def _try_curl_cffi(url, save_path, check_magic=True):
-    """Fallback: download via curl_cffi with Chrome TLS impersonation.
+async def _try_curl_cffi(url) -> bytes:
+    """Fallback: fetch ``url`` via curl_cffi with Chrome TLS impersonation.
 
-    Returns a result dict with ``saved_path``. Raises ``RuntimeError``
-    on failure. When ``check_magic`` is true the body must pass
-    :func:`_assert_pdf_magic` (PDF path); supporting documents skip it.
+    Returns the body bytes. Raises ``RuntimeError`` on failure.
     """
     try:
         from curl_cffi import AsyncSession
@@ -471,41 +495,21 @@ async def _try_curl_cffi(url, save_path, check_magic=True):
         raise RuntimeError(f"HTTP {r.status_code} for {url}")
     if not r.content:
         raise RuntimeError(f"empty response for {url}")
-    _write_atomic(save_path, r.content)
-    if check_magic:
-        _assert_pdf_magic(save_path, r.content, url)
-    return {"size": len(r.content), "skipped": False, "reason": "downloaded", "saved_path": str(save_path)}
+    return r.content
 
 
 async def _download_browser(tab, url, save_path, check_magic):
-    """Shared browser-fetch chain: CDP fetch, in-tab fetch, then curl_cffi fallback.
+    """Shared browser-fetch download: fetch body, write, optional magic check.
 
-    Encapsulates the fallback order used by both the PDF and supporting
-    document browser helpers. ``url`` is already HTTP->HTTPS upgraded by
-    the caller. Returns the result dict of the winning strategy.
-
-    When the 403 streak hits the limit, ``_track_download_outcome``
-    pauses for the operator to clear Cloudflare. After the challenge
-    clears, the full fetch chain retries with the fresh session.
+    Thin wrapper around :func:`_fetch_browser_body` — writes the body
+    atomically and optionally validates PDF magic. Returns the standard
+    result dict on success; raises ``RuntimeError`` on final failure.
     """
-    last_exc = None
-    for _cf_round in range(_CF_MAX_RETRIES + 1):
-        try:
-            try:
-                result = await _try_browser_fetch(tab, url, save_path, check_magic)
-            except RuntimeError:
-                result = await _try_curl_cffi(url, save_path, check_magic)
-        except RuntimeError as exc:
-            last_exc = exc
-            cleared = await _track_download_outcome(exc, tab=tab, url=url)
-            if not cleared:
-                if _is_http_403(exc) and _consecutive_403 < _BLOCK_STREAK_LIMIT:
-                    await asyncio.sleep(_BLOCK_COOLDOWN_S)
-                raise
-            continue
-        await _track_download_outcome(None, tab=tab, url=url)
-        return result
-    raise last_exc
+    body = await _fetch_browser_body(tab, url)
+    _write_atomic(save_path, body)
+    if check_magic:
+        _assert_pdf_magic(save_path, body, url)
+    return {"size": len(body), "skipped": False, "reason": "downloaded", "saved_path": str(save_path)}
 
 
 async def download_pdf_browser(tab, url, save_path):
@@ -567,16 +571,24 @@ async def download_pdf_browser(tab, url, save_path):
 async def download_file_browser(tab, url, save_path):
     """Non-PDF variant of :func:`download_pdf_browser`; same browser-fetch chain.
 
-    The on-disk name is ``doc_<sha1(canonical_url)[:12]><ext>``
-    (``file_filename_for``) and the body is NOT validated as PDF
-    (a supporting document must never trip the magic check).
+    The on-disk name is derived from the fetched BODY content
+    (``content_filename_for`` — a PDF body gets ``.pdf``, an OLE2 body
+    ``.doc``, etc.). An unsupported body raises ``RuntimeError`` and
+    no file is written, so the caller records the failed row.
     """
     url = _upgrade_to_https(_resolve_url(url, tab))
     save_dir = _resolve_download_dir(save_path)
-    save_path = save_dir / file_filename_for(url)
-    existing = _existing_size(save_path)
-    if existing > 0:
-        return {"size": existing, "skipped": True, "reason": "already_downloaded", "saved_path": str(save_path)}
+    stem = doc_id_for(url)
+    existing = _find_matching(save_dir, f"{stem}.*")
+    if existing is not None and _existing_size(existing) > 0:
+        size = _existing_size(existing)
+        return {"size": size, "skipped": True, "reason": "already_downloaded", "saved_path": str(existing)}
 
     await asyncio.sleep(random.uniform(_DOWNLOAD_DELAY_MIN_S, _DOWNLOAD_DELAY_MAX_S))
-    return await _download_browser(tab, url, save_path, check_magic=False)
+    body = await _fetch_browser_body(tab, url)
+    name = content_filename_for(url, body)
+    if not name:
+        raise RuntimeError(f"unsupported content type for {url} (first 8 bytes: {body[:8]!r}); file not saved")
+    save_path = save_dir / name
+    _write_atomic(save_path, body)
+    return {"size": len(body), "skipped": False, "reason": "downloaded", "saved_path": str(save_path)}

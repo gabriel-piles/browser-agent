@@ -128,7 +128,7 @@ Your script's ONLY output is rows in the ``discovered_links`` table via
       async def fill_text(tab, selector: str, value: str, event: str = "change") -> bool
       async def discover_links(tab, link_selector: str, load_more_selector: str = "", advertised: int = 0, base_url: str = "", scroll_js: str = "", max_rounds: int = 12) -> list[str]
       def save_discovered_link(url: str, filter_label: str = "") -> None          # SYNC — do NOT await
-      def load_discovered_links() -> list[tuple[str, str]]                        # SYNC — returns [(url, filter_label)]
+      def load_discovered_links(filter_label: str | list[str] | None = None) -> list[tuple[str, str]]  # SYNC — returns [(url, filter_label)]
       def mark_link_processed(url: str) -> None                                  # SYNC — idempotent re-runs
    STDOUT PROTOCOL — the script MUST print, for each collection target:
    ``DISCOVERY target=<label> found=<N> saved=<M>`` (found = page items
@@ -432,10 +432,10 @@ field you need, use the closest verified selector and note the
 assumption in ``explanation``.
 
 Your script MUST NOT call ``save_discovered_link``. Your script reads
-links from ``load_discovered_links()`` and processes each one. When no
+links from ``load_discovered_links()`` (or ``load_discovered_links(filter_label)``
+when assigned specific ``filter_labels``) and processes each one. When no
 discovery script was emitted (single-page task), the processing script
 does inline extraction only (no ``load_discovered_links()`` call).
-
 0. Imports — write these lines verbatim at the top (only the ones you
    use); full contracts are in each helper's docstring::
 
@@ -482,7 +482,7 @@ does inline extraction only (no ``load_discovered_links()`` call).
       async def start_browser(headless=None, user_data_dir=None) -> Browser
       def pdf_id_for(url: str) -> str
       def doc_id_for(url) -> str
-      def load_discovered_links() -> list[tuple[str, str]]                        # SYNC — returns [(url, filter_label)]
+      def load_discovered_links(filter_label: str | list[str] | None = None) -> list[tuple[str, str]]  # SYNC — returns [(url, filter_label)]
       def mark_link_processed(url: str) -> None                                  # SYNC — idempotent re-runs
 
    ``save_path`` is always the downloads DIRECTORY; the helpers derive
@@ -655,13 +655,13 @@ does inline extraction only (no ``load_discovered_links()`` call).
     script resilient to concurrency races on re-runs.
     Unprocessed-link drain (MANDATORY when load_discovered_links is used) —
     AFTER the worker gather and BEFORE the load_failed_downloads retry,
-    call ``load_discovered_links()`` again. If it returns any rows, links
-    were not reached by the worker pool (global timeout, crash, or queue
-    starvation). Re-process each remaining link SERIALLY on
+    call ``load_discovered_links()`` (or with the assigned ``filter_label``) again.
+    If it returns any rows, links were not reached by the worker pool (global timeout,
+    crash, or queue starvation). Re-process each remaining link SERIALLY on
     ``browser.main_tab`` (always visible) via ``process_document``, then
-    ``mark_link_processed(url)``. Loop until ``load_discovered_links()``
-    returns ``[]``. Required structure after the gather::
-
+    ``mark_link_processed(url)``. Never call ``mark_link_processed(url)`` unconditionally
+    on links that were filtered out or skipped due to range filters. Loop until
+    ``load_discovered_links()`` returns ``[]``. Required structure after the gather::
         # --- unprocessed-link drain (rule 8a) ---
         remaining = load_discovered_links()
         while remaining:

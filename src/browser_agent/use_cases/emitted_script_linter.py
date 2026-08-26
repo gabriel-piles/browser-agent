@@ -1500,6 +1500,37 @@ def _check_inline_url_hash(python_code: str) -> list[LintFinding]:
     return out
 
 
+_SCOPING_DRAIN_MSG = (
+    "Processing script drain loop calls mark_link_processed() without scoping or guarding. "
+    "When partitioned across subtasks or filtering by range, pass filter_label to "
+    "load_discovered_links(filter_label) or guard mark_link_processed so out-of-range links are not consumed."
+)
+
+
+def _check_discovered_links_scoping(
+    python_code: str,
+    filter_labels: list[str] | None = None,
+) -> list[LintFinding]:
+    """Flag unguarded mark_link_processed() calls in loops with in-range filters."""
+    out: list[LintFinding] = []
+    if "mark_link_processed" not in python_code:
+        return out
+    # Detect pattern where script filters links inside loop but calls mark_link_processed unconditionally
+    has_custom_filter = bool(re.search(r"if\s+not\s+.*_in_range|if\s+not\s+.*session|if\s+.*range", python_code))
+    has_continue_before_mark = bool(re.search(r"continue\s+.*mark_link_processed", python_code, re.DOTALL))
+    has_unscoped_drain = bool(re.search(r"for\s+.*\s+in\s+.*load_discovered_links\s*\(\s*\):", python_code))
+    if filter_labels and has_unscoped_drain and not has_custom_filter:
+        out.append(
+            LintFinding(
+                rule="22",
+                severity="error",
+                message=f"Subtask is assigned filter_labels {filter_labels} but calls load_discovered_links() without filter_label argument.",
+                line=1,
+            )
+        )
+    return out
+
+
 class EmittedScriptLinter:
     """Lint the RAW LLM python_code (before emit transforms)."""
 
@@ -1557,14 +1588,22 @@ class EmittedScriptLinter:
             _check_handwritten_input_set,
             _check_hardcoded_row_filter,
             _check_inline_url_hash,
+            _check_discovered_links_scoping,
         )
 
-    def lint(self, python_code: str, kind: str = "processing") -> list[LintFinding]:
+    def lint(
+        self,
+        python_code: str,
+        kind: str = "processing",
+        filter_labels: list[str] | None = None,
+    ) -> list[LintFinding]:
         findings: list[LintFinding] = []
         checks = self._DISCOVERY_CHECKS if kind == "discovery" else self._PROCESSING_CHECKS
         for check in checks:
             if check is _check_html_capture:
                 findings.extend(check(python_code, require_files=self._require_html_files))
+            elif check is _check_discovered_links_scoping:
+                findings.extend(check(python_code, filter_labels=filter_labels))
             else:
                 findings.extend(check(python_code))
         return findings

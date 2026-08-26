@@ -14,6 +14,7 @@ class OrchestratorDecision(BaseModel):
         "accept_plan",
         "replan",
         "repair",
+        "add_subtask",
         "accept_gap",
         "abort",
         "finish",

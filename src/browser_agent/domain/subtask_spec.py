@@ -45,3 +45,7 @@ class SubtaskSpec(BaseModel):
         default_factory=list,
         description="subtask_ids that must finish before this one starts",
     )
+    filter_labels: list[str] = Field(
+        default_factory=list,
+        description="Filter labels from discovered_links assigned to this subtask; empty for unscoped/single-page tasks",
+    )

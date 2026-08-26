@@ -114,6 +114,16 @@ def reset_profile(profile_dir: Path) -> None:
     seed_profile_if_empty(profile_dir)
 
 
+def delete_profile_dir(profile_dir: Path) -> None:
+    """Remove a Chromium profile directory left after its browser is stopped.
+
+    Best-effort: ignores errors so a still-held lock or missing dir never raises.
+    Call only after the owning Chromium process is terminated (via ``close()`` or
+    ``kill_chromium_under``).
+    """
+    shutil.rmtree(profile_dir, ignore_errors=True)
+
+
 def _wayland_session() -> bool:
     """True when the process runs under a Wayland session.
 

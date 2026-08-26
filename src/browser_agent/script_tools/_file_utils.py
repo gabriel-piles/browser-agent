@@ -6,13 +6,12 @@ derivation. Stdlib-only so every script that imports any script_tools
 helper works without extra dependencies.
 """
 
-from __future__ import annotations
-
-from urllib.parse import urlsplit, urlunsplit, unquote, quote
-
 import hashlib
+import io
 import os as _os
+import zipfile
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit, unquote, quote
 
 
 def _write_atomic(path, data):
@@ -137,6 +136,68 @@ def file_ext_for(url):
 def file_filename_for(url):
     """``doc_<sha1(canonical_url)[:12]><ext>`` (``.bin`` when the URL has no extension)."""
     return f"{doc_id_for(url)}{file_ext_for(url) or '.bin'}"
+
+
+_PDF_MAGIC = b"%PDF"
+_DOC_OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+_RTF_MAGIC = b"{\\rtf"
+_ZIP_MAGIC = b"PK\x03\x04"
+
+_ODF_MIMETYPE = {
+    b"application/vnd.oasis.opendocument.text": ".odt",
+    b"application/vnd.oasis.opendocument.spreadsheet": ".ods",
+    b"application/vnd.oasis.opendocument.presentation": ".odp",
+}
+
+
+def _office_zip_extension(data: bytes) -> str:
+    """Extension ('.docx'/'.xlsx'/'.pptx'/'.odt'/'.odp'/'.ods') from an OOXML/ODF zip body, else ''."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            names = zf.namelist()
+            if "[Content_Types].xml" in names:
+                if any(n.startswith("word/") for n in names):
+                    return ".docx"
+                if any(n.startswith("xl/") for n in names):
+                    return ".xlsx"
+                if any(n.startswith("ppt/") for n in names):
+                    return ".pptx"
+            try:
+                return _ODF_MIMETYPE.get(zf.read("mimetype"), "")
+            except KeyError:
+                return ""
+    except (zipfile.BadZipFile, OSError, RuntimeError):
+        return ""
+
+
+def detect_doc_extension(data: bytes) -> str:
+    """Content-derived document extension for a body, or '' when unsupported.
+
+    PDF magic -> '.pdf'; OLE2 -> '.doc'; '{\\rtf' -> '.rtf'; ZIP ->
+    :func:`_office_zip_extension` (docx/xlsx/pptx/odt/odp/ods); else ''.
+    """
+    if data[:4] == _PDF_MAGIC:
+        return ".pdf"
+    if data[:8] == _DOC_OLE2_MAGIC:
+        return ".doc"
+    if data[:5] == _RTF_MAGIC:
+        return ".rtf"
+    if data[:4] == _ZIP_MAGIC:
+        return _office_zip_extension(data)
+    return ""
+
+
+def content_filename_for(url: str, data: bytes) -> str:
+    """``doc_<sha1(canonical_url)[:12]><detected_ext>``; '' when the body is unsupported."""
+    ext = detect_doc_extension(data)
+    return f"{doc_id_for(url)}{ext}" if ext else ""
+
+
+def _find_matching(directory: Path, pattern: str):
+    """First matching file in ``directory`` for ``pattern``, or None."""
+    if not directory.is_dir():
+        return None
+    return next((p for p in directory.glob(pattern) if p.is_file()), None)
 
 
 def _html_filename_for(url):

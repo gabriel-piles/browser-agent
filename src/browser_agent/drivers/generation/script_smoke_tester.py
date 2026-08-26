@@ -241,9 +241,10 @@ def _analyze_records(db_path: Path) -> tuple[int, int, list[str], bool]:
     """Return (downloaded_rows, total_rows, violations, has_download_intent) from the scratch metadata table.
 
     Violations are deterministic correctness bugs, one human-readable line each:
-      - canonical_filename: a downloaded row's core_pdf_filename != the type-aware
-        expected basename (pdf_id_for(core_file_url)+".pdf" for PDFs, doc_<hash><ext>
-        for documents) derived from core_file_url
+      - canonical_filename: a downloaded row's core_pdf_filename stem (the part
+        before the last '.') is not the pdf_<hash>/doc_<hash> stem derived from
+        core_file_url (content-typed names like doc_<hash>.pdf pass; a mismatched
+        hash fails)
       - failed_download: a row with core_file_url but core_download_status != "downloaded"
         or empty core_pdf_filename
       - load_failed: a row with core_download_status == "load_failed" (metadata gate never rendered)
@@ -275,9 +276,10 @@ def _analyze_records(db_path: Path) -> tuple[int, int, list[str], bool]:
         if status == "downloaded" and pf:
             downloaded += 1
             if fu and pf:
-                expected = PdfUrlMatcher.expected_filenames_for(fu)[0]
-                if pf != expected:
-                    violations.append(f"canonical_filename: {pf!r} != {expected!r} (core_file_url={fu})")
+                stem = pf.rsplit(".", 1)[0]
+                doc_stem, pdf_stem = PdfUrlMatcher.stems_for(fu)
+                if stem not in (doc_stem, pdf_stem):
+                    violations.append(f"canonical_filename: {pf!r} != {doc_stem}/{pdf_stem} stem (core_file_url={fu})")
         elif status == "load_failed":
             violations.append(f"load_failed: core_source_page_url={data.get('core_source_page_url')!r}")
         elif fu:

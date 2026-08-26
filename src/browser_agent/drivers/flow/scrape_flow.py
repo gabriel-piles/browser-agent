@@ -253,6 +253,9 @@ class ScrapeFlow:
             if record.repair_decisions >= _MAX_ORCHESTRATOR_REPAIRS_PER_SUBTASK:
                 record.status = "accepted_gap"
                 self._state_store.save(state)
+        elif decision.action == "add_subtask" and state.replans < _MAX_REPLANS:
+            focus = f"INCREMENTAL GAP-FILL SUBTASK: Keep all existing subtasks and their scripts intact. Append an incremental subtask targeting: {decision.focus}"
+            state = await self._do_replan(state, focus, incremental=True)
         elif decision.action == "replan" and state.replans < _MAX_REPLANS:
             state = await self._do_replan(state, decision.focus)
         elif decision.action in ("accept_gap", "abort"):
@@ -262,7 +265,7 @@ class ScrapeFlow:
             self._state_store.save(state)
         return state
 
-    async def _do_replan(self, state, focus: str):
+    async def _do_replan(self, state, focus: str, incremental: bool = False):
         planner = self._planner_factory()
         try:
             new_plan = await planner.replan(focus, task=self._task, previous_plan=self._replan_context(state))
@@ -271,9 +274,9 @@ class ScrapeFlow:
         state.replans += 1
         state.plan_counter += 1
         self._state_store.write_plan(state.plan_counter, new_plan)
-        self._reset_records(state, new_plan)
+        self._reset_records(state, new_plan, incremental=incremental)
         self._state_store.save(state)
-        logger.info("replan complete — plan {n}", n=state.plan_counter)
+        logger.info("replan complete — plan {n} (incremental={inc})", n=state.plan_counter, inc=incremental)
         return state
 
     def _replan_context(self, state) -> str:
@@ -287,12 +290,15 @@ class ScrapeFlow:
             },
         )
 
-    def _reset_records(self, state, new_plan) -> None:
-        """Keep succeeded records; reset the rest for the new plan."""
+    def _reset_records(self, state, new_plan, incremental: bool = False) -> None:
+        """Keep succeeded (or existing when incremental) records; reset the rest for the new plan."""
         state.plan = new_plan
         for spec in new_plan.subtasks:
             record = self._find_record_by_id(state, spec.subtask_id)
             if record is None:
+                continue
+            if incremental and record.script_path:
+                # Keep existing record intact for incremental gap-fill tasks
                 continue
             if record.status != "succeeded":
                 record.attempts = 0

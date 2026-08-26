@@ -95,7 +95,7 @@ def _check_file(
     core_id, data, match_mode = row
     db_filename = data.get("core_pdf_filename", "") or ""
     norm_name, orig_name = PdfUrlMatcher.expected_filenames_for(request.url)
-    file_path, used_name = _resolve_file(deps, norm_name, orig_name, db_filename)
+    file_path, used_name = _resolve_file(deps, request.url, norm_name, orig_name, db_filename)
     if file_path is None or not file_path.is_file():
         return PdfCheckResult(
             url=request.url,
@@ -106,7 +106,10 @@ def _check_file(
             verdict="file_not_downloaded",
             notes=request.notes,
         )
-    is_document = PdfUrlMatcher.is_document(request.url)
+    # Classify by the ACTUAL file: a body-typed name (doc_<hash>.docx)
+    # under a doc_ stem is a document download even when the URL has
+    # no extension, and must be validated as one (existence+size).
+    is_document = PdfUrlMatcher.is_document(request.url) or used_name.startswith("doc_")
     integrity = (
         PdfIntegrityValidator.validate_document(file_path) if is_document else PdfIntegrityValidator.validate(file_path)
     )
@@ -126,11 +129,18 @@ def _check_file(
 
 def _resolve_file(
     deps: VerificationAgentDeps,
+    url: str,
     norm: str,
     orig: str,
     db_filename: str,
 ) -> tuple[Path | None, str]:
-    """Return the first existing candidate path + the name that matched."""
+    """Return the first existing candidate path + the name that matched.
+
+    Tries the exact expected/DB names first, then any file whose
+    basename starts with the URL's ``doc_<hash>``/``pdf_<hash>`` stem —
+    covering the body-typed names (``doc_<hash>.pdf``, …) the
+    downloaders now produce for extensionless URLs.
+    """
     candidates = [norm]
     if orig and orig != norm:
         candidates.append(orig)
@@ -140,6 +150,14 @@ def _resolve_file(
         path = deps.downloads_path / name
         if path.is_file():
             return path, name
+    if not deps.downloads_path.is_dir():
+        return None, ""
+    for stem in PdfUrlMatcher.stems_for(url):
+        if not stem:
+            continue
+        hit = next((p for p in deps.downloads_path.iterdir() if p.is_file() and p.name.startswith(stem)), None)
+        if hit is not None:
+            return hit, hit.name
     return None, ""
 
 

@@ -116,7 +116,7 @@ class SubtaskVerifierUseCase:
 
     async def _verify_processing(self, subtask: SubtaskSpec, state_store) -> VerificationReport:
         from browser_agent.configuration import ZENDRIVER_HEADLESS
-        from browser_agent.adapters.browser.zendriver_browser_session import ZendriverBrowserSession
+        from browser_agent.adapters.browser.clean_browser_launcher import delete_profile_dir
         from browser_agent.adapters.llm.llm_adapter_factory import build_llm
         from browser_agent.adapters.execution.subprocess_read_script_runner import SubprocessReadScriptRunner
         from browser_agent.use_cases.reconcile_downloads_use_case import ReconcileDownloadsUseCase
@@ -165,8 +165,28 @@ class SubtaskVerifierUseCase:
             script_run_limit=_script_run_limit(),
         )
         report = await VerifyDownloadsUseCase(deps, model).execute(request)
+        delete_profile_dir(self._run_path / "profile_verifier")
         if probe_results:
             report.probe_results = probe_results
+
+        # Deterministic check: if discovered_links has rows but metadata for this subtask has 0 rows, fail verification
+        try:
+            disc_total = count_discovered_links(self._db_path)
+            subtask_rows = query_rows(self._db_path, subtask.subtask_id)
+            if disc_total > 0 and len(subtask_rows) == 0:
+                report.coverage_complete = False
+                report.missing_count = max(report.missing_count, 1)
+                report.missing_coverage.append(
+                    MissingCoverage(
+                        navigation_path=f"processing {subtask.subtask_id}",
+                        expected=f">0 metadata records from {disc_total} discovered links",
+                        actual="0 metadata records saved",
+                        reason="processing script processed 0 records despite discovered links existing",
+                        step_0_fix=f"Ensure subtask {subtask.subtask_id} loads and processes its discovered links without starvation.",
+                    )
+                )
+        except Exception:
+            pass
 
         # Deterministic HTML-capture gate (no LLM). Marks the run failed when
         # a registry/related-document flow hit a downloaded document with no
@@ -192,7 +212,8 @@ class SubtaskVerifierUseCase:
         return report
 
     async def _verify_discovery(self, subtask: SubtaskSpec, state_store) -> VerificationReport:
-        """Discovery branch: deterministic diff + a dedicated completeness audit."""
+        from browser_agent.adapters.browser.clean_browser_launcher import delete_profile_dir
+
         source, exec_report = self._load_discovery_inputs(subtask, state_store)
         gate = _discovery_gate(source, count_discovered_links(self._db_path))
         if gate.failure is not None:
@@ -204,6 +225,7 @@ class SubtaskVerifierUseCase:
         gaps = _deterministic_discovery_gaps(found, saved, db_counts)
         request = self._build_discovery_request(subtask, source, gate.manifest, found, saved, db_counts)
         report = await self._run_discovery_agent(request)
+        delete_profile_dir(self._run_path / "profile_verifier")
         report = _merge_deterministic_gaps(report, gaps)
         self._persist_report(report, subtask, state_store)
         return report
@@ -248,7 +270,6 @@ class SubtaskVerifierUseCase:
         )
 
     def _discovery_deps(self) -> VerificationAgentDeps:
-        from browser_agent.adapters.browser.zendriver_browser_session import ZendriverBrowserSession
         from browser_agent.adapters.execution.subprocess_read_script_runner import SubprocessReadScriptRunner
         from browser_agent.configuration import DISCOVERY_VERIFICATION_EXPLORE_LIMIT, ZENDRIVER_HEADLESS
         from browser_agent.use_cases.verification_agent_deps import VerificationAgentDeps
@@ -294,6 +315,12 @@ class SubtaskVerifierUseCase:
     def passed(report: VerificationReport) -> bool:
         from browser_agent.domain.probe_result import ProbeVerdict
 
+        # Reject if there are explicit missing paths or missing count > 0
+        if report.missing_count > 0 or report.missing_coverage:
+            return False
+        # If expected total is specified and > 0, observed must meet or exceed it
+        if report.expected_pdf_total > 0 and report.observed_pdf_total < report.expected_pdf_total:
+            return False
         coverage_ok = report.coverage_complete or (report.missing_count == 0 and not report.missing_coverage)
         probe_ok = not any(r.verdict is not ProbeVerdict.CAPTURED for r in report.probe_results)
         html_ok = (not report.html_required) or report.html_capture_complete

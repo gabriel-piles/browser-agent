@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import io
+import json
 import os
 import sys
 import traceback
@@ -77,10 +78,12 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
         browser_session: BrowserSessionPort,
         metadata_db_path: Path | None = None,
         task_slug: str = "validation",
+        filter_labels: list[str] | None = None,
     ) -> None:
         self._session = browser_session
         self._metadata_db_path = Path(metadata_db_path) if metadata_db_path else None
         self._task_slug = task_slug
+        self._filter_labels = filter_labels
 
     async def run(self, python_code: str, timeout: float = _DEFAULT_TIMEOUT) -> ScriptExecutionResult:
         transformed = self._augment(python_code)
@@ -111,7 +114,7 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
             try:
                 with (
                     _shim_modules(namespace["start_browser"]),
-                    _env_vars_for(self._metadata_db_path, self._task_slug),
+                    _env_vars_for(self._metadata_db_path, self._task_slug, self._filter_labels),
                     _sys_path_insert(self._metadata_db_path),
                     _restore_warning_filters(),
                 ):
@@ -274,15 +277,22 @@ def _shim_modules(start_browser: Any):
 
 
 @contextlib.contextmanager
-def _env_vars_for(metadata_db_path: Path | None, task_slug: str):
+def _env_vars_for(
+    metadata_db_path: Path | None,
+    task_slug: str,
+    filter_labels: list[str] | None = None,
+):
     """Set save_record env vars around the exec, restoring afterward."""
     if metadata_db_path is None:
         yield
         return
     saved_db = os.environ.get("BROWSER_AGENT_SAVE_RECORD_DB_PATH")
     saved_slug = os.environ.get("BROWSER_AGENT_TASK_SLUG")
+    saved_labels = os.environ.get("BROWSER_AGENT_SUBTASK_FILTER_LABELS")
     os.environ["BROWSER_AGENT_SAVE_RECORD_DB_PATH"] = str(metadata_db_path)
     os.environ["BROWSER_AGENT_TASK_SLUG"] = task_slug
+    if filter_labels:
+        os.environ["BROWSER_AGENT_SUBTASK_FILTER_LABELS"] = json.dumps(filter_labels)
     try:
         yield
     finally:
@@ -294,6 +304,10 @@ def _env_vars_for(metadata_db_path: Path | None, task_slug: str):
             os.environ.pop("BROWSER_AGENT_TASK_SLUG", None)
         else:
             os.environ["BROWSER_AGENT_TASK_SLUG"] = saved_slug
+        if saved_labels is None:
+            os.environ.pop("BROWSER_AGENT_SUBTASK_FILTER_LABELS", None)
+        else:
+            os.environ["BROWSER_AGENT_SUBTASK_FILTER_LABELS"] = saved_labels
 
 
 @contextlib.contextmanager
