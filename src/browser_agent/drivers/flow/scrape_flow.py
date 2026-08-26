@@ -62,8 +62,11 @@ class ScrapeFlow:
             state = await self._plan(task)
             if state is None:
                 return 1
+
         else:
             logger.info("flow: step 2 of 4 — resuming plan {n}", n=state.plan_counter)
+            if self._revive_repair_noop(state):
+                self._state_store.save(state)
 
         logger.info("flow: step 3 of 4 — subtask pipeline")
         state = await self._run_subtasks(state)
@@ -317,6 +320,21 @@ class ScrapeFlow:
             if dep_record is None or dep_record.status not in ("succeeded", "accepted_gap"):
                 return True
         return False
+
+    def _revive_repair_noop(self, state) -> bool:
+        """Reset dead-end records so a resumed run re-attempts them.
+
+        ``repair_noop`` means the builder produced identical code after a
+        repair turn — a dead end the live flow resolves through the
+        orchestrator, never a terminal outcome. A record persisted in that
+        state would otherwise be skipped on resume and stall the plan.
+        """
+        changed = False
+        for record in state.records:
+            if record.status == "repair_noop":
+                record.status = "pending"
+                changed = True
+        return changed
 
     def _is_terminal(self, state, subtask_id: str) -> bool:
         record = self._get_record(state, subtask_id)
