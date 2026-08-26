@@ -340,7 +340,7 @@ class ScrapeFlow:
         record = self._get_record(state, subtask_id)
         if record is None:
             return False
-        return record.status in ("succeeded", "accepted_gap", "aborted", "repair_noop")
+        return record.status in ("succeeded", "accepted_gap", "repair_noop")
 
     def _get_record(self, state, subtask_id: str):
         for r in state.records:
