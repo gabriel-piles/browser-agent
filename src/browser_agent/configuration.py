@@ -16,7 +16,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 # to any name in ``LLM_PROVIDERS``; the matching adapter lives in
 # ``adapters/llm/`` (add new providers there and to both constants below).
 LLM_PROVIDERS = ("ollama", "opencode", "openrouter")
-LLM_PROVIDER = "opencode"
+LLM_PROVIDER = "openrouter"
 # Environment variable that carries each provider's API key (set in .env).
 LLM_PROVIDER_ENV_KEYS = {
     "ollama": "OLLAMA_API_KEY",
@@ -25,7 +25,7 @@ LLM_PROVIDER_ENV_KEYS = {
 }
 # The single model identifier every adapter sends to its provider. Adapters
 # may remap it to a provider-specific catalog name (see ollama_adapter).
-MODEL = "deepseek-v4-flash"
+MODEL = "~deepseek/deepseek-v4-flash-latest"
 LLM_MAX_RETRIES = 6
 MAX_LLM_CALLS = 70
 EXPLORER_MAX_LLM_CALLS = 30
