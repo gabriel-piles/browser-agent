@@ -117,6 +117,7 @@ class SubtaskVerifierUseCase:
     async def _verify_processing(self, subtask: SubtaskSpec, state_store) -> VerificationReport:
         from browser_agent.configuration import ZENDRIVER_HEADLESS
         from browser_agent.adapters.browser.clean_browser_launcher import delete_profile_dir
+        from browser_agent.adapters.browser.zendriver_browser_session import ZendriverBrowserSession
         from browser_agent.adapters.llm.llm_adapter_factory import build_llm
         from browser_agent.adapters.execution.subprocess_read_script_runner import SubprocessReadScriptRunner
         from browser_agent.use_cases.reconcile_downloads_use_case import ReconcileDownloadsUseCase
@@ -273,6 +274,7 @@ class SubtaskVerifierUseCase:
         from browser_agent.adapters.execution.subprocess_read_script_runner import SubprocessReadScriptRunner
         from browser_agent.configuration import DISCOVERY_VERIFICATION_EXPLORE_LIMIT, ZENDRIVER_HEADLESS
         from browser_agent.use_cases.verification_agent_deps import VerificationAgentDeps
+        from browser_agent.adapters.browser.zendriver_browser_session import ZendriverBrowserSession
 
         return VerificationAgentDeps(
             browser_session=ZendriverBrowserSession(

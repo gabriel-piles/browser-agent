@@ -13,6 +13,10 @@ from browser_agent.use_cases.script_repair_prompt import (
     format_execution_repair,
     format_verification_repair,
 )
+from browser_agent.adapters.browser.clean_browser_launcher import (
+    delete_profile_dir,
+    kill_chromium_under,
+)
 
 _MAX_SUBTASK_ATTEMPTS = 3
 _MAX_LINT_REPAIRS_PER_ATTEMPT = 1
@@ -185,7 +189,6 @@ class SubtaskPipeline:
 
     async def _run_subtask_script(self, subtask_id, script_path, filter_labels=None):
         """Run the emitted script, then reap any Chromium it left behind."""
-        from browser_agent.adapters.browser.clean_browser_launcher import delete_profile_dir, kill_chromium_under
 
         try:
             return await self._executor.run(subtask_id, script_path, filter_labels=filter_labels)

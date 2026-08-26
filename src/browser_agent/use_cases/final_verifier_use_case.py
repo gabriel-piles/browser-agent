@@ -17,6 +17,7 @@ class FinalVerifierUseCase:
     async def verify(self, task_prompt: str) -> None:
         from browser_agent.configuration import ZENDRIVER_HEADLESS
         from browser_agent.adapters.browser.clean_browser_launcher import delete_profile_dir
+        from browser_agent.adapters.browser.zendriver_browser_session import ZendriverBrowserSession
         from browser_agent.adapters.llm.llm_adapter_factory import build_llm
         from browser_agent.adapters.execution.subprocess_read_script_runner import SubprocessReadScriptRunner
         from browser_agent.use_cases.reconcile_downloads_use_case import ReconcileDownloadsUseCase
