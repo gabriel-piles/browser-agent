@@ -25,6 +25,11 @@ _SMOKE_TIMEOUT_S = 60.0
 _DISCOVERY_RUN_TIMEOUT_S = 600.0
 
 
+def _phase(subtask_id: str, label: str) -> None:
+    """Log a pipeline phase transition so slow/hung phases are visible."""
+    logger.info("subtask {id}: {label}", id=subtask_id, label=label)
+
+
 def _resolve_existing_script(raw: str, run_path: Path) -> Path | None:
     """Resolve a stored script_path (relative to the run) to an existing file."""
     if not raw:
@@ -66,6 +71,7 @@ class SubtaskPipeline:
         last_feedback = ""
         for attempt in range(_MAX_SUBTASK_ATTEMPTS):
             record.attempts = attempt + 1
+            _phase(subtask.subtask_id, "building")
             bsession, builder = await self._build_session(profile_dir, subtask.subtask_id)
             try:
                 result, last_feedback = await self._attempt(
@@ -92,6 +98,83 @@ class SubtaskPipeline:
         vreport = await self._verifier.verify(subtask, self._state_store)
         record.status = "succeeded" if self._verifier.passed(vreport) else "verification_failed"
         return record
+
+    async def run_reused(self, subtask, state, source_script_path: Path, adapt_focus: str) -> SubtaskRecord:
+        """Adapt a sibling's proven script, then run the normal post-emit chain.
+
+        Falls back to a normal build (status reverted) when the source
+        script is unreadable or the adapter reports INCOMPATIBLE.
+        """
+        record = self._find_or_create_record(state, subtask.subtask_id, state.plan_counter)
+        record.status = "building"
+        record.attempts += 1
+        _phase(subtask.subtask_id, "script reuse")
+        source_code = self._read_source_script(source_script_path)
+        if source_code is None:
+            record.status = "pending"
+            return record
+        decision = await self._adapt_source_script(subtask, source_code, adapt_focus)
+        if decision is None or decision.status == "incompatible":
+            reason = decision.explanation if decision else "adapter call failed"
+            logger.warning(
+                "subtask {id}: reuse rejected — {reason}",
+                id=subtask.subtask_id,
+                reason=reason,
+            )
+            record.status = "pending"
+            return record
+        script = self._reuse_script_from_decision(subtask, decision)
+        profile_dir = self._run_path / "profile_builder"
+        bsession, builder = await self._build_session(profile_dir, subtask.subtask_id)
+        try:
+            _phase(subtask.subtask_id, "lint repair")
+            script, findings = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT)
+            if findings:
+                record.status = "lint_failed"
+                return record
+            _phase(subtask.subtask_id, "emitting")
+            emit_result, record = self._emit(subtask, script, record, state=None)
+            if record.status == "repair_noop":
+                record.status = "execution_failed"
+                return record
+            record, _ = await self._post_emit_loop(subtask, record, emit_result, builder)
+            return record
+        finally:
+            await bsession.close()
+            delete_profile_dir(profile_dir)
+
+    def _read_source_script(self, source_script_path: Path) -> str | None:
+        """Read the sibling script source (bounded), or None when unreadable."""
+        try:
+            return source_script_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning("reuse: source script unreadable: {exc}", exc=exc)
+            return None
+
+    async def _adapt_source_script(self, subtask, source_code: str, adapt_focus: str):
+        """Run the constrained adapt-or-reject LLM call for one subtask."""
+        from browser_agent.use_cases.script_reuse_adapter import ScriptReuseAdapter
+
+        try:
+            decision = await ScriptReuseAdapter().adapt(subtask, source_code)
+        except Exception as exc:
+            logger.warning("reuse: adapter call failed: {exc}", exc=exc)
+            return None
+        if adapt_focus:
+            logger.info("reuse: adapt focus: {focus}", focus=adapt_focus[:200])
+        return decision
+
+    def _reuse_script_from_decision(self, subtask, decision):
+        """Wrap the adapted source into a GeneratedScript for the emitter."""
+        from browser_agent.domain.generated_script import GeneratedScript
+
+        return GeneratedScript(
+            kind=subtask.kind,
+            explanation=decision.explanation or "adapted from sibling script",
+            dependencies=decision.dependencies,
+            python_code=decision.python_code,
+            pdf_download_strategy=decision.pdf_download_strategy,
+        )
 
     async def _reexecute_script(self, subtask, record):
         """Resolve and run the stored script once; persist the execution report."""
@@ -121,22 +204,34 @@ class SubtaskPipeline:
         if prior_feedback:
             context = f"{prior_feedback}\n\n{context}"
         last_feedback = ""
-        last_status = "verification_failed"
 
         # 1) Generate, then repair lint with findings (replaces blind re-execute).
         script, record = await self._generate_script(subtask, context, record, builder)
+        _phase(subtask.subtask_id, "lint repair")
         script, findings = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT)
         if findings:
             record.status = "lint_failed"
             return record.status, format_lint_repair(findings)
 
+        _phase(subtask.subtask_id, "emitting")
         emit_result, record = self._emit(subtask, script, record, state=None)
         if record.status == "repair_noop":
             return "repair_noop", last_feedback
 
         # 2) Unified post-emit loop: smoke -> exec -> verify, each repairing with
         #    its own findings and re-gating lint after every repair.
+        record, _ = await self._post_emit_loop(subtask, record, emit_result, builder)
+        return record.status, ""
+
+    async def _post_emit_loop(self, subtask, record, emit_result, builder=None) -> tuple:
+        """Smoke -> exec -> verify, repairing with its own findings and
+        re-gating lint after every repair. When ``builder`` is None a
+        failing phase is terminal (no repair session available). Returns
+        ``(record, last_feedback)`` so callers can propagate feedback."""
+        last_status = "verification_failed"
+        last_feedback = ""
         for _ in range(_MAX_POST_EMIT_REPAIRS + 1):
+            _phase(subtask.subtask_id, "smoke")
             smoke, record = await self._smoke(subtask, record, emit_result)
             smoke_phase_failed = (
                 (smoke and not smoke.smoke.success)
@@ -144,14 +239,20 @@ class SubtaskPipeline:
                 or (subtask.kind == "processing" and smoke and smoke.self_check and not smoke.self_check.success)
             )
             if smoke_phase_failed:
+                last_status = "verification_failed"
                 feedback = self._format_smoke_repair(subtask.kind, smoke)
-                last_feedback, last_status = feedback, "verification_failed"
-                script = await builder.repair(feedback)
+                last_feedback = feedback
+                script = await self._repair_or_none(subtask, builder, feedback)
+                if script is None:
+                    record.status = last_status
+                    return record, last_feedback
                 script, _ = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT)
                 emit_result, record = self._emit(subtask, script, record, state=None)
                 if record.status == "repair_noop":
-                    return "repair_noop", last_feedback
+                    record.status = last_status
+                    return record, last_feedback
                 continue
+            _phase(subtask.subtask_id, "executing")
             exec_report = await self._run_subtask_script(
                 subtask.subtask_id,
                 emit_result.script_path,
@@ -163,29 +264,49 @@ class SubtaskPipeline:
                 exec_report.script_path = str(Path(exec_report.script_path))
             self._state_store.write_report(subtask.subtask_id, "execution_report", exec_report)
             if exec_report.exit_code != 0:
+                last_status = "execution_failed"
                 feedback = format_execution_repair(exec_report.output_tail)
-                last_feedback, last_status = feedback, "execution_failed"
-                script = await builder.repair(feedback)
+                last_feedback = feedback
+                script = await self._repair_or_none(subtask, builder, feedback)
+                if script is None:
+                    record.status = last_status
+                    return record, last_feedback
                 script, _ = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT)
                 emit_result, record = self._emit(subtask, script, record, state=None)
                 if record.status == "repair_noop":
-                    return "repair_noop", last_feedback
+                    record.status = last_status
+                    return record, last_feedback
                 continue
 
+            _phase(subtask.subtask_id, "verifying")
             vreport = await self._verifier.verify(subtask, self._state_store)
             if self._verifier.passed(vreport):
-                return "succeeded", ""
+                record.status = "succeeded"
+                return record, ""
+            last_status = "verification_failed"
             feedback = format_verification_repair(vreport)
-            last_feedback, last_status = feedback, "verification_failed"
-            script = await builder.repair(feedback)
+            last_feedback = feedback
+            script = await self._repair_or_none(subtask, builder, feedback)
+            if script is None:
+                record.status = last_status
+                return record, last_feedback
             script, _ = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT)
             emit_result, record = self._emit(subtask, script, record, state=None)
             if record.status == "repair_noop":
-                return "repair_noop", last_feedback
+                record.status = last_status
+                return record, last_feedback
             # loop continues -> re-smoke with the repaired script
 
         record.status = last_status
-        return record.status, last_feedback
+        return record, last_feedback
+
+    @staticmethod
+    async def _repair_or_none(subtask, builder, feedback: str):
+        """Call the builder's repair turn; None when no builder exists."""
+        if builder is None:
+            return None
+        _phase(subtask.subtask_id, "builder repair")
+        return await builder.repair(feedback)
 
     async def _run_subtask_script(self, subtask_id, script_path, filter_labels=None):
         """Run the emitted script, then reap any Chromium it left behind."""
@@ -252,7 +373,8 @@ class SubtaskPipeline:
         self_check = None
         disc_failures: list[str] = []
         if subtask.kind == "processing" and subtask.sample_document_urls:
-            self_check = await processing_self_check(script_path, subtask.sample_document_urls)
+            _phase(subtask.subtask_id, "self-check")
+            self_check = await processing_self_check(script_path, subtask.sample_document_urls, timeout=600)
         elif subtask.kind == "discovery":
             db_path = script_path.parent.parent / "smoke" / "metadata.db"
             if db_path.exists():

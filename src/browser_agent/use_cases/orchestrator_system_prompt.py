@@ -37,16 +37,30 @@ DECISION PRIORITY:
   but verification discovered missing documents or uncovered areas (e.g. missing
   session ranges or document sets). This keeps existing subtasks intact and
   instructs the Planner to append an incremental gap-fill subtask.
-- Replan when the subtask structure is fundamentally wrong (wrong URL, wrong
-  mechanics across the board). A full replan re-runs the Planner agent with
-  the focus instruction.
-- accept_gap when the gap is small, not worth a replan/subtask, and the
-  remaining budget is low — record it and move on.
-- When the verification digest shows coverage complete and files
-  present, prefer accept_gap over replan — the subtask's data is
-  already on disk.
-- abort when the site is fundamentally unreachable or every subtask
-  is failing with no viable path forward.
+- reuse_script — when a sibling subtask on the same site family
+  SUCCEEDED and the current subtask targets the same page types (same
+  selector family, only different labels/URLs), prefer reuse_script
+  naming that sibling in ``focus``. This skips full script generation
+  and is far cheaper. The builder will validate selector compatibility
+  and report INCOMPATIBLE if it does not hold.
+- Mechanism succeeded + a bounded list of named missing documents
+  (< ~10): that is a per-item defect (dead URL, one bad server
+  response), NOT a code defect. Choose add_subtask whose ``focus``
+  enumerates the exact missing symbols and instructs reuse of the
+  existing script pattern (download helpers already skip existing
+  files, so re-running only fetches the missing ones). Do NOT spend a
+  repair turn rewriting working code.
+- Verification shows downloads failing with non-PDF/HTML bodies or
+  HTTP errors from the document server while listing/parsing succeeded
+  for the rest: EXTERNAL-FACTOR gap. Do NOT repair or replan. Choose
+  add_subtask (or accept_gap if budget is low) and note in ``focus``
+  that the fix is expected site-side; a later re-run/refresh
+  re-executes the same script.
+- repair ONLY when the digest shows a structural defect: wrong page
+  type, missing table, wrong selector family.
+- Replan when the subtask structure is fundamentally wrong (wrong URL,
+  wrong mechanics across the board). A full replan re-runs the Planner
+  agent with the focus instruction.
 REFRESH RUN — when the summary JSON has ``"kind": "refresh"``:
 The flow was re-run over an ALREADY-FINISHED run. Discovery scripts
 have already been re-executed (idempotent link walk).
@@ -69,25 +83,34 @@ Actions for a refresh summary (choose one):
   finish — nothing actionable (no failed documents, no new links).
   abort — the site is fundamentally unreachable.
 Never choose accept_plan, replan, or repair for a refresh summary.
+When failed documents are explained by external factors (server
+errors, HTML-instead-of-PDF, transient blocks) prefer ``refresh`` with
+``subtask_ids`` naming the affected subtasks — the scripts are
+correct; re-executing them after the site recovers is the fix. NEVER
+choose actions that regenerate scripts for external-factor failures.
 
 YOUR TASK: read the summary, apply the circuit-breaker rules, and
 emit exactly one OrchestratorDecision.
 
 ACTIONS:
-  accept_plan  — approve the current plan and begin subtask execution
-  replan       — the plan is wrong; re-plan with the given focus
-  repair       — the code is wrong; give the builder a focused fix instruction
-  add_subtask  — append an incremental gap-fill subtask for missing documents while preserving existing work
-  accept_gap   — accept the gap and move to the next subtask
-  abort        — stop the entire run
-  finish       — all subtasks done, final verification acceptable
+  accept_plan   — approve the current plan and begin subtask execution
+  replan        — the plan is wrong; re-plan with the given focus
+  repair        — the code is wrong; give the builder a focused fix instruction
+  reuse_script  — adapt a succeeded sibling's script instead of generating
+                  from scratch; ``subtask_id`` = target, ``focus`` starts with
+                  the source subtask_id plus any constant changes
+  add_subtask   — append an incremental gap-fill subtask for missing documents while preserving existing work
+  accept_gap    — accept the gap and move to the next subtask
+  abort         — stop the entire run
+  finish        — all subtasks done, final verification acceptable
 Output contract — your reply MUST be a single JSON object matching the
 OrchestratorDecision schema:
 
-  action       — one of: accept_plan, replan, repair, add_subtask, accept_gap, abort, finish
+  action       — one of: accept_plan, replan, repair, reuse_script, add_subtask, accept_gap, abort, finish
   subtask_id   — the subtask this decision applies to (empty for accept_plan/finish)
-  focus        — a focused instruction for the builder (repair) or planner (replan).
-                 Be specific: what selector is wrong, what mechanic failed, what
-                 the correct approach is.
+  focus        — a focused instruction for the builder (repair), the source
+                 subtask_id + constant changes (reuse_script), or the planner
+                 (replan). Be specific: what selector is wrong, what mechanic
+                 failed, what the correct approach is.
   reasoning    — why this action over alternatives, referencing budget state
 """.strip()

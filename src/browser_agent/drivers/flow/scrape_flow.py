@@ -14,6 +14,7 @@ _FLOW_RUN_DEADLINE_HOURS = 24
 _MAX_ORCHESTRATOR_REPAIRS_PER_SUBTASK = 2
 _MAX_REPLANS = 2
 _MAX_TOTAL_SUBTASK_BUILDS = 20
+_SIBLING_SOURCE_MAX_LINES = 200
 
 
 class ScrapeFlow:
@@ -256,6 +257,8 @@ class ScrapeFlow:
             if record.repair_decisions >= _MAX_ORCHESTRATOR_REPAIRS_PER_SUBTASK:
                 record.status = "accepted_gap"
                 self._state_store.save(state)
+        elif decision.action == "reuse_script":
+            state = await self._apply_reuse_script(decision, state)
         elif decision.action == "add_subtask" and state.replans < _MAX_REPLANS:
             focus = f"INCREMENTAL GAP-FILL SUBTASK: Keep all existing subtasks and their scripts intact. Append an incremental subtask targeting: {decision.focus}"
             state = await self._do_replan(state, focus, incremental=True)
@@ -267,6 +270,57 @@ class ScrapeFlow:
                 record.status = "accepted_gap"
             self._state_store.save(state)
         return state
+
+    async def _apply_reuse_script(self, decision, state):
+        """Reuse a sibling's proven script for the target subtask.
+
+        Falls back to a normal build (record status reset) when the
+        source has no emitted script; the pipeline itself falls back on
+        an INCOMPATIBLE verdict from the adapter.
+        """
+        target_id = decision.subtask_id
+        source_record = self._resolve_reuse_source(state, decision.focus)
+        spec = self._find_spec(state, target_id)
+        record = self._get_record(state, target_id)
+        if source_record is None or not source_record.script_path:
+            logger.warning(
+                "reuse_script: no sibling source for target {id} — falling back to normal build",
+                id=target_id,
+            )
+            record.status = "pending"
+            self._state_store.save(state)
+            return state
+        source_path = self._run_path / source_record.script_path
+        record.status = "building"
+        self._state_store.save(state)
+        adapted = await self._pipeline.run_reused(spec, state, source_path, decision.focus)
+        if adapted.status == "pending":
+            logger.info(
+                "reuse_script: adapter rejected source for {id} — falling back to normal build",
+                id=target_id,
+            )
+            context = self._build_context(state)
+            adapted = await self._pipeline.run(spec, state, context)
+        if adapted.status == "succeeded":
+            logger.info("subtask {id}: succeeded (reused script)", id=target_id)
+        self._state_store.save(state)
+        return state
+
+    def _resolve_reuse_source(self, state, focus: str):
+        """Find the source record named in focus (its subtask_id or a sibling).
+
+        Accepts the exact subtask_id anywhere in the focus text; without
+        one, uses the most recent succeeded sibling with a script.
+        """
+        import re
+
+        match = re.search(r"\b([a-z0-9_]+)\b", focus or "")
+        if match:
+            for r in state.records:
+                if r.subtask_id == match.group(1) and r.status == "succeeded" and r.script_path:
+                    return r
+        candidates = [r for r in state.records if r.status == "succeeded" and r.script_path]
+        return candidates[-1] if candidates else None
 
     async def _do_replan(self, state, focus: str, incremental: bool = False):
         planner = self._planner_factory()
@@ -478,6 +532,9 @@ class ScrapeFlow:
                 sibling_parts.append(f"- {r.subtask_id}: {r.script_path} ({r.status})")
         if sibling_parts:
             parts.append("Sibling scripts already emitted:\n" + "\n".join(sibling_parts))
+            source = self._sibling_source_block(state)
+            if source:
+                parts.append(source)
         # Prior scripts from other runs (matching kind)
         if hasattr(self, "_prior_index") and self._prior_index is not None:
             task = state.plan.task_summary
@@ -485,3 +542,31 @@ class ScrapeFlow:
             if prior:
                 parts.append(self._prior_index.render_context(prior))
         return "\n\n".join(parts)
+
+    def _sibling_source_block(self, state) -> str:
+        """Render the newest succeeded sibling's script source (truncated).
+
+        Gives the builder a proven skeleton to copy instead of rewriting
+        from scratch for same-site-family subtasks.
+        """
+        candidates = [r for r in state.records if r.status == "succeeded" and r.script_path]
+        if not candidates:
+            return ""
+        record = candidates[-1]
+        path = self._run_path / record.script_path
+        if not path.is_file():
+            return ""
+        lines = path.read_text(encoding="utf-8").splitlines()
+        truncated = len(lines) > _SIBLING_SOURCE_MAX_LINES
+        body = "\n".join(lines[:_SIBLING_SOURCE_MAX_LINES])
+        suffix = (
+            f"\n... ({len(lines) - _SIBLING_SOURCE_MAX_LINES} more lines, read the file at {record.script_path} if needed)"
+            if truncated
+            else ""
+        )
+        return (
+            "## Sibling script source (copy and adapt — change only "
+            f"constants/labels/URLs, keep the proven skeleton)\n"
+            f"Source: {record.subtask_id} — {record.script_path}\n"
+            f"```python\n{body}{suffix}\n```"
+        )

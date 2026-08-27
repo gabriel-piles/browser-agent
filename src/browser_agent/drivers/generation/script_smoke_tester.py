@@ -42,7 +42,7 @@ import os
 import signal
 import sqlite3
 import sys
-
+from collections import deque
 from pathlib import Path
 
 from loguru import logger
@@ -62,6 +62,7 @@ from browser_agent.use_cases.zendriver_error_patterns import ZD_RUNTIME_ERROR_PA
 # real scrape takes minutes; we don't wait for that. If the script is
 # still running at the timeout, it passed the smoke test.
 SMOKE_TEST_TIMEOUT_S = 60.0
+_SMOKE_TAIL_LINES = 50
 
 
 def _use_smoke_profile(script_path: Path, scratch_dir: Path) -> tuple[Path | None, str | None]:
@@ -107,6 +108,27 @@ def _reap_scratch_chromium(profile_dir: Path) -> None:
         logger.warning("Chromium reap failed under {dir}: {exc}", dir=profile_dir, exc=exc)
 
 
+async def _drain_stdout(proc: asyncio.subprocess.Process, tail: deque) -> bytes:
+    """Read stdout to EOF, keeping the last ``_SMOKE_TAIL_LINES`` lines.
+
+    Streams (instead of ``communicate()``) so a timeout still leaves a
+    bounded tail of what the script printed before it was killed.
+    """
+    buffer = bytearray()
+    assert proc.stdout is not None
+    line_buf = bytearray()
+    while chunk := await proc.stdout.read(4096):
+        buffer.extend(chunk)
+        line_buf.extend(chunk)
+        while b"\n" in line_buf:
+            line, _, rest = line_buf.partition(b"\n")
+            line_buf = bytearray(rest)
+            tail.append(line.decode("utf-8", errors="replace"))
+    if line_buf.strip():
+        tail.append(line_buf.decode("utf-8", errors="replace"))
+    return bytes(buffer)
+
+
 async def smoke_test_script(
     script_path: Path,
     timeout: float = SMOKE_TEST_TIMEOUT_S,
@@ -127,13 +149,14 @@ async def smoke_test_script(
     # the generation pipeline's still-running Chromium instance.
     run_config_path, original_run_config = _use_smoke_profile(script_path, scratch_dir)
 
-    cmd = [sys.executable, str(script_path)]
     env = {
         **os.environ,
         "ZENDRIVER_HEADLESS": "true",
         "BROWSER_AGENT_SAVE_RECORD_DB_PATH": db_path,
         "BROWSER_AGENT_TASK_SLUG": "smoke",
     }
+    cmd = [sys.executable, str(script_path)]
+    stdout_tail: deque = deque(maxlen=_SMOKE_TAIL_LINES)
     try:
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -145,19 +168,22 @@ async def smoke_test_script(
             )
         except OSError as exc:
             return SmokeTestResult(success=False, output=f"failed to launch: {exc}", timed_out=False)
-
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            stdout, _ = await asyncio.wait_for(_drain_stdout(proc, stdout_tail), timeout=timeout)
         except asyncio.TimeoutError:
             await _kill_process_group(proc)
+            tail = "\n".join(stdout_tail)
+            if timeout_is_success:
+                return SmokeTestResult(
+                    success=True,
+                    output=("[smoke test timed out — script is running]\n" + tail).strip(),
+                    timed_out=True,
+                )
             return SmokeTestResult(
-                success=timeout_is_success,
-                output="[smoke test timed out — script is running]"
-                if timeout_is_success
-                else f"[timed out after {timeout}s — script hung]",
+                success=False,
+                output=f"[timed out after {timeout}s — script hung]\n{tail}".strip(),
                 timed_out=True,
             )
-
         output = stdout.decode("utf-8", errors="replace") if stdout else ""
         if proc.returncode == 0:
             return SmokeTestResult(success=True, output=output, timed_out=False)

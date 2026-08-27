@@ -14,6 +14,7 @@ class OrchestratorDecision(BaseModel):
         "accept_plan",
         "replan",
         "repair",
+        "reuse_script",
         "add_subtask",
         "accept_gap",
         "abort",
@@ -23,7 +24,11 @@ class OrchestratorDecision(BaseModel):
     subtask_id: str = ""
     focus: str = Field(
         default="",
-        description="Repair/replan instruction for the next agent turn",
+        description=(
+            "Repair/replan instruction for the next agent turn; for "
+            "reuse_script: the source subtask_id whose script to adapt, "
+            "plus any constant changes"
+        ),
     )
     subtask_ids: list[str] = Field(
         default_factory=list,

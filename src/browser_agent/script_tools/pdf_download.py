@@ -41,12 +41,13 @@ _DOWNLOAD_DELAY_MIN_S = 2.0
 _DOWNLOAD_DELAY_MAX_S = 5.0
 _BLOCK_COOLDOWN_S = 30.0
 
-# Interactive Cloudflare bypass: when the 403 streak hits the limit,
-# navigate the visible tab to the blocked URL so the operator can
-# manually click the Cloudflare checkbox. Poll until the challenge
-# clears, then reset the streak and let the caller retry.
+# Cloudflare bypass on 403-streak: when BROWSER_AGENT_ATTENDED is set,
+# pause for the operator to click the challenge checkbox (300 s). When
+# unset (unattended runs), a short passive wait refreshes cookies and
+# lets the caller retry instead of stalling the run.
 _CF_MAX_RETRIES = 3
 _CF_INTERACTIVE_TIMEOUT_S = 300.0
+_CF_UNATTENDED_TIMEOUT_S = 60.0
 _CF_POLL_INTERVAL_S = 2.0
 _CF_TITLES = ("just a moment", "attention required", "checking your browser")
 _CF_PROMPT = (
@@ -57,6 +58,15 @@ _CF_PROMPT = (
     "The script will automatically resume once the challenge clears.\n"
     "Timeout: {timeout:.0f}s\n" + "=" * 72 + "\n"
 )
+import os
+
+_ATTENDED = bool(os.environ.get("BROWSER_AGENT_ATTENDED"))
+
+
+def _cf_wait_timeout() -> float:
+    """Interactive click wait when attended; short passive wait otherwise."""
+    return _CF_INTERACTIVE_TIMEOUT_S if _ATTENDED else _CF_UNATTENDED_TIMEOUT_S
+
 
 _consecutive_403 = 0
 
@@ -128,9 +138,10 @@ async def _wait_for_cloudflare_clear(tab, url):
     after a brief wait so the caller's retry gets fresh cookies.
     """
     global _consecutive_403
+    wait_s = _cf_wait_timeout()
     if tab is None:
-        print(_CF_PROMPT.format(url=url, timeout=_CF_INTERACTIVE_TIMEOUT_S))
-        await asyncio.sleep(_CF_INTERACTIVE_TIMEOUT_S)
+        print(_CF_PROMPT.format(url=url, timeout=wait_s))
+        await asyncio.sleep(wait_s)
         _consecutive_403 = 0
         return
     try:
@@ -143,8 +154,8 @@ async def _wait_for_cloudflare_clear(tab, url):
         _consecutive_403 = 0
         await asyncio.sleep(2.0)
         return
-    print(_CF_PROMPT.format(url=url, timeout=_CF_INTERACTIVE_TIMEOUT_S))
-    deadline = asyncio.get_event_loop().time() + _CF_INTERACTIVE_TIMEOUT_S
+    print(_CF_PROMPT.format(url=url, timeout=wait_s))
+    deadline = asyncio.get_event_loop().time() + wait_s
     while asyncio.get_event_loop().time() < deadline:
         await tab.sleep(_CF_POLL_INTERVAL_S)
         try:

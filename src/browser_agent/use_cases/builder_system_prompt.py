@@ -1117,6 +1117,15 @@ Processing script contract:
   - When ``needs_discovery`` is false (no discovery script), the
     processing script does inline extraction with no
     ``load_discovered_links()`` call.
+  - If the context contains sibling script source for the same site
+    family, your FIRST attempt MUST be that script with only its
+    constants changed (FILTER_LABELS, target URLs, session range). A
+    from-scratch rewrite when a working sibling exists is a failure
+    mode.
+  - Before crawling, load existing records via the script_tools helpers
+    and skip listing URLs whose records are already complete — repairs
+    and re-runs must not re-crawl pages that already produced their
+    records.
 
 Step 7 — WRITE THE SCRIPT. Write the processing script per the contract
 above. It is BOTH the validation candidate AND the final deliverable —
