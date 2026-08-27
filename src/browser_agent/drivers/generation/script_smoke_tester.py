@@ -169,7 +169,7 @@ async def smoke_test_script(
         except OSError as exc:
             return SmokeTestResult(success=False, output=f"failed to launch: {exc}", timed_out=False)
         try:
-            stdout, _ = await asyncio.wait_for(_drain_stdout(proc, stdout_tail), timeout=timeout)
+            stdout = await asyncio.wait_for(_drain_stdout(proc, stdout_tail), timeout=timeout)
         except asyncio.TimeoutError:
             await _kill_process_group(proc)
             tail = "\n".join(stdout_tail)
