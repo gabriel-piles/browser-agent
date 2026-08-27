@@ -49,3 +49,11 @@ class SubtaskSpec(BaseModel):
         default_factory=list,
         description="Filter labels from discovered_links assigned to this subtask; empty for unscoped/single-page tasks",
     )
+    reuse_scripts: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Prior scripts the builder should start from, as "
+            '"<run_name>/<script_path>" exactly as shown in the '
+            "prior-scripts context; empty = write from scratch"
+        ),
+    )

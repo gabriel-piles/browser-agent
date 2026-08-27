@@ -192,7 +192,7 @@ class ScrapeFlow:
                 continue
 
             self._total_builds += 1
-            context = self._build_context(state)
+            context = self._build_context(state, spec)
             record = await self._pipeline.run(spec, state, context)
             self._state_store.write_report(spec.subtask_id, "subtask", spec)
             self._state_store.save(state)
@@ -299,7 +299,7 @@ class ScrapeFlow:
                 "reuse_script: adapter rejected source for {id} — falling back to normal build",
                 id=target_id,
             )
-            context = self._build_context(state)
+            context = self._build_context(state, spec)
             adapted = await self._pipeline.run(spec, state, context)
         if adapted.status == "succeeded":
             logger.info("subtask {id}: succeeded (reused script)", id=target_id)
@@ -523,7 +523,7 @@ class ScrapeFlow:
                 parts.append(self._prior_index.render_context(prior))
         return "\n\n".join(parts)
 
-    def _build_context(self, state) -> str:
+    def _build_context(self, state, spec) -> str:
         parts: list[str] = []
         # Sibling scripts from current run
         sibling_parts: list[str] = []
@@ -535,12 +535,11 @@ class ScrapeFlow:
             source = self._sibling_source_block(state)
             if source:
                 parts.append(source)
-        # Prior scripts from other runs (matching kind)
-        if hasattr(self, "_prior_index") and self._prior_index is not None:
-            task = state.plan.task_summary
-            prior = self._prior_index.find_relevant(task, max_results=3)
-            if prior:
-                parts.append(self._prior_index.render_context(prior))
+        # Nominated prior scripts from other runs (planner-selected)
+        if spec.reuse_scripts and hasattr(self, "_prior_index") and self._prior_index is not None:
+            source = self._prior_index.source_blocks(spec.reuse_scripts)
+            if source:
+                parts.append(source)
         return "\n\n".join(parts)
 
     def _sibling_source_block(self, state) -> str:
@@ -565,8 +564,8 @@ class ScrapeFlow:
             else ""
         )
         return (
-            "## Sibling script source (copy and adapt — change only "
-            f"constants/labels/URLs, keep the proven skeleton)\n"
+            "## Sibling script source (proven starting point — adapt as "
+            f"needed, keep the parts that make sense)\n"
             f"Source: {record.subtask_id} — {record.script_path}\n"
             f"```python\n{body}{suffix}\n```"
         )

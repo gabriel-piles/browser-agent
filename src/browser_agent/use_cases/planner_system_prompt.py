@@ -83,6 +83,16 @@ step.
   selectors, mechanics, and exactly what the script should do). List subtasks in
   dependency order (use depends_on when one subtask's discovered_links are consumed by another).
   expected_document_count should reflect advertised counts when available.
+  Reuse awareness — your context may list prior scripts from similar
+  runs. For each SubtaskSpec you decide which prior scripts the Script
+  Builder receives, via reuse_scripts: echo "<run_name>/<script_path>"
+  exactly as shown in the prior-scripts context. Judge fit per subtask:
+  nominate only scripts whose page mechanics genuinely transfer. NONE is
+  a valid choice — when nothing fits, leave reuse_scripts empty and the
+  builder writes from scratch. When several subtasks share one page
+  type, nominate the same prior script for all of them and keep their
+  descriptions differing only in constants (labels, URLs, ranges) so
+  adaptation is a constant swap.
   Step 7 — COLLECT SAMPLE URLS. Collect 3-5 DIRECT DOCUMENT file URLs
   during exploration — the actual downloadable file link (e.g. an
   E/HRC/resolutions/A-HRC-RES-1-1.doc href or a document-download API
@@ -144,6 +154,8 @@ Each SubtaskSpec has:
   expected_document_count — advertised count (0 if unknown)
   depends_on            — subtask_ids that must finish first
   filter_labels         — list of filter_label strings assigned to this subtask
+  reuse_scripts         — list of "<run_name>/<script_path>" ids echoed
+                          from the prior-scripts context; empty = none
 HARD RULES:
 - Exactly ONE script per subtask. Never combine two subtasks into one script.
 - Split when page formats differ across sections/sessions/years or when a

@@ -18,6 +18,7 @@ from browser_agent.domain.prior_script_summary import PriorScriptSummary
 _MAX_SCRIPTS_PER_RUN = 6
 _MAX_TOTAL_RESULTS = 8
 _MAX_SUMMARY_CHARS = 2000
+_MAX_SOURCE_LINES = 200
 
 
 class PriorScriptsIndex:
@@ -57,11 +58,52 @@ class PriorScriptsIndex:
                 top = s.verified_selectors[:3]
                 selectors_str = "; selectors: " + ", ".join(f'"{sel}"' for sel in top)
             parts.append(
-                f"- {s.run_name}/{s.subtask_description[:120]} "
+                f"- {s.run_name}/{s.script_path} — {s.subtask_description[:120]} "
                 f"({s.kind}, {s.pdf_download_strategy}, {s.status}{status_note})"
                 f"{selectors_str}"
             )
         return "\n".join(parts)
+
+    def source_blocks(self, nominated: list[str]) -> str:
+        """Render full source of nominated prior scripts, truncated.
+
+        nominated entries are "<run_name>/<script_path>" strings as
+        rendered by render_context. Unresolvable ids are skipped with a
+        warning. Returns "" when nothing resolves.
+        """
+        lookup = {f"{s.run_name}/{s.script_path}": s for s in self._scan_runs()}
+        parts: list[str] = []
+        for nomination in nominated:
+            summary = lookup.get(nomination)
+            if summary is None:
+                logger.warning(
+                    "prior_scripts_index: nominated id not found: {id}",
+                    id=nomination,
+                )
+                continue
+            block = self._source_block(summary)
+            if block:
+                parts.append(block)
+        return "\n\n".join(parts)
+
+    def _source_block(self, summary: PriorScriptSummary) -> str:
+        path = self._runs_root / summary.run_name / summary.script_path
+        if not path.is_file():
+            logger.warning(
+                "prior_scripts_index: nominated script file missing: {path}",
+                path=str(path),
+            )
+            return ""
+        lines = path.read_text(encoding="utf-8").splitlines()
+        truncated = len(lines) > _MAX_SOURCE_LINES
+        body = "\n".join(lines[:_MAX_SOURCE_LINES])
+        suffix = f"\n... ({len(lines) - _MAX_SOURCE_LINES} more lines)" if truncated else ""
+        return (
+            f"## Nominated prior script: {summary.run_name}/{summary.script_path}\n"
+            f"(status: {summary.status}) — proven starting point; adapt as "
+            "needed, keep the parts that make sense.\n"
+            f"```python\n{body}{suffix}\n```"
+        )
 
     def _scan_runs(self) -> list[PriorScriptSummary]:
         summaries: list[PriorScriptSummary] = []

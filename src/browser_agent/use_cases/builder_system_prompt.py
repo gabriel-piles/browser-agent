@@ -1117,11 +1117,12 @@ Processing script contract:
   - When ``needs_discovery`` is false (no discovery script), the
     processing script does inline extraction with no
     ``load_discovered_links()`` call.
-  - If the context contains sibling script source for the same site
-    family, your FIRST attempt MUST be that script with only its
-    constants changed (FILTER_LABELS, target URLs, session range). A
-    from-scratch rewrite when a working sibling exists is a failure
-    mode.
+  - If the context contains a sibling or nominated prior script source,
+    FIRST check whether its mechanics fit this subtask. When they do,
+    start from that script and adapt it — you may change more than
+    constants (selectors, page flow, helper usage) as the subtask
+    requires, keeping the parts that still apply. Write from scratch
+    only when the provided script genuinely does not fit.
   - Before crawling, load existing records via the script_tools helpers
     and skip listing URLs whose records are already complete — repairs
     and re-runs must not re-crawl pages that already produced their
