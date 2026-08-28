@@ -79,6 +79,7 @@ _EXTRACT_TAIL_ELEMENTS = 25
 _SELECT_MAX_OPTIONS = 60
 _NON_HTML_EXTENSIONS = (".js", ".css", ".json", ".xml", ".txt", ".svg")
 _PERFORM_TIMEOUT_S = 300.0
+_CLOSE_STOP_TIMEOUT_S = 10.0
 
 
 class ZendriverBrowserSession(BrowserSessionPort):

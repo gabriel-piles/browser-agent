@@ -15,13 +15,11 @@ from browser_agent.adapters.execution.file_ops import (
     is_pdf_bytes,
     is_doc_bytes,
 )
-from browser_agent.configuration import PROJECT_ROOT
 from browser_agent.domain.download_result import DownloadResult
 from browser_agent.ports.pdf_downloader_port import PdfDownloaderPort
 
-_DEFAULT_DOWNLOADS_PATH = PROJECT_ROOT / "data" / "downloads"
-
 _IMPERSONATE = "chrome"
+
 _TIMEOUT_S = 60.0
 _MAX_SIZE_BYTES = 100 * 1024 * 1024
 _RETRIES = 3
@@ -45,7 +43,7 @@ class CurlCffiPdfDownloaderAdapter(PdfDownloaderPort):
     browser-fetch strategy (``download_pdf_browser``) instead.
     """
 
-    def __init__(self, downloads_path: Path = _DEFAULT_DOWNLOADS_PATH) -> None:
+    def __init__(self, downloads_path: Path) -> None:
         self._downloads_path = downloads_path
         self._downloads_path.mkdir(parents=True, exist_ok=True)
 

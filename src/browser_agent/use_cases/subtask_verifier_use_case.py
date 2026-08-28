@@ -244,7 +244,14 @@ class SubtaskVerifierUseCase:
         return report
 
     def _load_discovery_inputs(self, subtask: SubtaskSpec, state_store) -> tuple[str | None, Any]:
-        """Return ``(script_source | None, execution_report | None)`` for the branch."""
+        """Return ``(script_source | None, execution_report | None)`` for the branch.
+
+        The script source is resolved from the execution report's ``script_path``
+        first: it is the exact script that produced the stdout being verified.
+        The record in ``state.json`` is stale during the pipeline (persisted only
+        after the pipeline returns), so reading it here would audit the previous
+        attempt's script — or nothing at all on the first attempt.
+        """
         exec_report = None
         if state_store is not None:
             exec_report = state_store.read_report(
@@ -252,15 +259,31 @@ class SubtaskVerifierUseCase:
                 "execution_report",
                 ScriptExecutionReport,
             )
-        record = _find_record(state_store, subtask.subtask_id)
-        if record is None or not record.script_path:
-            return None, exec_report
-        path = Path(record.script_path)
-        if not path.is_absolute():
-            path = self._run_path / path
-        if not path.is_file():
+        path = self._resolve_discovery_script_path(subtask, state_store, exec_report)
+        if path is None:
             return None, exec_report
         return path.read_text(encoding="utf-8"), exec_report
+
+    def _resolve_discovery_script_path(
+        self,
+        subtask: SubtaskSpec,
+        state_store,
+        exec_report: ScriptExecutionReport | None,
+    ) -> Path | None:
+        """Resolve the discovery script source, preferring the execution report."""
+        candidates: list[str] = []
+        if exec_report is not None and exec_report.script_path:
+            candidates.append(exec_report.script_path)
+        record = _find_record(state_store, subtask.subtask_id)
+        if record is not None and record.script_path:
+            candidates.append(record.script_path)
+        for raw in candidates:
+            path = Path(raw)
+            if not path.is_absolute():
+                path = self._run_path / path
+            if path.is_file():
+                return path
+        return None
 
     def _build_discovery_request(
         self,

@@ -489,7 +489,7 @@ class SubtaskPipeline:
                 metadata_db_path=self._run_path / "metadata.db",
                 task_slug=task_slug,
             ),
-            pdf_downloader=CurlCffiPdfDownloaderAdapter(),
+            pdf_downloader=CurlCffiPdfDownloaderAdapter(self._run_path / "downloads"),
         )
         return session, ScriptBuilderUseCase(deps)
 

@@ -147,7 +147,7 @@ class GenerateScriptDriver:
                     metadata_db_path=run_path / "metadata.db",
                     task_slug=run.name,
                 ),
-                pdf_downloader=CurlCffiPdfDownloaderAdapter(),
+                pdf_downloader=CurlCffiPdfDownloaderAdapter(run_path / "downloads"),
             )
             return TaskPlannerUseCase(deps)
 
