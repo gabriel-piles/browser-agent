@@ -83,7 +83,11 @@ class TaskPlannerUseCase:
         return (
             f"ORIGINAL TASK (must still be satisfied, unchanged):\n{task}\n\n"
             f"THE PREVIOUS PLAN NEEDS REVISION. Focus: {focus}\n\n"
-            f"PREVIOUS PLAN AND STATUS (revise it; keep what already works):\n{previous_plan}"
+            f"PREVIOUS PLAN AND STATUS (revise it; keep what already works):\n{previous_plan}\n\n"
+            'HARD REQUIREMENT: the revised plan MUST contain at least one kind="processing" subtask. '
+            'A plan made only of kind="discovery" subtasks can never save records and will be rejected. '
+            "Discovery scripts collect links into discovered_links; a processing subtask must read them, "
+            "extract metadata, and download the documents."
         )
 
     @staticmethod

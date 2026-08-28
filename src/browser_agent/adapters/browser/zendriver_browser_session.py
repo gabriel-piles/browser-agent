@@ -25,7 +25,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from loguru import logger
 
@@ -311,6 +311,11 @@ class ZendriverBrowserSession(BrowserSessionPort):
         url = action.url or ""
         if not url:
             return self._error_snapshot("navigate requires url")
+        if not self._is_http_url(url):
+            return self._error_snapshot(
+                f"navigate: {url!r} is not a http(s) URL — the agent passed page text "
+                "(a title/label) instead of a link href. Re-extract the href attribute."
+            )
         guard = self._non_html_guard(url)
         if guard:
             return self._error_snapshot(guard)
@@ -325,6 +330,11 @@ class ZendriverBrowserSession(BrowserSessionPort):
                 f"from the listing page." + (("\n" + snapshot.summary) if snapshot.summary else "")
             )
         return await self._annotate_challenge(snapshot)
+
+    @staticmethod
+    def _is_http_url(url: str) -> bool:
+        """True only for absolute http/https URLs the browser can navigate to."""
+        return urlsplit(url.strip()).scheme in ("http", "https")
 
     @staticmethod
     def _non_html_guard(url: str) -> str:
@@ -634,8 +644,15 @@ class ZendriverBrowserSession(BrowserSessionPort):
             return 0
 
     async def _build_snippet(self) -> HtmlSnippet:
-        raw_html = await self._tab.get_content()
-        return HtmlSnippet.from_raw(url=self._tab.url or "", raw_html=raw_html or "")
+        try:
+            raw_html = await self._tab.get_content()
+        except Exception as exc:
+            # DOM.getOuterHTML raises "No node found for given backend id"
+            # when a navigation tears down the document mid-snapshot. Degrade
+            # to an empty snippet instead of crashing the run.
+            logger.warning("get_content failed during snapshot: {err}", err=str(exc)[:160])
+            raw_html = ""
+        return HtmlSnippet.from_raw(url=(self._tab.url or ""), raw_html=raw_html or "")
 
     async def _annotate_challenge(self, snapshot: PageSnapshot) -> PageSnapshot:
         """If the snapshot looks like a challenge, append a warning to its summary.

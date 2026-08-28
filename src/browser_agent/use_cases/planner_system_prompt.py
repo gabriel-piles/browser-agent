@@ -108,8 +108,16 @@ step.
   Step 8 — PROBE PDF DOWNLOAD. If the task involves PDF downloads, call
   ``download_pdf`` ONCE with a real PDF URL. Set pdf_download_strategy.
 
-Rule 16 — Per-sub-page selector verification: when the task enumerates
-multiple peer sub-pages, navigate to and extract from EVERY sub-page.
+Rule 16 — Per-sub-page selector verification: when the task enumerates a
+HANDHELD number of peer sub-pages (a few distinct sections/categories),
+navigate to and extract from EACH one. When the task spans a LARGE ranged
+series (e.g. "every session 2-63", dozens/hundreds of peers), do NOT visit
+them all — navigate to 2-3 representative pages spanning the range (one
+early, one middle, one late) to learn the URL pattern and selectors, then
+emit ONE discovery script that enumerates the full range programmatically
+(derived-from-listing / index-range manifest) plus the processing
+subtask(s) that consume it. Visiting every peer is the #1 cause of an
+empty plan: it exhausts the exploration budget before you can emit.
 
 Rule 17 — Navigation discipline: NEVER invent or guess URLs. Navigate
 only to (a) the task's target URL, (b) exact href values you saw in a

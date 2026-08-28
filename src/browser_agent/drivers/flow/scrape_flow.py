@@ -239,7 +239,9 @@ class ScrapeFlow:
             self._log_plan_progress(state)
 
         statuses = {r.subtask_id: r.status for r in state.records}
-        if all(statuses.get(s.subtask_id) in ("succeeded", "accepted_gap") for s in state.plan.subtasks):
+        if state.plan.subtasks and all(
+            statuses.get(s.subtask_id) in ("succeeded", "accepted_gap") for s in state.plan.subtasks
+        ):
             state.finished = True
         self._log_plan_progress(state)
         return state
@@ -431,10 +433,12 @@ class ScrapeFlow:
         A plan whose subtasks are all ``kind="discovery"`` can never
         produce ``save_record`` rows, yet every subtask succeeds and the
         flow reports finished with an empty metadata table. Deterministic
-        guard: force a replan that adds a processing subtask.
+        guard: force a replan that adds a processing subtask. An EMPTY
+        subtask list is equally fatal (a placeholder plan finishes the
+        flow with zero scripts), so it is flagged here too.
         """
         subtasks = plan.subtasks
-        return bool(subtasks) and all(s.kind == "discovery" for s in subtasks)
+        return not subtasks or all(s.kind == "discovery" for s in subtasks)
 
     def _plan_summary(self, state) -> str:
         import json

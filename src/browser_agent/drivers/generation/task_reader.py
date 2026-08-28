@@ -24,8 +24,9 @@ class TaskReader:
         """Pick the task from argv/stdin, falling back to ``run.prompt``."""
         if self._wants_stdin(argv):
             return self._read_stdin(run.prompt)
-        if len(argv) > 1:
-            return " ".join(argv[1:]).strip()
+        tail = [a for a in argv[1:] if a.strip() != "."]
+        if tail:
+            return " ".join(tail).strip()
         return run.prompt
 
     def _wants_stdin(self, argv: list[str]) -> bool:

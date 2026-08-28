@@ -30,9 +30,13 @@ from browser_agent.use_cases.zendriver_error_patterns import SCRIPT_TOOLS_MODULE
 from browser_agent.use_cases.script_precheck import precheck
 
 VALIDATION_TIMEOUT_S = 90.0
+# Discovery scripts legitimately enumerate dozens of listing pages during the
+# validation run (the validation IS the full deliverable), far exceeding the
+# generic processing-script budget. Match the discovery smoke-test budget.
+DISCOVERY_VALIDATION_TIMEOUT_S = 600.0
+_DISCOVERY_MARKERS = ("save_discovered_link", "DISCOVERY_MANIFEST")
 _ERROR_HEAD_CHARS = 2000
 _TIMEOUT_NOTICE_RE = re.compile(r"\[TIMEOUT[^\]]*\]")
-
 # Consecutive pure-timeout streak (module state, like the LLM ledger). First
 # pure timeout stays uncharged; each subsequent one is charged as FAILED.
 _CONSECUTIVE_PURE_TIMEOUTS = 0
@@ -251,8 +255,9 @@ async def run_validation_script(ctx: RunContext[AgentDeps], python_code: str) ->
     deps.validation_attempts += 1
     run_number = deps.validation_attempts
     runner: ScriptRunnerPort = deps.script_runner
+    timeout = DISCOVERY_VALIDATION_TIMEOUT_S if any(m in python_code for m in _DISCOVERY_MARKERS) else VALIDATION_TIMEOUT_S
     async with traced_tool("run_validation_script"):
-        result: ScriptExecutionResult = await runner.run(python_code, timeout=VALIDATION_TIMEOUT_S)
+        result: ScriptExecutionResult = await runner.run(python_code, timeout=timeout)
     global _CONSECUTIVE_PURE_TIMEOUTS
     if _is_pure_timeout(result):
         _CONSECUTIVE_PURE_TIMEOUTS += 1

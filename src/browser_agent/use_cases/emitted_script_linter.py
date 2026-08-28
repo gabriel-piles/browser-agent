@@ -1595,19 +1595,25 @@ def _check_discovered_links_scoping(
     python_code: str,
     filter_labels: list[str] | None = None,
 ) -> list[LintFinding]:
-    """Flag unguarded mark_link_processed() calls in loops with in-range filters."""
     out: list[LintFinding] = []
     if "mark_link_processed" not in python_code:
         return out
-    # Detect pattern where script filters links inside loop but calls mark_link_processed unconditionally
-    has_custom_filter = bool(re.search(r"if\s+not\s+.*_in_range|if\s+not\s+.*session|if\s+.*range", python_code))
-    has_continue_before_mark = bool(re.search(r"continue\s+.*mark_link_processed", python_code, re.DOTALL))
-    if filter_labels and has_unscoped_drain and not has_custom_filter:
+    if not filter_labels:
+        return out
+    # A processing script assigned filter_labels must read links scoped by
+    # label; a bare load_discovered_links() drains EVERY subtask's links and
+    # marks them processed, starving its siblings.
+    if not re.search(r"\bload_discovered_links\s*\(\s*['\"]", python_code):
         out.append(
             LintFinding(
                 rule="22",
                 severity="error",
-                message=f"Subtask is assigned filter_labels {filter_labels} but calls load_discovered_links() without filter_label argument.",
+                message=(
+                    f"Subtask is assigned filter_labels {filter_labels} but calls "
+                    "load_discovered_links() without a filter_label argument — it would "
+                    "drain and mark every sibling's links. Call "
+                    "load_discovered_links(filter_label) (or a list of labels) instead."
+                ),
                 line=1,
             )
         )
