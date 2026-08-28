@@ -149,6 +149,33 @@ def mark_link_processed(url: str, filter_label: str | None = None) -> None:
         conn.close()
 
 
+def delete_all_discovered_links(db_path: Path) -> int:
+    """Delete every row from ``discovered_links``. Returns the row count."""
+    conn = sqlite3.connect(str(db_path), timeout=5)
+    try:
+        _ensure_schema(conn)
+        cur = conn.execute("DELETE FROM discovered_links")
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+def delete_discovered_link(url: str, filter_label: str | None = None) -> None:
+    """Delete one discovered link row (e.g. remove a fabricated URL)."""
+    canon = _canonical_url(url)
+    conn = sqlite3.connect(_resolve_db_path(), timeout=5)
+    try:
+        _ensure_schema(conn)
+        if filter_label is not None:
+            conn.execute("DELETE FROM discovered_links WHERE url=? AND filter_label=?", (canon, filter_label))
+        else:
+            conn.execute("DELETE FROM discovered_links WHERE url=?", (canon,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def preseed_sample_links(
     urls: list[str],
     db_path: str,

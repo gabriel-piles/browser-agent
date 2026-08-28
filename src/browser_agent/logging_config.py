@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -85,3 +86,8 @@ def _maybe_add_file_handler() -> None:
     if not log_file:
         return
     logger.add(log_file, rotation="10 MB", retention=5, format=_LOG_FORMAT, level="INFO")
+
+
+def add_run_log_file(log_path: Path) -> None:
+    """Add a run-directory file sink (synchronous, no queue thread)."""
+    logger.add(str(log_path), rotation="10 MB", retention=5, format=_LOG_FORMAT, level="INFO")

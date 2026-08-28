@@ -16,6 +16,18 @@ from browser_agent.domain.script_execution_report import ScriptExecutionReport
 _SUBTASK_RUN_TIMEOUT_S = int(os.environ.get("SCRAPER_RUN_TIMEOUT_S", str(6 * 3600)))
 
 
+def _live_log_path(script_path: Path, subtask_id: str) -> Path:
+    run_path = script_path.parent.parent
+    log_path = run_path / "flow" / "subtasks" / subtask_id / "execution_live.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    return log_path
+
+
+def _write_footer(fh, exit_code: int, timed_out: bool, duration_s: float) -> None:
+    fh.write(f"=== execution end exit={exit_code} timed_out={timed_out} duration={duration_s:.1f} ===\n")
+    fh.flush()
+
+
 class SubtaskExecutor:
     """Run one emitted .py script as a subprocess, return a report."""
 
@@ -38,6 +50,11 @@ class SubtaskExecutor:
             env["BROWSER_AGENT_SUBTASK_FILTER_LABELS"] = json.dumps(filter_labels)
         cmd = [sys.executable, str(script_path)]
         t0 = time.monotonic()
+        live_path = _live_log_path(script_path, subtask_id)
+        live_fh = live_path.open("a", encoding="utf-8")
+        live_fh.write(f"=== execution start {time.strftime('%Y-%m-%dT%H:%M:%S')} script={script_path} ===\n")
+        live_fh.flush()
+        logger.info("subtask {id}: executing script={p}", id=subtask_id, p=script_path)
         output_lines: list[str] = []
         timed_out = False
         exit_code = 1
@@ -52,6 +69,7 @@ class SubtaskExecutor:
             )
         except OSError as exc:
             logger.error("failed to launch subtask subprocess: {exc}", exc=exc)
+            live_fh.close()
             return ScriptExecutionReport(
                 subtask_id=subtask_id,
                 script_path=str(script_path),
@@ -63,7 +81,7 @@ class SubtaskExecutor:
 
         try:
             output_lines = await asyncio.wait_for(
-                self._stream_output(proc, output_lines),
+                self._stream_output(proc, output_lines, live_fh),
                 timeout=_SUBTASK_RUN_TIMEOUT_S,
             )
         except asyncio.TimeoutError:
@@ -71,7 +89,7 @@ class SubtaskExecutor:
             timed_out = True
             exit_code = 124
             logger.error(
-                "subtask timed out after {t}s — killed process group",
+                "subtask timed out after {t}s - killed process group",
                 t=_SUBTASK_RUN_TIMEOUT_S,
             )
 
@@ -80,6 +98,8 @@ class SubtaskExecutor:
 
         duration_s = time.monotonic() - t0
         output_tail = "".join(output_lines[-100:])
+        _write_footer(live_fh, exit_code, timed_out, duration_s)
+        live_fh.close()
 
         return ScriptExecutionReport(
             subtask_id=subtask_id,
@@ -90,7 +110,7 @@ class SubtaskExecutor:
             output_tail=output_tail,
         )
 
-    async def _stream_output(self, proc: asyncio.subprocess.Process, lines: list[str]) -> list[str]:
+    async def _stream_output(self, proc, lines, live_fh) -> list[str]:
         assert proc.stdout is not None
         while True:
             line = await proc.stdout.readline()
@@ -98,6 +118,8 @@ class SubtaskExecutor:
                 break
             text = line.decode("utf-8", errors="replace")
             print(text, end="", flush=True)
+            live_fh.write(text)
+            live_fh.flush()
             lines.append(text)
         await proc.wait()
         return lines

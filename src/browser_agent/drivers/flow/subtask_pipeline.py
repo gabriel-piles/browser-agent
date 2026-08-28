@@ -23,11 +23,16 @@ _MAX_LINT_REPAIRS_PER_ATTEMPT = 1
 _MAX_POST_EMIT_REPAIRS = 3
 _SMOKE_TIMEOUT_S = 60.0
 _DISCOVERY_RUN_TIMEOUT_S = 600.0
+_MAX_EMITS_PER_SUBTASK = 8
 
 
 def _phase(subtask_id: str, label: str) -> None:
     """Log a pipeline phase transition so slow/hung phases are visible."""
     logger.info("subtask {id}: {label}", id=subtask_id, label=label)
+
+
+def _emit_budget_exceeded(record) -> bool:
+    return record.emits > _MAX_EMITS_PER_SUBTASK
 
 
 def _resolve_existing_script(raw: str, run_path: Path) -> Path | None:
@@ -71,6 +76,14 @@ class SubtaskPipeline:
         last_feedback = ""
         for attempt in range(_MAX_SUBTASK_ATTEMPTS):
             record.attempts = attempt + 1
+            if _emit_budget_exceeded(record):
+                record.status = "emit_budget_exhausted"
+                logger.error(
+                    "subtask {id}: emit budget ({n}) exhausted - handing to orchestrator",
+                    id=subtask.subtask_id,
+                    n=_MAX_EMITS_PER_SUBTASK,
+                )
+                return record
             _phase(subtask.subtask_id, "building")
             bsession, builder = await self._build_session(profile_dir, subtask.subtask_id)
             try:
@@ -247,12 +260,25 @@ class SubtaskPipeline:
                     record.status = last_status
                     return record, last_feedback
                 script, _ = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT)
+                if _emit_budget_exceeded(record):
+                    record.status = "emit_budget_exhausted"
+                    logger.error(
+                        "subtask {id}: emit budget ({n}) exhausted - handing to orchestrator",
+                        id=subtask.subtask_id,
+                        n=_MAX_EMITS_PER_SUBTASK,
+                    )
+                    return record, last_feedback
                 emit_result, record = self._emit(subtask, script, record, state=None)
                 if record.status == "repair_noop":
                     record.status = last_status
                     return record, last_feedback
                 continue
             _phase(subtask.subtask_id, "executing")
+            if subtask.kind == "discovery":
+                from browser_agent.script_tools.discovered_links_store import delete_all_discovered_links
+
+                delete_all_discovered_links(self._run_path / "metadata.db")
+                logger.info("subtask {id}: cleared discovered_links before discovery execution", id=subtask.subtask_id)
             exec_report = await self._run_subtask_script(
                 subtask.subtask_id,
                 emit_result.script_path,
@@ -272,6 +298,14 @@ class SubtaskPipeline:
                     record.status = last_status
                     return record, last_feedback
                 script, _ = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT)
+                if _emit_budget_exceeded(record):
+                    record.status = "emit_budget_exhausted"
+                    logger.error(
+                        "subtask {id}: emit budget ({n}) exhausted - handing to orchestrator",
+                        id=subtask.subtask_id,
+                        n=_MAX_EMITS_PER_SUBTASK,
+                    )
+                    return record, last_feedback
                 emit_result, record = self._emit(subtask, script, record, state=None)
                 if record.status == "repair_noop":
                     record.status = last_status
@@ -291,6 +325,14 @@ class SubtaskPipeline:
                 record.status = last_status
                 return record, last_feedback
             script, _ = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT)
+            if _emit_budget_exceeded(record):
+                record.status = "emit_budget_exhausted"
+                logger.error(
+                    "subtask {id}: emit budget ({n}) exhausted - handing to orchestrator",
+                    id=subtask.subtask_id,
+                    n=_MAX_EMITS_PER_SUBTASK,
+                )
+                return record, last_feedback
             emit_result, record = self._emit(subtask, script, record, state=None)
             if record.status == "repair_noop":
                 record.status = last_status
@@ -340,6 +382,7 @@ class SubtaskPipeline:
         return script, findings
 
     def _emit(self, subtask, script, record, state):
+        record.emits += 1
         emit_result = self._emitter.emit(
             state.plan.task_summary if state else subtask.description,
             script,

@@ -17,6 +17,7 @@ SubtaskStatus = Literal[
     "succeeded",
     "accepted_gap",
     "aborted",
+    "emit_budget_exhausted",
 ]
 
 
@@ -38,4 +39,8 @@ class SubtaskRecord(BaseModel):
     plan_index: int = Field(
         default=1,
         description="Which plan_NNN.json this subtask was part of",
+    )
+    emits: int = Field(
+        default=0,
+        description="Total scripts emitted across all repair cycles",
     )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
+from loguru import logger
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -71,7 +72,8 @@ def _missing_html_records(
     """
     try:
         rows = query_rows(db_path, task_slug)
-    except sqlite3.OperationalError:
+    except sqlite3.OperationalError as exc:
+        logger.warning("_missing_html_records: query_rows failed for {slug}: {err}", slug=task_slug, err=exc)
         return []
     missing: list[str] = []
     for core_id, _slug, data_json in rows:
@@ -186,8 +188,18 @@ class SubtaskVerifierUseCase:
                         step_0_fix=f"Ensure subtask {subtask.subtask_id} loads and processes its discovered links without starvation.",
                     )
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.exception("coverage gate errored: {exc}", exc=exc)
+            report.coverage_complete = False
+            report.missing_coverage.append(
+                MissingCoverage(
+                    navigation_path=f"processing {subtask.subtask_id}",
+                    expected="coverage gate to run",
+                    actual=f"coverage gate errored: {exc}",
+                    reason="the deterministic coverage check crashed",
+                    step_0_fix=f"Ensure subtask {subtask.subtask_id} saves records and that metadata.db is accessible.",
+                )
+            )
 
         # Deterministic HTML-capture gate (no LLM). Marks the run failed when
         # a registry/related-document flow hit a downloaded document with no

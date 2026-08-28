@@ -25,10 +25,12 @@ from browser_agent.drivers.flow.flow_paths import FlowPaths
 from browser_agent.drivers.flow.refresh_flow import RefreshFlow
 from browser_agent.drivers.flow.scrape_flow import ScrapeFlow
 from browser_agent.drivers.run_elapsed_heartbeat import RunElapsedHeartbeat
+from browser_agent.drivers.signal_guard import SignalGuard
+from browser_agent.drivers.stall_watchdog import StallWatchdog
 from browser_agent.drivers.flow.subtask_pipeline import SubtaskPipeline
 from browser_agent.domain.run_config import RunConfig
 from browser_agent.agent_logging import log_llm_total_summary, reset_llm_estimates
-from browser_agent.logging_config import configure_logging
+from browser_agent.logging_config import add_run_log_file, configure_logging
 from browser_agent.use_cases.agent_deps import AgentDeps
 from browser_agent.use_cases.concurrency_context_renderer import render_concurrency_context
 from browser_agent.use_cases.emitted_script_linter import EmittedScriptLinter
@@ -60,13 +62,34 @@ class GenerateScriptDriver:
     async def _run_async(self, argv: list[str]) -> int:
         run = RunsConfigLoader.load_active()
         run_path = RunsConfigLoader.load_active_path()
-        heartbeat = RunElapsedHeartbeat()
+        logs_dir = run_path / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        add_run_log_file(logs_dir / "run.log")
+        logger.info("run log file enabled path={p}", p=logs_dir / "run.log")
+        watchdog = StallWatchdog()
+        watchdog.attach(logs_dir / "stall_dump.log")
+        watchdog.arm()
+        heartbeat = RunElapsedHeartbeat(watchdog)
         heartbeat.start()
+        guard = SignalGuard()
+        guard.install()
+        try:
+            return await self._run_flow(run, run_path, argv)
+        except asyncio.CancelledError:
+            logger.warning("run cancelled by signal={sig} — rerun the same command to resume", sig=guard.signal_name())
+            return guard.exit_code()
+        except Exception:
+            logger.exception("flow driver failed")
+            return 2
+        finally:
+            await self._cleanup(guard, heartbeat, watchdog, run_path)
+
+    async def _run_flow(self, run: RunConfig, run_path, argv: list[str]) -> int:
         # Reap Chromium windows left by a previously crashed ``step_0`` run
         # (matching both ``profile`` and ``profile_builder`` dirs under the run
         # path) so this run's planner and subtask sessions start clean instead
         # of handing off to a stale instance holding the profile lock.
-        from browser_agent.adapters.browser.clean_browser_launcher import delete_profile_dir, kill_chromium_under
+        from browser_agent.adapters.browser.clean_browser_launcher import kill_chromium_under
 
         kill_chromium_under(run_path)
         ScriptToolsCopier().copy(run_path)
@@ -139,21 +162,32 @@ class GenerateScriptDriver:
             final_verifier,
             refresh_flow,
         )
+        return await flow.run(task)
 
+    async def _cleanup(self, guard, heartbeat, watchdog, run_path) -> None:
+        from browser_agent.adapters.browser.clean_browser_launcher import delete_profile_dir, kill_chromium_under
+
+        _safe(guard.uninstall)
         try:
-            return await flow.run(task)
-        except Exception:
-            logger.exception("flow driver failed")
-            return 2
-        finally:
             await heartbeat.stop()
-            kill_chromium_under(run_path)
-            delete_profile_dir(run_path / "profile")
-            delete_profile_dir(run_path / "profile_builder")
-            delete_profile_dir(run_path / "profile_verifier")
+        except Exception:
+            logger.exception("heartbeat stop failed")
+        _safe(watchdog.close)
+        _safe(kill_chromium_under, run_path)
+        _safe(delete_profile_dir, run_path / "profile")
+        _safe(delete_profile_dir, run_path / "profile_builder")
+        _safe(delete_profile_dir, run_path / "profile_verifier")
 
     def _read_task(self, argv: list[str], run: RunConfig) -> str:
         return self._task_reader.read(argv, run)
+
+
+def _safe(fn, *args) -> None:
+    """Run ``fn(*args)``, logging (not raising) any failure so cleanup continues."""
+    try:
+        fn(*args)
+    except Exception:
+        logger.exception("cleanup step failed: {fn}", fn=getattr(fn, "__name__", repr(fn)))
 
 
 def main() -> None:

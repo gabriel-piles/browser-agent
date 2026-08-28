@@ -78,7 +78,7 @@ _EXTRACT_TAIL_ELEMENTS = 25
 
 _SELECT_MAX_OPTIONS = 60
 _NON_HTML_EXTENSIONS = (".js", ".css", ".json", ".xml", ".txt", ".svg")
-_CLOSE_STOP_TIMEOUT_S = 10.0
+_PERFORM_TIMEOUT_S = 300.0
 
 
 class ZendriverBrowserSession(BrowserSessionPort):
@@ -214,6 +214,12 @@ class ZendriverBrowserSession(BrowserSessionPort):
     async def perform(self, action: PageAction) -> PageSnapshot:
         if self._tab is None:
             raise RuntimeError("browser session not started")
+        try:
+            return await asyncio.wait_for(self._dispatch(action), timeout=_PERFORM_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            return self._error_snapshot(f"browser action timed out after {_PERFORM_TIMEOUT_S}s - the tab is unresponsive")
+
+    async def _dispatch(self, action: PageAction) -> PageSnapshot:
         handler = self._handler_for(action.action)
         return await handler(action)
 
@@ -612,8 +618,8 @@ class ZendriverBrowserSession(BrowserSessionPort):
                 strategy="load",
                 timeout=BROWSER_TAB_LOAD_TIMEOUT_SECONDS,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("navigate wait_until_ready failed for {url}: {err}", url=url, err=str(exc)[:160])
 
     async def _settle(self, seconds: float) -> None:
         if seconds > 0:

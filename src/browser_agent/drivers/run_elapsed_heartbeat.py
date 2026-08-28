@@ -20,9 +20,10 @@ _STOP_MESSAGE = "flow driver finished elapsed={elapsed}"
 class RunElapsedHeartbeat:
     """Logs elapsed run time on a fixed interval until stopped."""
 
-    def __init__(self) -> None:
+    def __init__(self, watchdog=None) -> None:
         self._started: float = time.monotonic()
         self._task: asyncio.Task[None] | None = None
+        self._watchdog = watchdog
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._loop())
@@ -30,6 +31,8 @@ class RunElapsedHeartbeat:
     async def _loop(self) -> None:
         while True:
             await asyncio.sleep(_INTERVAL_SECONDS)
+            if self._watchdog is not None:
+                self._watchdog.arm()
             logger.info(_START_MESSAGE, elapsed=self._format_elapsed())
 
     async def stop(self) -> None:

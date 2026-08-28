@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
+
+from loguru import logger
 
 from pydantic import BaseModel
 
@@ -20,15 +23,15 @@ class FlowStateStore:
         path = self._paths.state_path()
         if not path.exists():
             return None
-        data = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            logger.error("state.json corrupt - starting a fresh plan (prior metadata.db/downloads are preserved)")
+            return None
         return OrchestratorState.model_validate(data)
 
     def save(self, state: OrchestratorState) -> None:
-        path = self._paths.state_path()
-        _ = path.write_text(
-            json.dumps(state.model_dump(mode="json"), indent=2),
-            encoding="utf-8",
-        )
+        _atomic_write(self._paths.state_path(), json.dumps(state.model_dump(mode="json"), indent=2))
 
     def log_decision(self, decision: Any, context: str) -> None:
         entry = {
@@ -42,10 +45,7 @@ class FlowStateStore:
     def write_report(self, subtask_id: str, name: str, model: BaseModel) -> None:
         path = self._paths.subtask_report_path(subtask_id, name)
         path.parent.mkdir(parents=True, exist_ok=True)
-        _ = path.write_text(
-            json.dumps(model.model_dump(mode="json"), indent=2),
-            encoding="utf-8",
-        )
+        _atomic_write(path, json.dumps(model.model_dump(mode="json"), indent=2))
 
     def read_report(self, subtask_id: str, name: str, cls: type) -> Any:
         path = self._paths.subtask_report_path(subtask_id, name)
@@ -56,7 +56,11 @@ class FlowStateStore:
     def write_plan(self, n: int, plan: Any) -> None:
         path = self._paths.plan_path(n)
         path.parent.mkdir(parents=True, exist_ok=True)
-        _ = path.write_text(
-            json.dumps(plan.model_dump(mode="json"), indent=2),
-            encoding="utf-8",
-        )
+        _atomic_write(path, json.dumps(plan.model_dump(mode="json"), indent=2))
+
+
+def _atomic_write(path: Any, text: str) -> None:
+    """Write ``text`` to ``path`` via a temp file + ``os.replace`` (crash-safe)."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)

@@ -271,6 +271,10 @@ async def wait_for_anchors(
         await asyncio.sleep(poll_interval)
 
 
+_NAVIGATE_TIMEOUT_S = 45.0
+_TITLE_PROBE_TIMEOUT_S = 10.0
+
+
 async def goto_ready(tab, url, timeout=6.0, quiet_window_ms=300) -> None:
     """Navigate to ``url`` and wait for render, tolerating a Cloudflare challenge.
 
@@ -279,9 +283,15 @@ async def goto_ready(tab, url, timeout=6.0, quiet_window_ms=300) -> None:
     wait for the page to be ready (best-effort, never raises). Finally a
     short settle sleep.
     """
-    await tab.get(url)
+    try:
+        await asyncio.wait_for(tab.get(url), timeout=_NAVIGATE_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        raise TimeoutError(f"goto_ready: navigation to {url} did not finish in {_NAVIGATE_TIMEOUT_S}s")
     for _ in range(3):
-        title = await tab.evaluate("document.title") or ""
+        try:
+            title = await asyncio.wait_for(tab.evaluate("document.title"), timeout=_TITLE_PROBE_TIMEOUT_S) or ""
+        except asyncio.TimeoutError:
+            break
         if "just a moment" not in title.lower() and "attention required" not in title.lower():
             break
         await tab.sleep(10)

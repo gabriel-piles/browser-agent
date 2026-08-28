@@ -115,7 +115,10 @@ class ScrapeFlow:
                         max=_MAX_REPLANS,
                     )
                     if replans >= _MAX_REPLANS:
-                        return state
+                        logger.error(
+                            "planner produced a discovery-only plan at the replan cap - aborting instead of finishing with an empty result"
+                        )
+                        return None
                     continue
             finally:
                 await planner.close()

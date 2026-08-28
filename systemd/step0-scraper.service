@@ -1,0 +1,25 @@
+# browser-agent step_0 scrape driver — resumes from flow/state.json.
+#
+# Enable:   systemctl --user enable --now step0-scraper
+# Stop:     systemctl --user stop step0-scraper   (manual stop does not trigger Restart=)
+# Autostart at boot (headless): loginctl enable-linger $USER
+#
+# The driver reads its task from the configured active run via
+# RunsConfigLoader (no argv needed). OPENROUTER_API_KEY and other env
+# vars come from %h/.config/browser-agent/env.
+
+[Unit]
+Description=browser-agent step_0 scrape driver (resumes from flow/state.json)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+WorkingDirectory=%h/Projects/browser-agent
+EnvironmentFile=%h/.config/browser-agent/env
+ExecStart=%h/Projects/browser-agent/.venv/bin/python -m browser_agent.drivers.step_0_run_prompt
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=default.target

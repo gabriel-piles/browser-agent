@@ -14,6 +14,7 @@ from browser_agent.ports.llm_port import LlmPort
 
 _BASE_URL = "https://openrouter.ai/api/v1"
 _API_KEY_ENV = "OPENROUTER_API_KEY"
+_REQUEST_TIMEOUT_S = 600.0
 
 
 class OpenRouterAdapter(LlmPort):
@@ -26,6 +27,8 @@ class OpenRouterAdapter(LlmPort):
             raise RuntimeError(f"{_API_KEY_ENV} must be set in the environment or .env file")
 
     def get_model(self) -> Model:
-        client = AsyncOpenAI(base_url=_BASE_URL, api_key=self.api_key, max_retries=LLM_MAX_RETRIES)
+        client = AsyncOpenAI(
+            base_url=_BASE_URL, api_key=self.api_key, max_retries=LLM_MAX_RETRIES, timeout=_REQUEST_TIMEOUT_S
+        )
         provider = OpenAIProvider(openai_client=client)
         return RetryingChatModel(self.model_name, provider=provider)

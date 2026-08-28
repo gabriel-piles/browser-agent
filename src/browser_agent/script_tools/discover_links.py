@@ -10,8 +10,11 @@ a zendriver ``tab`` duck-typed so no ``import zendriver`` is needed.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from urllib.parse import urljoin, quote
+
+_EVALUATE_TIMEOUT_S = 10.0
 
 from script_tools.dom_helpers import trusted_click
 from script_tools.page_wait import wait_for_anchors
@@ -111,7 +114,10 @@ async def discover_links(
     prev = 0
     stable = 0
     for _ in range(max_rounds):
-        await tab.evaluate(scroll)
+        try:
+            await asyncio.wait_for(tab.evaluate(scroll), timeout=_EVALUATE_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            break
         await tab.sleep(1.5)
         more = await _load_more_visible(tab, load_more_selector)
         if more:

@@ -22,13 +22,18 @@ class OrchestratorUseCase:
     """LLM-only judgment agent — no AgentDeps, no tools, no browser."""
 
     def __init__(self) -> None:
-        from browser_agent.adapters.llm.llm_adapter_factory import build_llm
+        self._model = None
 
-        self._model = build_llm().get_model()
+    def _get_model(self):
+        if self._model is None:
+            from browser_agent.adapters.llm.llm_adapter_factory import build_llm
+
+            self._model = build_llm().get_model()
+        return self._model
 
     def _build_agent(self) -> Agent[None, OrchestratorDecision]:
         return Agent(
-            model=self._model,
+            model=self._get_model(),
             system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,
             output_type=OrchestratorDecision,
             capabilities=[ToolReturnCompactor()],
