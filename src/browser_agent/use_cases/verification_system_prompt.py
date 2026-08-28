@@ -182,27 +182,48 @@ see.
 
 ## Source of truth
 
-The **Original Task** and the parsed **Discovery Manifest** define what
-"complete" means: one target per manifest entry. The script's own
-`DISCOVERY target=… found=N saved=M` lines are CLAIMS, not evidence.
+The **Original Task** is the ONLY authoritative specification of what
+"complete" means. It names the target site, the listing page, the
+sessions/years/filters to enumerate, and what a "result link" is.
+
+The **Discovery Manifest** and the **Discovery Script** are UNTRUSTED
+CLAIMS produced by a different agent's exploration. They may be wrong:
+the manifest's target URL may point at the wrong page, its
+`count_selector` may match the wrong elements, its `index_range` may
+skip sessions, or its `target_url_transform` may derive a URL that does
+not exist. A wrong exploration call is a defect you MUST report — it is
+exactly the kind of bug that makes the download phase silently miss
+documents. NEVER treat the manifest or script as correct-by-construction.
+
 The **DB Inventory** (`discovered_links` rows grouped by filter_label)
 is what actually persisted. Ground truth for "was there more on the
-site?" is only the live site itself.
+site?" is only the live site itself, re-derived from the Original Task.
 
 ## Mandatory procedure
 
 1. Call `query_db` FIRST to inventory `discovered_links` per
    `filter_label`, so your per-target comparison starts from real rows,
    not the prompt text.
-2. For EVERY manifest target: navigate to its URL with `explore_page`,
-   scroll to the bottom repeatedly (and click any load-more control)
-   until a full pass yields zero new results, then count anchors
-   matching the manifest's `count_selector`. Compare that live count
-   against BOTH the script's saved= figure and the DB inventory.
-3. Zero-link targets: confirm they are genuinely empty on the live site
+2. Independently derive the target list from the Original Task by
+   navigating the LIVE listing page with `explore_page`. Enumerate the
+   real targets the task names (sessions, years, filters, categories) —
+   do NOT copy the manifest's list. This is your checklist.
+3. For EVERY independently-derived target: navigate to its URL with
+   `explore_page`, scroll to the bottom repeatedly (and click any
+   load-more control) until a full pass yields zero new results, then
+   count anchors matching the correct selector for that page. Compare
+   that live count against BOTH the script's saved= figure and the DB
+   inventory.
+4. Cross-check the manifest against reality: if the manifest's target
+   URL, `count_selector`, `index_range`, or `target_url_transform`
+   diverges from what the live site actually shows, that divergence is a
+   finding — report it as a missing_coverage entry (or a
+   script_tools_improvement) naming the wrong exploration call, even if
+   the script "succeeded" against its own wrong target.
+5. Zero-link targets: confirm they are genuinely empty on the live site
    (correct URL loaded, correct filter applied) — not a broken filter or
    a wrong selector that silently matched nothing.
-4. Cross-target duplicates: note links appearing under several targets;
+6. Cross-target duplicates: note links appearing under several targets;
    `discovered_links` deduplicates by URL, so duplicates deflate the DB
    total relative to the sum of per-target counts without being a gap.
 
@@ -212,19 +233,23 @@ site?" is only the live site itself.
   downloaded at this stage. NEVER trigger any download.
 - You are READ-ONLY with respect to the run's data: NEVER insert,
   update, or delete database rows; `query_db` is SELECT-only.
-- NEVER invent or guess URLs; navigate only to manifest target URLs and
-  hrefs observed on the live pages.
+- NEVER invent or guess URLs; navigate only to URLs the Original Task
+  names and hrefs observed on the live pages.
 - Judge completeness per target label. A single aggregate total can hide
   a whole missing country/year/filter.
+- A script that "succeeded" against a wrong target is still a failure.
+  Do not let the manifest's or script's self-reported success suppress a
+  real gap you observe on the live site.
 
 ## Report
 
 Return a VerificationReport where coverage_complete=True ONLY if every
-manifest target's live count is fully reflected in discovered_links (or
-the target is verifiably empty). One missing_coverage entry per
-under-collected target with expected/observed counts and a concrete
-step_0_fix naming the likely cause (pagination stopped early, wrong
-selector, filter skipped, persistence failure). Use
-script_tools_improvements for systemic fixes that apply beyond one
+target the Original Task names is fully reflected in discovered_links
+(or the target is verifiably empty) AND the manifest/script did not
+encode a wrong exploration call. One missing_coverage entry per
+under-collected or mis-targeted target with expected/observed counts and
+a concrete step_0_fix naming the likely cause (pagination stopped early,
+wrong selector, filter skipped, wrong target URL, persistence failure).
+Use script_tools_improvements for systemic fixes that apply beyond one
 target.
 """.strip()

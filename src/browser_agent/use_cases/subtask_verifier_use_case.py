@@ -105,11 +105,13 @@ class SubtaskVerifierUseCase:
         downloads_path: Path,
         run_path: Path,
         require_html_files: bool = False,
+        original_task: str = "",
     ) -> None:
         self._db_path = db_path
         self._downloads_path = downloads_path
         self._run_path = run_path
         self._require_html_files = require_html_files
+        self._original_task = original_task
 
     async def verify(self, subtask: SubtaskSpec, state_store) -> VerificationReport:
         if subtask.kind == "discovery":
@@ -146,7 +148,7 @@ class SubtaskVerifierUseCase:
         # LLM stage
         gap_map = ScrapingGapMapBuilder(self._db_path).build()
         request = VerificationRequest(
-            task_prompt=subtask.description,
+            task_prompt=self._original_task or subtask.description,
             discovery_script="",
             processing_script="",
             gap_map=gap_map,
@@ -296,7 +298,7 @@ class SubtaskVerifierUseCase:
     ) -> DiscoveryVerificationRequest:
         labels = sorted(set(found) | set(saved))
         return DiscoveryVerificationRequest(
-            task_prompt=subtask.description,
+            task_prompt=self._original_task or subtask.description,
             discovery_script=source,
             manifest_json=json.dumps(manifest.model_dump(mode="json"), indent=2, ensure_ascii=False),
             target_report="\n".join(

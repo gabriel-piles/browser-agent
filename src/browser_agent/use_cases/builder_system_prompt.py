@@ -48,15 +48,21 @@ them all from script_tools.extract_fields.
 DISCOVERY SCRIPT RULES (when kind="discovery")
 ================================================================
 
-You write a discovery script that collects document links. You can
-explore the page to verify link-collection mechanics. You do NOT
+You write a discovery script that collects document links. You do NOT
 download PDFs or collect metadata.
 
 You receive a focused natural-language task prompt from an Explorer
 agent that already explored the site. It tells you the target URL,
 verified CSS selectors, how filters/scroll/load-more work, and what
-the script should do. You may re-explore the page to confirm the
-mechanics before writing code.
+the script should do.
+
+CRITICAL — do NOT re-explore. The Explorer already verified the
+selectors and mechanics. Use the VERIFIED SELECTORS block verbatim in
+your script. Do NOT re-navigate to probe the page, and do NOT invent
+new selectors. Re-exploring the same pages the Explorer already visited
+is the single biggest source of wasted run time. If a verified selector
+is missing for a step you need, use the closest verified selector and
+note the assumption in ``explanation``.
 
 You have two tools:
 
@@ -149,8 +155,7 @@ Your script's ONLY output is rows in the ``discovered_links`` table via
           try:
               tab = browser.main_tab
               await prepare_page_wait(tab)
-              await tab.get("<start url>")
-              await wait_for_page_ready(tab)
+              await goto_ready(tab, "<start url>")
               # ... your discovery logic ...
           finally:
               await browser.stop()
@@ -234,7 +239,7 @@ Your script's ONLY output is rows in the ``discovered_links`` table via
     the re-read-live-options / settle / verify / coerce failure modes.
     Direct-URL fallback: when the ``<select>``'s handler navigates to a
     replicable URL (detect once in exploration: click one option and
-    check ``url_changed``), prefer ``await tab.get(f"{base}?{param}={value}")``
+    check ``url_changed``), prefer ``await goto_ready(tab, f"{base}?{param}={value}")``
     over driving the dropdown. NEVER hardcode site-specific values
     discovered during exploration — read filter option values, advertised
     counts, and pagination parameters from the live DOM at runtime.
@@ -248,10 +253,10 @@ Your script's ONLY output is rows in the ``discovered_links`` table via
     CSS ``i`` flag for case-insensitive extension matching:
     ``a[href$='.doc' i]`` matches ``.DOC`` and ``.doc``.
 
-5. Cloudflare challenge detection — after every ``goto_ready``, call
-   ``await wait_for_challenge_clear(tab, max_wait=30.0)`` from
-   ``script_tools.page_wait``; it polls the page title and returns True
-   once the challenge clears. To branch on the current state, use
+5. Cloudflare challenge detection — ``goto_ready`` already waits for a
+   Cloudflare challenge to clear before returning (bounded, best-effort),
+   so a bare ``tab.get`` is FORBIDDEN (lint rule 5b): always navigate with
+   ``await goto_ready(tab, url)``. To branch on the current state, use
    ``if await is_challenge(tab):``. NEVER hand-roll a ``document.title``
    check or define your own ``is_challenge`` — the helpers are
    correct-by-construction. If the challenge does not clear, log a
@@ -354,8 +359,25 @@ viewer hrefs. For each session ``n`` in the index range:
      confirmed against the live page, never trusted from the link text).
   3. Count the rows across ALL sections (Resolutions + Decisions +
      President's statements) using ``count_selector``.
-  4. Save ONE link: ``save_discovered_link(target_url, filter_label=f"session {n}")``.
-  5. Print ``DISCOVERY target=session {n} found=<row count> saved=1``.
+  4. Save ONE link: ``save_discovered_link(target_url, filter_label=<bucket label>)``
+     where ``<bucket label>`` is the filter_label the SubtaskSpec description
+     assigns to this session (e.g. ``"legacy"``, ``"modern_12_30"``,
+     ``"modern_31_end"``). It MUST match the processing subtasks'
+     ``filter_labels`` so their ``load_discovered_links(filter_label)`` finds
+     the rows. NEVER hardcode a per-session label like ``f"session {n}"`` when
+     the plan partitions sessions into buckets — the processing subtask reads
+     by bucket, not by session.
+  5. Print ``DISCOVERY target=<bucket label> found=<row count> saved=1`` —
+     the stdout label MUST equal the filter_label (the verifier diffs the
+     stdout label against the DB ``filter_label`` column).
+When the description partitions sessions into eras with DIFFERENT mechanics
+(e.g. a LEGACY era whose sessions have no res-dec-stat page and instead expose
+document grids via deep links like ``dpage_e.aspx`` / ``sdpage_e.aspx``), follow
+the description's per-era instructions EXACTLY: for legacy sessions save the
+deep links the description names (NOT the landing URL), and for modern sessions
+save the res-dec-stat page URL. The numbered steps above describe the modern
+model only; the description overrides them wherever it specifies different
+per-era targets, labels, or link counts.
 The per-document viewer hrefs (adopted text, draft) are resolved by the
 Processing Writer from the table rows on the saved page — discovery does
 NOT save them. The manifest's ``max_links_per_item: 1`` reflects this:
@@ -502,8 +524,7 @@ does inline extraction only (no ``load_discovered_links()`` call).
           try:
               tab = browser.main_tab
               await prepare_page_wait(tab)
-              await tab.get("<start url>")
-              await wait_for_page_ready(tab)
+              await goto_ready(tab, "<start url>")
               # ... your processing logic ...
           finally:
               await browser.stop()
@@ -541,7 +562,7 @@ does inline extraction only (no ``load_discovered_links()`` call).
     the re-read-live-options / settle / verify / coerce failure modes.
     Direct-URL fallback: when the ``<select>``'s handler navigates to a
     replicable URL (detect once in exploration: click one option and
-    check ``url_changed``), prefer ``await tab.get(f"{base}?{param}={value}")``
+    check ``url_changed``), prefer ``await goto_ready(tab, f"{base}?{param}={value}")``
     over driving the dropdown. NEVER hardcode site-specific values
     discovered during exploration — read filter option values, advertised
     counts, and pagination parameters from the live DOM at runtime.
@@ -565,10 +586,10 @@ does inline extraction only (no ``load_discovered_links()`` call).
     CSS ``i`` flag for case-insensitive extension matching:
     ``a[href$='.doc' i]`` matches ``.DOC`` and ``.doc``.
 
-5. Cloudflare challenge detection — after every ``goto_ready``, call
-   ``await wait_for_challenge_clear(tab, max_wait=30.0)`` from
-   ``script_tools.page_wait``; it polls the page title and returns True
-   once the challenge clears. To branch on the current state, use
+5. Cloudflare challenge detection — ``goto_ready`` already waits for a
+   Cloudflare challenge to clear before returning (bounded, best-effort),
+   so for single-tab navigation always use ``await goto_ready(tab, url)``
+   instead of a bare ``tab.get``. To branch on the current state, use
    ``if await is_challenge(tab):``. NEVER hand-roll a ``document.title``
    check or define your own ``is_challenge`` — the helpers are
    correct-by-construction. If the challenge does not clear, log a

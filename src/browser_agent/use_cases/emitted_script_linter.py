@@ -65,6 +65,51 @@ def _check_discovery_save_link(python_code: str) -> list[LintFinding]:
     return []
 
 
+def _check_discovery_filter_labels(
+    python_code: str,
+    expected_labels: list[str] | None = None,
+) -> list[LintFinding]:
+    """Rule 23: discovery must reference every downstream processing filter_label.
+
+    Processing subtasks read their input via ``load_discovered_links(filter_label)``,
+    so the discovery script's ``save_discovered_link`` calls must produce those exact
+    labels. A per-session label (e.g. ``f"session {n}"``) never matches a bucket label,
+    so the processing subtask would read zero links. This is a necessary-condition
+    check: every expected label must appear as a string literal (or f-string constant
+    part) somewhere in the script.
+    """
+    if not expected_labels:
+        return []
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return []
+    literals: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            literals.add(node.value)
+        elif isinstance(node, ast.JoinedStr):
+            for part in node.values:
+                if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                    literals.add(part.value)
+    missing = [label for label in expected_labels if label not in literals]
+    if not missing:
+        return []
+    return [
+        LintFinding(
+            rule="23",
+            severity="error",
+            message=(
+                f"Discovery script never references downstream filter_label(s) {missing}. "
+                "Processing subtasks read links via load_discovered_links(filter_label) with "
+                "these exact labels, so save_discovered_link must use them — not a per-session "
+                'label like f"session {n}". Add each missing label as a string literal.'
+            ),
+            line=1,
+        )
+    ]
+
+
 def _call_args(python_code: str, open_paren: int) -> str:
     """Text from the '(' at open_paren through its matching ')' (inclusive)."""
     depth = 1
@@ -271,6 +316,45 @@ def _check_tab_select_misuse(python_code: str) -> list[LintFinding]:
                 severity="error",
                 message="tab.select(selector, value) does NOT set a dropdown — zendriver's select is query_selector only; use select_filter_value(tab, selector, value) or direct tab.get(url)",
                 line=_line_of(python_code, match.start()),
+            )
+        )
+    return out
+
+
+def _check_bare_tab_get(python_code: str) -> list[LintFinding]:
+    """Rule 5b: discovery scripts must navigate via ``goto_ready``, not bare ``tab.get``.
+
+    ``goto_ready`` waits for the Cloudflare challenge to clear before
+    reading the page; a bare ``tab.get`` returns while the "Just a
+    moment" interstitial is still up, so the script reads an empty page
+    and either saves nothing or saves the wrong URL.
+    """
+    out: list[LintFinding] = []
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return out
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute) or func.attr != "get":
+            continue
+        receiver = func.value
+        is_tab = isinstance(receiver, ast.Name) and "tab" in receiver.id.lower()
+        is_main_tab = isinstance(receiver, ast.Attribute) and receiver.attr == "main_tab"
+        if not (is_tab or is_main_tab):
+            continue
+        out.append(
+            LintFinding(
+                rule="5b",
+                severity="error",
+                message=(
+                    "bare tab.get(url) does not wait for a Cloudflare challenge to clear — "
+                    "the script reads the page while the 'Just a moment' interstitial is still up. "
+                    "Use 'await goto_ready(tab, url)' instead."
+                ),
+                line=node.lineno,
             )
         )
     return out
@@ -1518,7 +1602,6 @@ def _check_discovered_links_scoping(
     # Detect pattern where script filters links inside loop but calls mark_link_processed unconditionally
     has_custom_filter = bool(re.search(r"if\s+not\s+.*_in_range|if\s+not\s+.*session|if\s+.*range", python_code))
     has_continue_before_mark = bool(re.search(r"continue\s+.*mark_link_processed", python_code, re.DOTALL))
-    has_unscoped_drain = bool(re.search(r"for\s+.*\s+in\s+.*load_discovered_links\s*\(\s*\):", python_code))
     if filter_labels and has_unscoped_drain and not has_custom_filter:
         out.append(
             LintFinding(
@@ -1549,9 +1632,11 @@ class EmittedScriptLinter:
             _check_evaluate_args,
             _check_evaluate_slice,
             _check_discovery_save_link,
+            _check_discovery_filter_labels,
             _check_bare_paths,
             _check_self_contained,
             _check_tab_select_misuse,
+            _check_bare_tab_get,
             _check_discovery_manifest,
             _check_unscoped_compound_selector,
             _check_handwritten_input_set,
@@ -1596,6 +1681,7 @@ class EmittedScriptLinter:
         python_code: str,
         kind: str = "processing",
         filter_labels: list[str] | None = None,
+        discovery_filter_labels: list[str] | None = None,
     ) -> list[LintFinding]:
         findings: list[LintFinding] = []
         checks = self._DISCOVERY_CHECKS if kind == "discovery" else self._PROCESSING_CHECKS
@@ -1604,6 +1690,8 @@ class EmittedScriptLinter:
                 findings.extend(check(python_code, require_files=self._require_html_files))
             elif check is _check_discovered_links_scoping:
                 findings.extend(check(python_code, filter_labels=filter_labels))
+            elif check is _check_discovery_filter_labels:
+                findings.extend(check(python_code, expected_labels=discovery_filter_labels))
             else:
                 findings.extend(check(python_code))
         return findings

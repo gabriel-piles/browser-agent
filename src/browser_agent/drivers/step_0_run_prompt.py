@@ -117,6 +117,7 @@ class GenerateScriptDriver:
             downloads_path=run_path / "downloads",
             run_path=run_path,
             require_html_files=require_html_files,
+            original_task=task,
         )
         pipeline = SubtaskPipeline(flow_paths, emitter, linter, state_store, executor, verifier, concurrency_directive)
         orchestrator = OrchestratorUseCase()

@@ -6,18 +6,25 @@ from pydantic import BaseModel, Field
 
 
 _TASK_DIRECTIVE = (
-    "Verify that EVERY manifest target above was fully harvested — not a "
-    "sample. For each target: navigate its URL with explore_page, scroll "
-    "repeatedly to the bottom (and click any load-more control) until no "
-    "new results appear, then count anchors matching the manifest's "
-    "count_selector and compare that live count against BOTH the script's "
-    "saved= figure and the DB inventory below. Confirm every zero-link "
-    "target is genuinely empty on the live site (not a broken filter or a "
-    "wrong URL). Check whether the same link appears under multiple "
-    "targets — cross-target duplicates inflate totals; discovered_links "
-    "deduplicates by URL. NEVER download anything. Return a "
-    "VerificationReport with one missing_coverage entry per "
-    "under-collected target, each with a concrete step_0_fix."
+    "Verify that EVERY target the Original Task names was fully harvested — "
+    "not a sample, and not merely the manifest's list. The manifest and "
+    "script below are UNTRUSTED claims from a different agent's exploration "
+    "and may encode a wrong target URL, selector, index range, or URL "
+    "transform. Independently derive the real target list from the Original "
+    "Task by navigating the live listing page, then for each target: "
+    "navigate its URL with explore_page, scroll repeatedly to the bottom "
+    "(and click any load-more control) until no new results appear, count "
+    "anchors matching the correct selector, and compare that live count "
+    "against BOTH the script's saved= figure and the DB inventory below. "
+    "Report any divergence between the manifest/script and the live site as "
+    "a finding, even when the script 'succeeded' against its own wrong "
+    "target. Confirm every zero-link target is genuinely empty on the live "
+    "site (not a broken filter or a wrong URL). Check whether the same link "
+    "appears under multiple targets — cross-target duplicates inflate "
+    "totals; discovered_links deduplicates by URL. NEVER download anything. "
+    "Return a VerificationReport with one missing_coverage entry per "
+    "under-collected or mis-targeted target, each with a concrete "
+    "step_0_fix."
 )
 
 

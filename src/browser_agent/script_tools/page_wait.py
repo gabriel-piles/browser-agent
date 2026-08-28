@@ -9,6 +9,7 @@ instance is cached on the tab for the script's lifetime.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 
 import zendriver as zd
@@ -18,6 +19,29 @@ _PAGE_WAIT_DEFAULT_TIMEOUT_S = 30.0
 _ANCHOR_DEFAULT_TIMEOUT_S = 8.0
 _ANCHOR_POLL_INTERVAL_S = 0.2
 _ANCHOR_REQUIRED_STABLE_POLLS = 2
+
+_CHALLENGE_TITLES = (
+    "just a moment",
+    "attention required",
+    "checking your browser",
+    "verify you are human",
+    "human verification",
+    "are you human",
+    "security check",
+    "captcha",
+)
+
+_CHALLENGE_HTML_MARKERS = (
+    "challenges.cloudflare.com",
+    "cf-challenge-running",
+    "cf-turnstile",
+    "checking your browser",
+    "ray id",
+)
+
+_CHALLENGE_CLEAR_MAX_WAIT_S = 15.0
+_CHALLENGE_POLL_INTERVAL_S = 2.0
+_CHALLENGE_SETTLE_S = 1.5
 
 
 class _EmittedPageWaitTracker:
@@ -272,29 +296,28 @@ async def wait_for_anchors(
 
 
 _NAVIGATE_TIMEOUT_S = 45.0
-_TITLE_PROBE_TIMEOUT_S = 10.0
 
 
 async def goto_ready(tab, url, timeout=6.0, quiet_window_ms=300) -> None:
     """Navigate to ``url`` and wait for render, tolerating a Cloudflare challenge.
 
-    ``await tab.get(url)``, then poll ``document.title`` up to 3 times for
-    "Just a moment" / "Attention Required" (waiting 10s between polls), then
-    wait for the page to be ready (best-effort, never raises). Finally a
-    short settle sleep.
+    ``await tab.get(url)``, then wait for any anti-bot challenge to clear
+    (bounded, best-effort), then wait for the page to be ready. A
+    persistent challenge does NOT raise — the caller decides whether to
+    skip the page.
     """
     try:
         await asyncio.wait_for(tab.get(url), timeout=_NAVIGATE_TIMEOUT_S)
     except asyncio.TimeoutError:
         raise TimeoutError(f"goto_ready: navigation to {url} did not finish in {_NAVIGATE_TIMEOUT_S}s")
-    for _ in range(3):
-        try:
-            title = await asyncio.wait_for(tab.evaluate("document.title"), timeout=_TITLE_PROBE_TIMEOUT_S) or ""
-        except asyncio.TimeoutError:
-            break
-        if "just a moment" not in title.lower() and "attention required" not in title.lower():
-            break
-        await tab.sleep(10)
+    try:
+        await wait_for_challenge_clear(
+            tab,
+            max_wait=_CHALLENGE_CLEAR_MAX_WAIT_S,
+            poll_interval=_CHALLENGE_POLL_INTERVAL_S,
+        )
+    except Exception:
+        pass
     try:
         await asyncio.wait_for(
             wait_for_page_ready(tab, url, timeout=timeout, quiet_window_ms=quiet_window_ms),
@@ -305,32 +328,50 @@ async def goto_ready(tab, url, timeout=6.0, quiet_window_ms=300) -> None:
     await tab.sleep(0.4)
 
 
-_CHALLENGE_TITLES = (
-    "just a moment",
-    "attention required",
-    "checking your browser",
-    "verify you are human",
-    "human verification",
-    "are you human",
-    "security check",
-    "captcha",
-)
-
-
 async def is_challenge(tab) -> bool:
     """Return True when the current page is an anti-bot challenge page."""
     try:
         title = str(await tab.evaluate("document.title") or "").lower()
     except Exception:
+        title = ""
+    if any(marker in title for marker in _CHALLENGE_TITLES):
+        return True
+    # Title alone misses challenges that render a neutral title with a
+    # challenge iframe. Probe the body for known markers without shipping
+    # the whole HTML back over CDP.
+    try:
+        js = (
+            "(() => {"
+            "const m = " + json.dumps(list(_CHALLENGE_HTML_MARKERS)) + ";"
+            "const h = (document.body ? document.body.innerHTML : '').toLowerCase();"
+            "return m.some(x => h.indexOf(x) !== -1);"
+            "})()"
+        )
+        return bool(await tab.evaluate(js))
+    except Exception:
         return False
 
 
 async def wait_for_challenge_clear(tab, max_wait: float = 45.0, poll_interval: float = 5.0) -> bool:
-    """Poll until the challenge clears; True when clear, False on timeout."""
-    waited = 0.0
+    """Poll until the challenge clears; True when clear, False on timeout.
+
+    Settles briefly before the first check, then requires two consecutive
+    clean observations before returning True. A Cloudflare interstitial
+    renders 1-3s AFTER the navigation load event, so a single clean check
+    right after load would read the pre-challenge page and return True
+    before the challenge appears.
+    """
+    settle = min(_CHALLENGE_SETTLE_S, max_wait)
+    await tab.sleep(settle)
+    waited = settle
+    clean_streak = 0
     while waited < max_wait:
-        if not await is_challenge(tab):
-            return True
+        if await is_challenge(tab):
+            clean_streak = 0
+        else:
+            clean_streak += 1
+            if clean_streak >= 2:
+                return True
         await tab.sleep(poll_interval)
         waited += poll_interval
 

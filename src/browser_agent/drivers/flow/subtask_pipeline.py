@@ -56,6 +56,27 @@ def _relativize(path: str, run_path: Path) -> str:
         return str(Path(path))
 
 
+def _downstream_filter_labels(subtask, state) -> list[str]:
+    """Union of ``filter_labels`` of processing subtasks that consume this discovery subtask.
+
+    Processing subtasks read their input via ``load_discovered_links(filter_label)``,
+    so a discovery script must emit those exact labels. A processing subtask is
+    "downstream" when it lists this subtask in ``depends_on``; when no dependency
+    edges exist, every processing subtask in the plan is treated as a consumer.
+    """
+    if subtask.kind != "discovery":
+        return []
+    consumers = [spec for spec in state.plan.subtasks if spec.kind == "processing" and subtask.subtask_id in spec.depends_on]
+    if not consumers:
+        consumers = [spec for spec in state.plan.subtasks if spec.kind == "processing"]
+    labels: list[str] = []
+    for spec in consumers:
+        for label in spec.filter_labels:
+            if label not in labels:
+                labels.append(label)
+    return labels
+
+
 class SubtaskPipeline:
     """Build, lint, emit, smoke-test, execute, and verify one subtask."""
 
@@ -88,7 +109,7 @@ class SubtaskPipeline:
             bsession, builder = await self._build_session(profile_dir, subtask.subtask_id)
             try:
                 result, last_feedback = await self._attempt(
-                    subtask, context, record, bsession, builder, attempt, prior_feedback=last_feedback
+                    subtask, context, record, bsession, builder, attempt, state, prior_feedback=last_feedback
                 )
             finally:
                 await bsession.close()
@@ -141,7 +162,7 @@ class SubtaskPipeline:
         bsession, builder = await self._build_session(profile_dir, subtask.subtask_id)
         try:
             _phase(subtask.subtask_id, "lint repair")
-            script, findings = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT)
+            script, findings = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT, state)
             if findings:
                 record.status = "lint_failed"
                 return record
@@ -150,7 +171,7 @@ class SubtaskPipeline:
             if record.status == "repair_noop":
                 record.status = "execution_failed"
                 return record
-            record, _ = await self._post_emit_loop(subtask, record, emit_result, builder)
+            record, _ = await self._post_emit_loop(subtask, record, emit_result, builder, state)
             return record
         finally:
             await bsession.close()
@@ -212,7 +233,7 @@ class SubtaskPipeline:
         return exec_report
 
     async def _attempt(
-        self, subtask, context, record, bsession, builder, attempt, prior_feedback: str = ""
+        self, subtask, context, record, bsession, builder, attempt, state, prior_feedback: str = ""
     ) -> tuple[str, str]:
         if prior_feedback:
             context = f"{prior_feedback}\n\n{context}"
@@ -221,7 +242,7 @@ class SubtaskPipeline:
         # 1) Generate, then repair lint with findings (replaces blind re-execute).
         script, record = await self._generate_script(subtask, context, record, builder)
         _phase(subtask.subtask_id, "lint repair")
-        script, findings = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT)
+        script, findings = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT, state)
         if findings:
             record.status = "lint_failed"
             return record.status, format_lint_repair(findings)
@@ -233,10 +254,10 @@ class SubtaskPipeline:
 
         # 2) Unified post-emit loop: smoke -> exec -> verify, each repairing with
         #    its own findings and re-gating lint after every repair.
-        record, _ = await self._post_emit_loop(subtask, record, emit_result, builder)
+        record, _ = await self._post_emit_loop(subtask, record, emit_result, builder, state)
         return record.status, ""
 
-    async def _post_emit_loop(self, subtask, record, emit_result, builder=None) -> tuple:
+    async def _post_emit_loop(self, subtask, record, emit_result, builder=None, state=None) -> tuple:
         """Smoke -> exec -> verify, repairing with its own findings and
         re-gating lint after every repair. When ``builder`` is None a
         failing phase is terminal (no repair session available). Returns
@@ -259,7 +280,7 @@ class SubtaskPipeline:
                 if script is None:
                     record.status = last_status
                     return record, last_feedback
-                script, _ = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT)
+                script, _ = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT, state)
                 if _emit_budget_exceeded(record):
                     record.status = "emit_budget_exhausted"
                     logger.error(
@@ -297,7 +318,7 @@ class SubtaskPipeline:
                 if script is None:
                     record.status = last_status
                     return record, last_feedback
-                script, _ = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT)
+                script, _ = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT, state)
                 if _emit_budget_exceeded(record):
                     record.status = "emit_budget_exhausted"
                     logger.error(
@@ -324,7 +345,7 @@ class SubtaskPipeline:
             if script is None:
                 record.status = last_status
                 return record, last_feedback
-            script, _ = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT)
+            script, _ = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT, state)
             if _emit_budget_exceeded(record):
                 record.status = "emit_budget_exhausted"
                 logger.error(
@@ -364,11 +385,17 @@ class SubtaskPipeline:
         script = await builder.execute(subtask, context)
         return script, record
 
-    async def _lint_repair_loop(self, subtask, script, builder, max_repairs):
+    async def _lint_repair_loop(self, subtask, script, builder, max_repairs, state=None):
+        labels = _downstream_filter_labels(subtask, state) if state is not None else []
         for _ in range(max_repairs):
             findings = [
                 f
-                for f in self._linter.lint(script.python_code, kind=subtask.kind, filter_labels=subtask.filter_labels)
+                for f in self._linter.lint(
+                    script.python_code,
+                    kind=subtask.kind,
+                    filter_labels=subtask.filter_labels,
+                    discovery_filter_labels=labels,
+                )
                 if f.severity == "error"
             ]
             if not findings:
@@ -376,7 +403,12 @@ class SubtaskPipeline:
             script = await builder.repair(format_lint_repair(findings))
         findings = [
             f
-            for f in self._linter.lint(script.python_code, kind=subtask.kind, filter_labels=subtask.filter_labels)
+            for f in self._linter.lint(
+                script.python_code,
+                kind=subtask.kind,
+                filter_labels=subtask.filter_labels,
+                discovery_filter_labels=labels,
+            )
             if f.severity == "error"
         ]
         return script, findings
