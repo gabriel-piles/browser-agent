@@ -19,6 +19,12 @@ Description: {description}
 Target verified selectors (from planning):
 {selectors}
 
+Target record granularity:
+{granularity}
+
+Target field specs (scope / transform):
+{field_specs}
+
 Target filter labels: {filter_labels}
 Target sample document URLs:
 {sample_urls}
@@ -28,10 +34,11 @@ Adaptation rules:
 URLs, session/date ranges, and any target-specific configuration.
 - The script's structure, selectors, waits, download mechanics, and \
 record-saving logic MUST stay exactly as in the source.
-- If the target's verified selectors or page types are fundamentally \
-different from what the source script handles (not just different \
-labels/URLs), you MUST NOT adapt. Reply with status "incompatible" \
-and explain the mismatch in `explanation`.
+- If the target's record granularity, field transforms, verified \
+selectors, or page types are fundamentally different from what the \
+source script handles (not just different labels/URLs), you MUST NOT \
+adapt. Reply with status "incompatible" and explain the mismatch in \
+`explanation`.
 - Keep the source script's pdf_download_strategy and dependencies.\
 """
 
@@ -51,9 +58,25 @@ class ScriptReusePrompt:
             kind=subtask.kind,
             description=subtask.description,
             selectors="\n".join(f"- {s}" for s in subtask.verified_selectors) or "- (none)",
+            granularity=ScriptReusePrompt._granularity_line(subtask),
+            field_specs=ScriptReusePrompt._field_spec_lines(subtask),
             filter_labels=", ".join(subtask.filter_labels) or "(none)",
             sample_urls="\n".join(f"- {u}" for u in subtask.sample_document_urls[:5]) or "- (none)",
         )
+
+    @staticmethod
+    def _granularity_line(subtask: SubtaskSpec) -> str:
+        if subtask.row_selector:
+            return f"multiple records per page (row_selector={subtask.row_selector})"
+        return "one record per page (no row_selector)"
+
+    @staticmethod
+    def _field_spec_lines(subtask: SubtaskSpec) -> str:
+        lines = []
+        for fs in subtask.field_specs:
+            transforms = ",".join(fs.transform) or "-"
+            lines.append(f"- {fs.field}: scope={fs.scope} transform=[{transforms}] src={fs.source}")
+        return "\n".join(lines) or "- (none)"
 
     @staticmethod
     def incompatible_note() -> str:

@@ -28,7 +28,22 @@ class SubtaskSpec(BaseModel):
     )
     field_specs: list[FieldSpec] = Field(
         default_factory=list,
-        description="Metadata-field specs the writer pastes verbatim",
+        description=(
+            "Metadata-field specs the writer pastes verbatim. Each spec's "
+            "scope decides extraction: scope='record' feeds extract_rows "
+            "(relative to row_selector) on multi-record pages; scope='page' "
+            "feeds extract_fields once and is merged into every record."
+        ),
+    )
+    row_selector: str = Field(
+        default="",
+        description=(
+            "Processing subtasks only: CSS selector for the repeated card/row "
+            "container when ONE page load yields MULTIPLE records. Empty = one "
+            "record per page load (extract_fields). Non-empty = the script must "
+            "use extract_rows(tab, row_selector, field_specs) and call "
+            "save_record once per returned row."
+        ),
     )
     sample_document_urls: list[str] = Field(
         default_factory=list,

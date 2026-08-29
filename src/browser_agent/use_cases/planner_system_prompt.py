@@ -102,8 +102,40 @@ step.
   that probe.
 
   Step 7b — RECORD FIELD SPECS. For each metadata field, record a
-  FieldSpec: the CSS selector, read-source, and sample value. Put them
-  in each processing subtask's field_specs.
+  FieldSpec: the CSS selector, read-source, scope, sample value, and —
+  when the task prescribes cleaning — the transform LIST. Put them in
+  each processing subtask's field_specs.
+    scope="record" (default) — the value lives in/varies per record
+      container (card/row); feeds extract_rows on multi-record pages.
+    scope="page"            — the value is CONSTANT for the whole page
+      (a shared heading, section, year, language); the script reads it
+      ONCE with extract_fields and merges it into every record.
+  When the task asks to clean a value (e.g. "strip out all text inside
+  parentheses"), set ``transform`` on that field instead of leaving the
+  cleaning rule in prose, and set ``sample`` to the value AFTER all the
+  transforms (the writer's validation diffs the extracted value against
+  ``sample``). Transforms are applied IN ORDER:
+    strip_parentheses    — remove every balanced (...) group (ASCII and
+                           full-width （…）), then collapse whitespace
+    collapse_whitespace  — replace each whitespace run with one space
+  Example: {"field": "title", "selector": "a[href$='.pdf']",
+            "source": "text", "scope": "record",
+            "transform": ["strip_parentheses"], ...}
+
+  RECORD GRANULARITY — decide per processing subtask whether ONE page
+  load yields ONE record or MANY records. ONE (a single document page,
+  or one page per discovered link): leave ``row_selector`` empty and
+  write page-level FieldSpec selectors; the script uses extract_fields
+  and one save_record. MANY (a listing/index page whose repeated
+  cards/rows ARE the records): set ``row_selector`` to the verified
+  container selector of that card/row; per-record FieldSpecs get
+  ``scope="record"`` with selectors RELATIVE to that row, and any field
+  that is IDENTICAL for every row (a shared heading/year/section) gets
+  ``scope="page"`` with a global selector. The script uses
+  extract_rows(row_selector, record specs) and extract_fields(page
+  specs) once, then one save_record per row. Never leave a MANY-record
+  page with an empty ``row_selector``: page-level extract_fields on
+  cards collapses N records into the first match.
 
   Step 8 — PROBE PDF DOWNLOAD. If the task involves PDF downloads, call
   ``download_pdf`` ONCE with a real PDF URL. Set pdf_download_strategy.
@@ -142,6 +174,22 @@ instructed to add an incremental subtask, retain all existing subtasks
 and append a new SubtaskSpec covering only the missing targets/ranges/documents.
 NEVER substitute a different site, document body, or session.
 
+Rule 19 — Future-proof plan descriptions: assume the operator will re-run
+the emitted scripts later, after NEW documents or links have been added to
+the SAME page structures and shapes. Write every SubtaskSpec.description so
+the builder produces a script that enumerates whatever the site exposes AT
+RUNTIME, not the set/length observed today. Explicitly instruct the builder to:
+  - re-walk the live listing/pagination/filter set each run and collect
+    every item that matches the verified selectors;
+  - derive session/year/page ranges and totals from the live DOM (or a high
+    ceiling that only enumerates real hrefs), NEVER from the latest values
+    observed during this exploration;
+  - emit loops over live extract_rows / extract_links / discover_links
+    rather than hard-coded batches of today's links, document refs, or labels.
+If a fixed target/category list is part of the site's stable structure, the
+description must still tell the builder to collect the links INSIDE each
+fixed target dynamically.
+
 OUTPUT CONTRACT — your reply MUST be a single JSON object matching the
 ScrapePlan schema:
 
@@ -156,7 +204,12 @@ Each SubtaskSpec has:
   description           — self-contained NL instructions: target URL,
                           what to collect, mechanics, selectors
   verified_selectors    — CSS selectors verified during exploration
-  field_specs           — metadata-field specs (processing subtasks only)
+  field_specs           — metadata-field specs (processing subtasks only);
+                          each has field/selector/source/scope/transform/
+                          sample per Step 7b
+  row_selector          — (processing) CSS selector of the repeated card/row
+                          when one page yields MANY records; "" means one
+                          record per page load (extract_fields)
   sample_document_urls  — 3-5 DIRECT document file URLs (never listing pages)
   pdf_download_strategy — "curl_cffi" or "browser_fetch"
   expected_document_count — advertised count (0 if unknown)
@@ -171,6 +224,8 @@ HARD RULES:
 - Each SubtaskSpec.description must be fully self-contained.
 - Subtasks listed in dependency order.
 - expected_document_count from advertised counts on the site.
+- Assume later re-runs after new content is added: descriptions must produce
+  runtime-enumerating scripts, never snapshots of today's data.
 
 Remember: explore the page first (navigate → analyze → extract → click
 filter → scroll → extract again), plan the subtasks (Step 6b), collect

@@ -25,8 +25,17 @@ LLM_PROVIDER_ENV_KEYS = {
 }
 # The single model identifier every adapter sends to its provider. Adapters
 # may remap it to a provider-specific catalog name (see ollama_adapter).
-MODEL = "deepseek-v4-flash"
+MODEL = "deepseek-v4-pro"
 LLM_MAX_RETRIES = 6
+# Per-request timeout (seconds) for the LLM HTTP client. Bounds how long a
+# single chat-completion request may stay unanswered before failing. Without an
+# explicit timeout the OpenAI SDK defaults to 600s *and* the app-layer
+# RetryingChatModel retries LLM_MAX_RETRIES times, so a half-open/stalled TCP
+# socket to the provider can hang the whole run for ~LLM_MAX_RETRIES*600s with
+# no recovery. A short read timeout fails a dead connection fast; live streamed
+# responses send chunks well under this window, so legitimate generation is
+# never killed.
+LLM_REQUEST_TIMEOUT_S = 300.0
 MAX_LLM_CALLS = 70
 EXPLORER_MAX_LLM_CALLS = 30
 WRITER_MAX_LLM_CALLS = 40
@@ -122,8 +131,11 @@ MAX_EXPLORE_CALLS = 30
 # Explore-call budget for the dedicated discovery-completeness verifier:
 # ~23 manifest targets × (navigate + repeated infinite-scroll) exceeds the
 # generic MAX_EXPLORE_CALLS budget above, so only the discovery branch runs
-# with this raised limit.
-DISCOVERY_VERIFICATION_EXPLORE_LIMIT = 60
+# with this raised limit. Set generously (>= 3× the largest expected target
+# count) so the verifier can independently enumerate EVERY target the task
+# names and never false-passes incomplete discovery because it ran out of
+# explore budget before checking the last targets.
+DISCOVERY_VERIFICATION_EXPLORE_LIMIT = 120
 # Consecutive empty explore_page results (extract returning 0 elements, or
 # inspect erroring with "no element matches") before the tool refuses and
 # directs the agent to emit or run analyze.

@@ -107,10 +107,10 @@ def _ast_static_check(python_code: str) -> str:
 _STATIC_CHECK_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (
         re.compile(
-            r"^\s*(?:async\s+)?def\s+(?:get_text|get_attr|trusted_click|extract_fields|extract_links|goto_ready)\s*\(",
+            r"^\s*(?:async\s+)?def\s+(?:get_text|get_attr|trusted_click|extract_fields|extract_rows|extract_links|goto_ready)\s*\(",
             re.MULTILINE,
         ),
-        "get_text/get_attr/trusted_click/extract_fields/extract_links/goto_ready is "
+        "get_text/get_attr/trusted_click/extract_fields/extract_rows/extract_links/goto_ready is "
         "redefined inline (rule 0). These are importable helpers: add "
         "the appropriate 'from script_tools.<module> import ...' at the top and "
         "DELETE your local def. The helpers MUST NOT be redefined or modified.",

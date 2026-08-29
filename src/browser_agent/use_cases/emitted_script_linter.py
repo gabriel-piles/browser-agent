@@ -1160,7 +1160,8 @@ def _check_handwritten_extraction(python_code: str) -> list[LintFinding]:
                         severity="error",
                         message=(
                             "hand-written DOM extraction forbidden — use "
-                            "extract_fields(tab, FIELD_SPECS) for metadata and "
+                            "extract_fields(tab, FIELD_SPECS) / "
+                            "extract_rows(tab, ROW_SELECTOR, FIELD_SPECS) for metadata and "
                             "extract_links(tab, selector) for hrefs (rule 14)"
                         ),
                         line=node.lineno,

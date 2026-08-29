@@ -67,11 +67,8 @@ class ScriptBuilderUseCase:
         if subtask.verified_selectors:
             parts.append("**Verified Selectors**:")
             parts.extend(f"- {s}" for s in subtask.verified_selectors)
-        if subtask.field_specs:
-            parts.append("**Field Specs** (paste verbatim as FIELD_SPECS):")
-            parts.append("```json")
-            parts.append(json.dumps([fs.model_dump(mode="json") for fs in subtask.field_specs], indent=2))
-            parts.append("```")
+        parts.extend(ScriptBuilderUseCase._granularity_lines(subtask))
+        parts.extend(ScriptBuilderUseCase._field_spec_blocks(subtask))
         if subtask.sample_document_urls:
             parts.append("**Sample Document URLs**:")
             parts.extend(f"- {u}" for u in subtask.sample_document_urls[:5])
@@ -81,7 +78,63 @@ class ScriptBuilderUseCase:
             "only process discovered_links rows with status='discovered'; "
             "save_record upserts by core_id — never error on already-existing data."
         )
+        parts.append(
+            "**Future-proofing requirement**: the script must keep working when NEW "
+            "documents or links are added to the page in the same structure/shape. "
+            "Enumerate the live DOM, pagination, and filters on each run; never hard-code "
+            "the current set of links, counts, years, sessions, dates, or document refs "
+            "observed today."
+        )
         return "\n".join(parts)
+
+    @staticmethod
+    def _granularity_lines(subtask: SubtaskSpec) -> list[str]:
+        """Instruct the writer how many records one page load yields."""
+        if subtask.row_selector:
+            return [
+                f"**Row Selector** (multiple records per page): {subtask.row_selector}",
+                "Use extract_rows(tab, row_selector, RECORD_FIELD_SPECS) for record-scope "
+                "fields (relative to each row) and extract_fields(tab, PAGE_FIELD_SPECS) "
+                "once for page-scope fields; save_record once per row.",
+            ]
+        return [
+            "**Record granularity**: one record per page — use extract_fields(tab, FIELD_SPECS) and save_record once.",
+        ]
+
+    @staticmethod
+    def _specs_block(title: str, specs: list) -> list[str]:
+        """Render one field-spec JSON block (title + fenced json)."""
+        return [
+            title,
+            "```json",
+            json.dumps([fs.model_dump(mode="json") for fs in specs], indent=2),
+            "```",
+        ]
+
+    @staticmethod
+    def _field_spec_blocks(subtask: SubtaskSpec) -> list[str]:
+        """Render field specs split by scope so the writer pastes them correctly."""
+        if not subtask.field_specs:
+            return []
+        if not subtask.row_selector:
+            return ScriptBuilderUseCase._specs_block(
+                "**Field Specs** (paste verbatim as FIELD_SPECS):",
+                subtask.field_specs,
+            )
+        record = [fs for fs in subtask.field_specs if fs.scope == "record"] or subtask.field_specs
+        page = [fs for fs in subtask.field_specs if fs.scope == "page"]
+        blocks: list[str] = []
+        if record:
+            blocks += ScriptBuilderUseCase._specs_block(
+                "**Record Field Specs** (extract_rows cell specs — relative to each row):",
+                record,
+            )
+        if page:
+            blocks += ScriptBuilderUseCase._specs_block(
+                "**Page-scope Field Specs** (extract_fields once — merge into every record):",
+                page,
+            )
+        return blocks
 
     async def _run_agent(self, agent: Agent, prompt: str, message_history: list | None = None) -> Any:
         agent_logger.bind(agent="script_builder").info(

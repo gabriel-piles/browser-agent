@@ -111,6 +111,13 @@ class SubtaskPipeline:
                 result, last_feedback = await self._attempt(
                     subtask, context, record, bsession, builder, attempt, state, prior_feedback=last_feedback
                 )
+            except Exception:
+                logger.exception(
+                    "subtask {id}: pipeline raised — marking execution_failed for orchestrator recovery",
+                    id=subtask.subtask_id,
+                )
+                record.status = "execution_failed"
+                return record
             finally:
                 await bsession.close()
                 delete_profile_dir(profile_dir)
