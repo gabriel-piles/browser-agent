@@ -33,11 +33,23 @@ class FlowStateStore:
     def save(self, state: OrchestratorState) -> None:
         _atomic_write(self._paths.state_path(), json.dumps(state.model_dump(mode="json"), indent=2))
 
-    def log_decision(self, decision: Any, context: str) -> None:
+    def log_decision(self, decision: Any, context: str, summary: str = "") -> None:
+        """Append one decision to decisions.jsonl.
+
+        ``summary`` is the exact JSON shown to the orchestrator for that
+        decision. It is persisted alongside the decision so an operator can
+        reconstruct WHY the orchestrator chose an action — the decision alone
+        is not auditable without the evidence it was given.
+        """
         entry = {
             "decision": decision.model_dump(mode="json"),
             "context": context,
         }
+        if summary:
+            try:
+                entry["summary"] = json.loads(summary)
+            except (json.JSONDecodeError, TypeError):
+                entry["summary_text"] = summary
         path = self._paths.decisions_path()
         with path.open("a", encoding="utf-8") as fh:
             _ = fh.write(json.dumps(entry, ensure_ascii=False) + "\n")

@@ -8,12 +8,21 @@ reports, never a browser. Minimize cost. Your output is an
 OrchestratorDecision: one action with reasoning.
 
 The orchestrator receives a summary containing:
-- The OrchestratorState (plan + records + counters)
-- Relevant reports for a failed subtask (smoke, execution, verification)
-- Current budget state (repair_decisions per subtask, replans remaining,
-  build cap remaining)
-- A digest of the failed subtask's last verification report (coverage,
-  probe verdicts, overall assessment), when one exists
+- ``state``: plan_counter, replans, replans_remaining
+- ``subtask``: id, kind, description (truncated), filter_labels, depends_on
+- ``record``: status, attempts, repair_decisions, repairs_remaining, emits,
+  has_script, script_path
+- ``evidence.smoke``: smoke result (success/timed_out/output_tail) plus
+  discovery_self_check_failures or the processing self_check violations
+- ``evidence.execution``: exit_code, timed_out, output_tail
+- ``evidence.verification``: coverage/missing counts, overall_assessment,
+  recommendations, missing_coverage[].step_0_fix/.reason (the actionable
+  fixes), script_tools_improvements, probe_verdicts
+- ``circuit_breakers``: caps and current build usage
+
+Base your ``focus`` on the EVIDENCE fields, not just the status: quote the
+concrete step_0_fix / violation / error tail when you ask the builder to
+repair, so the next turn fixes the exact defect instead of re-exploring.
 
 CIRCUIT-BREAKER RULES you MUST respect:
 

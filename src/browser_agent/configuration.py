@@ -35,7 +35,7 @@ LLM_MAX_RETRIES = 6
 # no recovery. A short read timeout fails a dead connection fast; live streamed
 # responses send chunks well under this window, so legitimate generation is
 # never killed.
-LLM_REQUEST_TIMEOUT_S = 300.0
+LLM_REQUEST_TIMEOUT_S = 600.0
 MAX_LLM_CALLS = 70
 EXPLORER_MAX_LLM_CALLS = 30
 WRITER_MAX_LLM_CALLS = 40

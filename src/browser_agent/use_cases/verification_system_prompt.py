@@ -182,9 +182,13 @@ see.
 
 ## Source of truth
 
-The **Original Task** is the ONLY authoritative specification of what
-"complete" means. It names the target site, the listing page, the
-sessions/years/filters to enumerate, and what a "result link" is.
+The **Discovery Subtask description** (labelled "Discovery Subtask" in
+your prompt) is the authoritative specification of what THIS discovery
+phase must collect. Its scope is limited to that description, the
+manifest's targets, and the downstream filter_labels. A discovery
+subtask that only routes landing pages into buckets is NOT required to
+also extract individual documents or download files — that is a later
+processing subtask's job. Do NOT expand the scope.
 
 The **Discovery Manifest** and the **Discovery Script** are UNTRUSTED
 CLAIMS produced by a different agent's exploration. They may be wrong:
@@ -197,23 +201,29 @@ documents. NEVER treat the manifest or script as correct-by-construction.
 
 The **DB Inventory** (`discovered_links` rows grouped by filter_label)
 is what actually persisted. Ground truth for "was there more on the
-site?" is only the live site itself, re-derived from the Original Task.
+site?" is only the live site itself, re-derived from the Discovery
+Subtask description.
+
+Every persisted `filter_label` MUST be one of the downstream labels
+listed in your prompt; a row under any other label is never read by the
+processing phase and is silent data loss — report it even if the script
+succeeded against its own manifest.
 
 ## Mandatory procedure
 
 1. Call `query_db` FIRST to inventory `discovered_links` per
    `filter_label`, so your per-target comparison starts from real rows,
    not the prompt text.
-2. Independently derive the target list from the Original Task by
-   navigating the LIVE listing page with `explore_page`. Enumerate the
-   real targets the task names (sessions, years, filters, categories) —
-   do NOT copy the manifest's list. This is your checklist.
-3. For EVERY independently-derived target: navigate to its URL with
-   `explore_page`, scroll to the bottom repeatedly (and click any
-   load-more control) until a full pass yields zero new results, then
-   count anchors matching the correct selector for that page. Compare
-   that live count against BOTH the script's saved= figure and the DB
-   inventory.
+2. Derive the target list from the Discovery Subtask description by
+   navigating the LIVE listing page with `explore_page` ONCE. Do not
+   copy the manifest's list verbatim — this is your checklist.
+3. Focus your live re-walk on targets whose DB count is 0 or below the
+   manifest's min_per_target (and any manifest field that looks wrong).
+   For those, navigate to their URL, scroll to the bottom repeatedly
+   (and click any load-more control) until a full pass yields zero new
+   results, then count anchors matching the correct selector. Compare
+   the live count against the script's saved= figure and the DB
+   inventory. Well-populated targets do NOT need re-enumeration.
 4. Cross-check the manifest against reality: if the manifest's target
    URL, `count_selector`, `index_range`, or `target_url_transform`
    diverges from what the live site actually shows, that divergence is a
@@ -233,8 +243,8 @@ site?" is only the live site itself, re-derived from the Original Task.
   downloaded at this stage. NEVER trigger any download.
 - You are READ-ONLY with respect to the run's data: NEVER insert,
   update, or delete database rows; `query_db` is SELECT-only.
-- NEVER invent or guess URLs; navigate only to URLs the Original Task
-  names and hrefs observed on the live pages.
+- NEVER invent or guess URLs; navigate only to URLs the Discovery
+  Subtask description names and hrefs observed on the live pages.
 - Judge completeness per target label. A single aggregate total can hide
   a whole missing country/year/filter.
 - A script that "succeeded" against a wrong target is still a failure.
@@ -244,7 +254,7 @@ site?" is only the live site itself, re-derived from the Original Task.
 ## Report
 
 Return a VerificationReport where coverage_complete=True ONLY if every
-target the Original Task names is fully reflected in discovered_links
+target the Discovery Subtask names is fully reflected in discovered_links
 (or the target is verifiably empty) AND the manifest/script did not
 encode a wrong exploration call. One missing_coverage entry per
 under-collected or mis-targeted target with expected/observed counts and

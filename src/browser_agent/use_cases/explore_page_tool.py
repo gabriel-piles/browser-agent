@@ -129,13 +129,13 @@ async def explore_page(ctx: RunContext[AgentDeps], action: PageAction) -> str:
         deps.last_analyze_selectors = [p.selector for p in snapshot.structure.link_patterns]
     if deps.empty_result_streak >= MAX_EMPTY_EXPLORE_RESULTS:
         return _empty_result_directive(deps)
-    result = _format_snapshot(snapshot)
+    result = _format_snapshot(snapshot, include_html=action.action in ("extract", "inspect"))
     if empty:
         result += _empty_result_hint(deps)
     return result + _budget_footer(deps)
 
 
-def _format_snapshot(snapshot: PageSnapshot) -> str:
+def _format_snapshot(snapshot: PageSnapshot, include_html: bool = True) -> str:
     lines = [
         f"# Action: {snapshot.action_performed}",
         f"# URL: {snapshot.url}",
@@ -160,6 +160,17 @@ def _format_snapshot(snapshot: PageSnapshot) -> str:
             href_part = f" href={el.href!r}" if el.href else ""
             lines.append(f"  <{el.tag}>{href_part} text={el.text!r}")
     if snapshot.cleaned_html:
+        if not snapshot.structure and not snapshot.extracted and not include_html:
+            # Compact navigation result: keep the navigable links, drop the full
+            # page HTML so a long exploration crawl does not flood the LLM context.
+            links = anchor_hrefs(snapshot.cleaned_html, snapshot.url, SNAPSHOT_LINK_LINES)
+            if links:
+                lines.append("")
+                lines.append(f"# Page links ({len(links)} shown):")
+                lines.extend(f"  href={href!r} text={text!r}" for href, text in links)
+            lines.append("")
+            lines.append("# Use extract/inspect for a selector's DOM, or analyze for structure.")
+            return "\n".join(lines)
         if not snapshot.structure and not snapshot.extracted:
             links = anchor_hrefs(snapshot.cleaned_html, snapshot.url, SNAPSHOT_LINK_LINES)
             if links:

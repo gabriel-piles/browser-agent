@@ -16,6 +16,16 @@ _MAX_REPLANS = 2
 _MAX_TOTAL_SUBTASK_BUILDS = 20
 _SIBLING_SOURCE_MAX_LINES = 200
 
+# Bounds for the orchestrator summary so a huge smoke/execution/verification
+# artifact never blows past the LLM context window. The full artifacts always
+# remain on disk under flow/subtasks/<id>/<name>.json.
+_REPORT_TAIL_CHARS = 800
+_OVERALL_ASSESSMENT_CHARS = 600
+_RECOMMENDATIONS_CHARS = 400
+_MISSING_COVERAGE_MAX = 20
+_FIX_CHARS = 300
+_SUBTASK_DESCRIPTION_CHARS = 600
+
 
 class ScrapeFlow:
     """Drive the full flow: plan, run subtasks, handle failures, final verify."""
@@ -134,7 +144,7 @@ class ScrapeFlow:
 
             summary = self._plan_summary(state)
             decision = await self._orchestrator.decide(summary)
-            self._state_store.log_decision(decision, "plan_review")
+            self._state_store.log_decision(decision, "plan_review", summary)
             logger.info(
                 "orchestrator plan review: action={action} reasoning={reasoning}",
                 action=decision.action,
@@ -207,8 +217,9 @@ class ScrapeFlow:
 
             if record.status == "repair_noop":
                 logger.warning("subtask {id}: repair_noop — dead end", id=spec.subtask_id)
-                decision = await self._orchestrator.decide(self._failure_summary(state, spec.subtask_id))
-                self._state_store.log_decision(decision, f"repair_noop:{spec.subtask_id}")
+                summary = self._failure_summary(state, spec.subtask_id)
+                decision = await self._orchestrator.decide(summary)
+                self._state_store.log_decision(decision, f"repair_noop:{spec.subtask_id}", summary)
                 counter_before = state.plan_counter
                 state = await self._apply_decision(decision, state, spec.subtask_id)
                 if state.plan_counter != counter_before:
@@ -226,12 +237,14 @@ class ScrapeFlow:
                 self._state_store.log_decision(
                     self._forced_accept_gap(spec.subtask_id),
                     f"repair_cap:{spec.subtask_id}",
+                    self._failure_summary(state, spec.subtask_id),
                 )
                 self._log_plan_progress(state)
                 continue
 
-            decision = await self._orchestrator.decide(self._failure_summary(state, spec.subtask_id))
-            self._state_store.log_decision(decision, f"failure:{spec.subtask_id}")
+            summary = self._failure_summary(state, spec.subtask_id)
+            decision = await self._orchestrator.decide(summary)
+            self._state_store.log_decision(decision, f"failure:{spec.subtask_id}", summary)
             counter_before = state.plan_counter
             state = await self._apply_decision(decision, state, spec.subtask_id)
             if state.plan_counter != counter_before:
@@ -445,34 +458,105 @@ class ScrapeFlow:
 
         return json.dumps(
             {
+                "kind": "plan_review",
                 "plan_counter": state.plan_counter,
                 "replans": state.replans,
                 "task_summary": state.plan.task_summary,
                 "site_overview": state.plan.site_overview[:500],
                 "subtask_count": len(state.plan.subtasks),
-                "subtask_ids": [s.subtask_id for s in state.plan.subtasks],
+                "subtasks": [self._subtask_entry(s) for s in state.plan.subtasks],
             },
             indent=2,
         )
 
-    def _verification_digest(self, subtask_id: str) -> dict:
+    @staticmethod
+    def _subtask_entry(spec) -> dict:
+        """Compact, context-bearing entry for one subtask in an orchestrator summary."""
+        return {
+            "subtask_id": spec.subtask_id,
+            "kind": spec.kind,
+            "description": spec.description[:_SUBTASK_DESCRIPTION_CHARS],
+            "filter_labels": spec.filter_labels,
+            "depends_on": spec.depends_on,
+            "sample_document_urls_count": len(spec.sample_document_urls),
+        }
+
+    def _read_subtask_report(self, subtask_id: str, name: str) -> dict:
+        """Load one per-subtask JSON report; ``{}`` when absent or corrupt."""
         import json
 
-        report_path = self._run_path / "flow" / "subtasks" / subtask_id / "verification_report.json"
-        if not report_path.exists():
+        path = self._run_path / "flow" / "subtasks" / subtask_id / f"{name}.json"
+        if not path.is_file():
             return {}
         try:
-            report = json.loads(report_path.read_text())
+            return json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _smoke_digest(self, subtask_id: str) -> dict:
+        """Compact smoke/self-check digest for the orchestrator."""
+        report = self._read_subtask_report(subtask_id, "smoke_report")
+        if not report:
+            return {}
+        smoke = report.get("smoke") or {}
+        digest = {
+            "success": smoke.get("success"),
+            "timed_out": smoke.get("timed_out"),
+            "output_tail": (smoke.get("output") or "")[-_REPORT_TAIL_CHARS:],
+        }
+        failures = report.get("discovery_self_check_failures") or []
+        if failures:
+            digest["discovery_self_check_failures"] = list(failures)
+        self_check = report.get("self_check")
+        if self_check:
+            digest["self_check"] = {
+                "success": self_check.get("success"),
+                "downloaded_rows": self_check.get("downloaded_rows"),
+                "record_count": self_check.get("record_count"),
+                "violations": (self_check.get("violations") or [])[:_MISSING_COVERAGE_MAX],
+                "output_tail": (self_check.get("output") or "")[-_REPORT_TAIL_CHARS:],
+            }
+        return digest
+
+    def _execution_digest(self, subtask_id: str) -> dict:
+        """Compact execution digest for the orchestrator."""
+        report = self._read_subtask_report(subtask_id, "execution_report")
+        if not report:
+            return {}
+        return {
+            "exit_code": report.get("exit_code"),
+            "timed_out": report.get("timed_out"),
+            "duration_s": report.get("duration_s"),
+            "output_tail": (report.get("output_tail") or "")[-_REPORT_TAIL_CHARS:],
+        }
+
+    def _verification_digest(self, subtask_id: str) -> dict:
+        """Compact verification digest — carries the actionable step_0_fix entries."""
+        report = self._read_subtask_report(subtask_id, "verification_report")
+        if not report:
             return {}
         return {
             "coverage_complete": report.get("coverage_complete"),
             "missing_count": report.get("missing_count"),
             "expected_pdf_total": report.get("expected_pdf_total"),
             "observed_pdf_total": report.get("observed_pdf_total"),
-            "overall_assessment": report.get("overall_assessment", "")[:400],
+            "overall_assessment": (report.get("overall_assessment") or "")[:_OVERALL_ASSESSMENT_CHARS],
+            "recommendations": (report.get("recommendations") or "")[:_RECOMMENDATIONS_CHARS],
+            "missing_coverage": [
+                {
+                    "path": mc.get("navigation_path"),
+                    "expected": mc.get("expected"),
+                    "actual": mc.get("actual"),
+                    "reason": (mc.get("reason") or "")[:_FIX_CHARS],
+                    "step_0_fix": (mc.get("step_0_fix") or "")[:_FIX_CHARS],
+                }
+                for mc in (report.get("missing_coverage") or [])[:_MISSING_COVERAGE_MAX]
+            ],
+            "script_tools_improvements": [
+                s[:_FIX_CHARS] for s in (report.get("script_tools_improvements") or [])[:_MISSING_COVERAGE_MAX]
+            ],
             "probe_verdicts": [
-                f"{r.get('verdict')}: {r.get('source_url', '')[:80]}" for r in report.get("probe_results", [])
+                f"{r.get('verdict')}: {r.get('source_url', '')[:80]}" for r in (report.get("probe_results") or [])
             ],
         }
 
@@ -480,19 +564,28 @@ class ScrapeFlow:
         import json
 
         record = self._get_record(state, subtask_id)
+        spec = next((s for s in state.plan.subtasks if s.subtask_id == subtask_id), None)
         return json.dumps(
             {
+                "kind": "failure",
                 "state": {
                     "plan_counter": state.plan_counter,
                     "replans": state.replans,
                     "replans_remaining": _MAX_REPLANS - state.replans,
                 },
-                "failed_subtask": {
-                    "subtask_id": subtask_id,
+                "subtask": self._subtask_entry(spec) if spec else {"subtask_id": subtask_id},
+                "record": {
                     "status": record.status if record else "unknown",
+                    "attempts": record.attempts if record else 0,
                     "repair_decisions": record.repair_decisions if record else 0,
                     "repairs_remaining": _MAX_ORCHESTRATOR_REPAIRS_PER_SUBTASK - (record.repair_decisions if record else 0),
-                    "attempts": record.attempts if record else 0,
+                    "emits": record.emits if record else 0,
+                    "has_script": bool(record.script_path) if record else False,
+                    "script_path": record.script_path if record else "",
+                },
+                "evidence": {
+                    "smoke": self._smoke_digest(subtask_id),
+                    "execution": self._execution_digest(subtask_id),
                     "verification": self._verification_digest(subtask_id),
                 },
                 "circuit_breakers": {

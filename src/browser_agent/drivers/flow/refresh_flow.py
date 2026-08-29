@@ -37,8 +37,9 @@ class RefreshFlow:
         if not assessment.failed_documents and not assessment.new_discovered_links:
             logger.info("refresh: up to date — no failed downloads, no new documents")
             return 0
-        decision = await self._orchestrator.decide(self._summary(state, assessment))
-        self._state_store.log_decision(decision, "refresh")
+        summary = self._summary(state, assessment)
+        decision = await self._orchestrator.decide(summary)
+        self._state_store.log_decision(decision, "refresh", summary)
         logger.info(
             "orchestrator refresh: action={action} reasoning={reasoning}",
             action=decision.action,

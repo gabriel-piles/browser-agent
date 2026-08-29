@@ -107,9 +107,10 @@ class SubtaskPipeline:
                 return record
             _phase(subtask.subtask_id, "building")
             bsession, builder = await self._build_session(profile_dir, subtask.subtask_id)
+            attempt_context = self._prior_script_context(record, context) if (attempt > 0 or record.script_path) else context
             try:
                 result, last_feedback = await self._attempt(
-                    subtask, context, record, bsession, builder, attempt, state, prior_feedback=last_feedback
+                    subtask, attempt_context, record, bsession, builder, attempt, state, prior_feedback=last_feedback
                 )
             except Exception:
                 logger.exception(
@@ -121,13 +122,17 @@ class SubtaskPipeline:
             finally:
                 await bsession.close()
                 delete_profile_dir(profile_dir)
+            self._state_store.save(state)
             if result == "succeeded":
                 record.status = "succeeded"
+                self._state_store.save(state)
                 return record
             if result == "repair_noop":
                 record.status = "repair_noop"
+                self._state_store.save(state)
                 return record
         record.status = record.status if record.status != "building" else "execution_failed"
+        self._state_store.save(state)
         return record
 
     async def reexecute(self, subtask, state) -> SubtaskRecord:
@@ -174,7 +179,7 @@ class SubtaskPipeline:
                 record.status = "lint_failed"
                 return record
             _phase(subtask.subtask_id, "emitting")
-            emit_result, record = self._emit(subtask, script, record, state=None)
+            emit_result, record = self._emit(subtask, script, record, state)
             if record.status == "repair_noop":
                 record.status = "execution_failed"
                 return record
@@ -191,6 +196,28 @@ class SubtaskPipeline:
         except OSError as exc:
             logger.warning("reuse: source script unreadable: {exc}", exc=exc)
             return None
+
+    def _prior_script_context(self, record: SubtaskRecord, context: str) -> str:
+        """Seed the next attempt with the prior emitted script.
+
+        The builder then EDITs the proven skeleton instead of re-exploring the
+        whole site from scratch — fewer LLM tokens and a much smaller chance of
+        regressing selectors that already worked.
+        """
+        path = _resolve_existing_script(record.script_path, self._run_path)
+        if path is None:
+            return context
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return context
+        block = (
+            "## Prior emitted script (from the previous attempt)\n"
+            "Edit this incrementally instead of re-exploring the site. Keep its verified "
+            "selectors and page mechanics; change only what the repair finding describes.\n"
+            f"Path: {record.script_path}\n```python\n{source}\n```"
+        )
+        return f"{context}\n\n{block}" if context else block
 
     async def _adapt_source_script(self, subtask, source_code: str, adapt_focus: str):
         """Run the constrained adapt-or-reject LLM call for one subtask."""
@@ -255,7 +282,7 @@ class SubtaskPipeline:
             return record.status, format_lint_repair(findings)
 
         _phase(subtask.subtask_id, "emitting")
-        emit_result, record = self._emit(subtask, script, record, state=None)
+        emit_result, record = self._emit(subtask, script, record, state)
         if record.status == "repair_noop":
             return "repair_noop", last_feedback
 
@@ -275,8 +302,8 @@ class SubtaskPipeline:
             _phase(subtask.subtask_id, "smoke")
             smoke, record = await self._smoke(subtask, record, emit_result)
             smoke_phase_failed = (
-                (smoke and not smoke.smoke.success)
-                or (smoke and smoke.discovery_self_check_failures)
+                (subtask.kind == "discovery" and smoke and bool(smoke.discovery_self_check_failures))
+                or (subtask.kind != "discovery" and smoke and not smoke.smoke.success)
                 or (subtask.kind == "processing" and smoke and smoke.self_check and not smoke.self_check.success)
             )
             if smoke_phase_failed:
@@ -296,7 +323,7 @@ class SubtaskPipeline:
                         n=_MAX_EMITS_PER_SUBTASK,
                     )
                     return record, last_feedback
-                emit_result, record = self._emit(subtask, script, record, state=None)
+                emit_result, record = self._emit(subtask, script, record, state)
                 if record.status == "repair_noop":
                     record.status = last_status
                     return record, last_feedback
@@ -334,7 +361,7 @@ class SubtaskPipeline:
                         n=_MAX_EMITS_PER_SUBTASK,
                     )
                     return record, last_feedback
-                emit_result, record = self._emit(subtask, script, record, state=None)
+                emit_result, record = self._emit(subtask, script, record, state)
                 if record.status == "repair_noop":
                     record.status = last_status
                     return record, last_feedback
@@ -361,7 +388,7 @@ class SubtaskPipeline:
                     n=_MAX_EMITS_PER_SUBTASK,
                 )
                 return record, last_feedback
-            emit_result, record = self._emit(subtask, script, record, state=None)
+            emit_result, record = self._emit(subtask, script, record, state)
             if record.status == "repair_noop":
                 record.status = last_status
                 return record, last_feedback
@@ -423,7 +450,7 @@ class SubtaskPipeline:
     def _emit(self, subtask, script, record, state):
         record.emits += 1
         emit_result = self._emitter.emit(
-            state.plan.task_summary if state else subtask.description,
+            subtask.description,
             script,
             self._run_path,
         )
@@ -437,8 +464,12 @@ class SubtaskPipeline:
         new_hash = hashlib.md5(code.encode()).hexdigest()
         if record.script_hash and record.script_hash == new_hash:
             record.status = "repair_noop"
+            if state is not None:
+                self._state_store.save(state)
             return emit_result, record
         record.script_hash = new_hash
+        if state is not None:
+            self._state_store.save(state)
         return emit_result, record
 
     async def _smoke(self, subtask, record, emit_result):
@@ -469,15 +500,21 @@ class SubtaskPipeline:
             manifest_result = extract_manifest_detailed(script_path.read_text(encoding="utf-8"))
             if manifest_result.error:
                 disc_failures = [manifest_result.error]
-            elif disc_result.success and manifest_result.manifest is not None:
+            else:
                 db_rows = self._count_discovered_links(db_path)
                 disc_failures = DiscoverySelfCheckVerifier().verify(
                     manifest_result.manifest,
                     disc_result.output,
                     db_rows,
                 )
-            else:
-                disc_failures = ["discovery script crashed:\n" + disc_result.output]
+                if disc_result.timed_out:
+                    # A slow crawl legitimately exceeds the smoke wall-clock; the
+                    # cap itself is not a defect. Keep only under-collection proven
+                    # from the partial evidence, and drop the summary-line noise the
+                    # cap cut off.
+                    disc_failures = [f for f in disc_failures if "missing DISCOVERY total_saved line" not in f]
+                elif not disc_result.success:
+                    disc_failures = ["discovery script crashed:\n" + disc_result.output]
 
         smoke_report = SubtaskSmokeReport(
             smoke=result,

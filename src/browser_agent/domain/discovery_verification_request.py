@@ -6,38 +6,42 @@ from pydantic import BaseModel, Field
 
 
 _TASK_DIRECTIVE = (
-    "Verify that EVERY target the Original Task names was fully harvested — "
-    "not a sample, and not merely the manifest's list. The manifest and "
-    "script below are UNTRUSTED claims from a different agent's exploration "
-    "and may encode a wrong target URL, selector, index range, or URL "
-    "transform. Independently derive the real target list from the Original "
-    "Task by navigating the live listing page, then for each target: "
-    "navigate its URL with explore_page, scroll repeatedly to the bottom "
-    "(and click any load-more control) until no new results appear, count "
-    "anchors matching the correct selector, and compare that live count "
-    "against BOTH the script's saved= figure and the DB inventory below. "
-    "Report any divergence between the manifest/script and the live site as "
-    "a finding, even when the script 'succeeded' against its own wrong "
-    "target. Confirm every zero-link target is genuinely empty on the live "
-    "site (not a broken filter or a wrong URL). Check whether the same link "
-    "appears under multiple targets — cross-target duplicates inflate "
-    "totals; discovered_links deduplicates by URL. NEVER download anything. "
-    "Return a VerificationReport with one missing_coverage entry per "
-    "under-collected or mis-targeted target, each with a concrete "
-    "step_0_fix."
+    "Verify the DISCOVERY subtask against ITS OWN declared scope — the subtask "
+    "description below plus its DISCOVERY_MANIFEST — not against the full "
+    "end-to-end download task. A discovery subtask's job is to enumerate the "
+    "manifest's targets and persist each result link under ONE of the downstream "
+    "filter_labels. It must NOT be expected to also extract individual documents "
+    "unless the subtask description explicitly says so.\n\n"
+    "Audit, in this order:\n"
+    "1. Confirm the manifest's listing URL / link_selector / index_from_href / "
+    "index_range / target_url_transform are consistent with the live listing "
+    "page (navigate the listing once).\n"
+    "2. For every downstream label whose DB inventory count is 0 or clearly "
+    "below the manifest's min_per_target, navigate the corresponding live "
+    "target(s) and decide whether it is genuinely empty or a broken selector / "
+    "skipped target / early pagination stop.\n"
+    "3. Confirm each persisted label is one of the downstream labels (a label "
+    "outside that set is silent data loss — flag it even though the script "
+    "'succeeded').\n"
+    "4. Confirm links are saved once (cross-target duplicates are deduplicated "
+    "by URL and deflate totals).\n\n"
+    "Re-walk ONLY the zero/under-collected labels — do not re-enumerate every "
+    "well-populated target. NEVER download anything. Return a "
+    "VerificationReport with one missing_coverage entry per under-collected / "
+    "mis-targeted label and a concrete step_0_fix."
 )
 
 
 class DiscoveryVerificationRequest(BaseModel):
     """Input to the discovery-completeness verification use case.
 
-    Carries the subtask description (source of truth), the full discovery
-    script source, its parsed ``DISCOVERY_MANIFEST``, the script's own
-    self-reported per-target stdout lines, and the deterministic DB
-    inventory of what actually landed in ``discovered_links``.
+    Carries the subtask description (the scoped source of truth), the full
+    discovery script source, its parsed ``DISCOVERY_MANIFEST``, the script's
+    own self-reported per-target stdout lines, the deterministic DB inventory,
+    and the downstream labels the processing subtasks will consume.
     """
 
-    task_prompt: str = Field(description="The subtask description from the scrape plan.")
+    task_prompt: str = Field(description="The subtask description from the scrape plan (scoped source of truth).")
     discovery_script: str = Field(description="Full source of the step 0 discovery script.")
     manifest_json: str = Field(description="Parsed DISCOVERY_MANIFEST pretty-printed as JSON.")
     target_report: str = Field(
@@ -46,10 +50,15 @@ class DiscoveryVerificationRequest(BaseModel):
     db_inventory: str = Field(
         description="'label: db_count' lines from discovered_links GROUP BY filter_label.",
     )
+    downstream_labels: list[str] = Field(
+        default_factory=list,
+        description="Exact filter_labels the downstream processing subtasks will consume.",
+    )
 
     def render_prompt(self) -> str:
         parts = [
-            f"## Original Task\n{self.task_prompt}\n\n---\n\n",
+            f"## Discovery Subtask (source of truth — do not expand its scope)\n{self.task_prompt}\n\n---\n\n",
+            f"## Downstream filter_labels (every saved link MUST carry one of these)\n{self.downstream_labels or '[]'}\n\n---\n\n",
             f"## Discovery Script (from step 0)\n```python\n{self.discovery_script}\n```\n\n---\n\n",
             f"## Discovery Manifest\n```json\n{self.manifest_json}\n```\n\n---\n\n",
             f"## Script's Self-Reported Targets\n{self.target_report}\n\n---\n\n",

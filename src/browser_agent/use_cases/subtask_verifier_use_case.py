@@ -237,11 +237,20 @@ class SubtaskVerifierUseCase:
         assert gate.manifest is not None and source is not None  # gate guarantees both
         found, saved, _total = parse_discovery_stdout(exec_report.output_tail if exec_report else "")
         db_counts = discovered_link_counts(self._db_path)
+        downstream = _downstream_filter_labels(subtask, state_store)
         gaps = _deterministic_discovery_gaps(found, saved, db_counts)
-        request = self._build_discovery_request(subtask, source, gate.manifest, found, saved, db_counts)
+        gaps.extend(_discovery_label_drift(db_counts, downstream))
+        if gaps:
+            # Mechanical divergence between the script's own claims and the DB,
+            # or a filter_label the downstream processing subtasks will never read.
+            # A live re-walk cannot overturn a mechanical mismatch — fail fast
+            # without spending a browser + LLM pass.
+            report = _gaps_failed_report(gaps)
+            self._persist_report(report, subtask, state_store)
+            return report
+        request = self._build_discovery_request(subtask, source, gate.manifest, found, saved, db_counts, downstream)
         report = await self._run_discovery_agent(request)
         delete_profile_dir(self._run_path / "profile_verifier")
-        report = _merge_deterministic_gaps(report, gaps)
         self._persist_report(report, subtask, state_store)
         return report
 
@@ -295,16 +304,18 @@ class SubtaskVerifierUseCase:
         found: dict[str, int],
         saved: dict[str, int],
         db_counts: dict[str, int],
+        downstream_labels: list[str],
     ) -> DiscoveryVerificationRequest:
         labels = sorted(set(found) | set(saved))
         return DiscoveryVerificationRequest(
-            task_prompt=self._original_task or subtask.description,
+            task_prompt=subtask.description,
             discovery_script=source,
             manifest_json=json.dumps(manifest.model_dump(mode="json"), indent=2, ensure_ascii=False),
             target_report="\n".join(
                 f"DISCOVERY target={label} found={found.get(label, 0)} saved={saved.get(label, 0)}" for label in labels
             ),
             db_inventory="\n".join(f"{label}: {count}" for label, count in sorted(db_counts.items())),
+            downstream_labels=downstream_labels,
         )
 
     def _discovery_deps(self) -> VerificationAgentDeps:
@@ -445,6 +456,70 @@ def _find_record(state_store, subtask_id: str) -> SubtaskRecord | None:
             return record
 
 
+def _downstream_filter_labels(subtask: SubtaskSpec, state_store) -> list[str]:
+    """Union of filter_labels of processing subtasks consuming this discovery subtask.
+
+    These are the exact labels ``load_discovered_links(filter_label)`` will read
+    downstream, so a discovery script that saves any other label silently loses
+    those links. Mirrors the pipeline's ``_downstream_filter_labels`` but reads
+    from the persisted flow state instead of an in-memory plan.
+    """
+    labels: list[str] = []
+    state = state_store.load() if state_store is not None else None
+    if state is None:
+        return labels
+    consumers = [s for s in state.plan.subtasks if s.kind == "processing" and subtask.subtask_id in s.depends_on]
+    if not consumers:
+        consumers = [s for s in state.plan.subtasks if s.kind == "processing"]
+    for spec in consumers:
+        for label in spec.filter_labels:
+            if label not in labels:
+                labels.append(label)
+    return labels
+
+
+def _discovery_label_drift(db_counts: dict[str, int], downstream_labels: list[str]) -> list[MissingCoverage]:
+    """Flag any persisted filter_label no downstream processing subtask will consume."""
+    if not downstream_labels:
+        return []
+    gaps: list[MissingCoverage] = []
+    for label in sorted(db_counts):
+        if label in downstream_labels:
+            continue
+        gaps.append(
+            MissingCoverage(
+                navigation_path=f"discovery filter_label '{label}'",
+                expected_total=0,
+                observed_total=db_counts[label],
+                expected=f"every saved link must carry filter_label in {downstream_labels}",
+                actual=f"{db_counts[label]} rows persisted under '{label}', which no processing subtask reads",
+                reason=(
+                    "downstream processing subtasks call load_discovered_links() with their exact "
+                    "filter_labels; an unknown label is never processed and its documents are silently missed"
+                ),
+                step_0_fix=f"save_discovered_link(url, filter_label) must use exactly one of {downstream_labels}",
+            )
+        )
+    return gaps
+
+
+def _gaps_failed_report(gaps: list[MissingCoverage]) -> VerificationReport:
+    """Deterministic failure report from mechanical gaps (no LLM/browser pass)."""
+    return VerificationReport(
+        overall_assessment=(
+            "Discovery deterministically diverges from its own claims or its downstream "
+            f"consumers: {len(gaps)} mechanical gap(s) detected."
+        ),
+        missing_count=len(gaps),
+        missing_coverage=gaps,
+        recommendations=(
+            "Fix the discovery script so the DB matches its stdout claim and every saved link "
+            "carries a consumable filter_label."
+        ),
+        script_tools_improvements=[g.step_0_fix for g in gaps],
+    )
+
+
 def _deterministic_discovery_gaps(
     found: dict[str, int],
     saved: dict[str, int],
@@ -478,22 +553,4 @@ def _label_gap(label: str, expected: int, observed: int, reason: str) -> Missing
             f"Re-walk target '{label}': fix link extraction/pagination/persistence so every "
             f"found link lands in discovered_links (reported {expected}, persisted {observed})."
         ),
-    )
-
-
-def _merge_deterministic_gaps(report: VerificationReport, gaps: list[MissingCoverage]) -> VerificationReport:
-    """Force deterministic under-collection findings into the agent's verdict."""
-    if not gaps:
-        return report
-    improvements = list(report.script_tools_improvements)
-    for gap in gaps:
-        improvements.append(
-            f"{gap.navigation_path}: reported={gap.expected_total} persisted={gap.observed_total} — {gap.step_0_fix}"
-        )
-    return report.model_copy(
-        update={
-            "coverage_complete": False,
-            "missing_coverage": list(report.missing_coverage) + gaps,
-            "script_tools_improvements": improvements,
-        }
     )
