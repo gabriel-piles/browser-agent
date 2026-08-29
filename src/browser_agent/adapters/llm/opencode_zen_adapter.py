@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import os
 
+import httpx
 from openai import AsyncOpenAI
 from pydantic_ai.models import Model
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from browser_agent.adapters.llm.retrying_chat_model import RetryingChatModel
-from browser_agent.configuration import LLM_MAX_RETRIES, LLM_REQUEST_TIMEOUT_S, MODEL
+from browser_agent.configuration import LLM_CONNECT_TIMEOUT_S, LLM_MAX_RETRIES, LLM_READ_TIMEOUT_S, MODEL
 from browser_agent.ports.llm_port import LlmPort
 
 _BASE_URL = "https://opencode.ai/zen/v1"
@@ -28,15 +29,19 @@ class OpenCodeZenAdapter(LlmPort):
     def get_model(self) -> Model:
         # max_retries=0: the app-layer RetryingChatModel already retries
         # LLM_MAX_RETRIES times on transient errors, so leaving the transport
-        # layer at its default would compound into LLM_MAX_RETRIES**2 attempts
-        # and let a stalled socket hang for ~LLM_MAX_RETRIES*600s. The explicit
-        # timeout (LLM_REQUEST_TIMEOUT_S) fails a dead connection fast so the
-        # run recovers instead of freezing.
+        # layer on retries would compound into LLM_MAX_RETRIES**2 attempts.
+        # A short connect timeout fails an unreachable endpoint fast; a long
+        # read timeout tolerates slow non-streaming reasoning turns.
         client = AsyncOpenAI(
             base_url=_BASE_URL,
             api_key=self.api_key,
             max_retries=0,
-            timeout=LLM_REQUEST_TIMEOUT_S,
+            timeout=httpx.Timeout(
+                connect=LLM_CONNECT_TIMEOUT_S,
+                read=LLM_READ_TIMEOUT_S,
+                write=LLM_READ_TIMEOUT_S,
+                pool=LLM_CONNECT_TIMEOUT_S,
+            ),
         )
         provider = OpenAIProvider(openai_client=client)
         return RetryingChatModel(self.model_name, provider=provider)

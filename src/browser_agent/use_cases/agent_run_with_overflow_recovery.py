@@ -14,12 +14,9 @@ to emit a correct structured result.
 
 from __future__ import annotations
 
-from typing import Any
+from loguru import logger
 
-from pydantic_ai import Agent
-from pydantic_ai.exceptions import UnexpectedModelBehavior, UserError as _UserError
-from pydantic_ai.usage import UsageLimitExceeded
-
+from pydantic_ai import Agent, UnexpectedModelBehavior, UsageLimitExceeded
 from browser_agent.agent_logging import record_llm_usage
 
 _FINALIZE_DIRECTIVE = (
@@ -53,6 +50,25 @@ def _failed_usage_counts(agent_run: Any) -> tuple[int, int, int]:
         return _usage_counts(_usage_of(agent_run))
     except Exception:
         return 0, 0, 0
+
+
+def _persist_transcript(agent_name: str, prompt: str, result: Any, usage: tuple[int, int, int]) -> None:
+    try:
+        from browser_agent.llm_transcript_logger import write_llm_transcript
+
+        messages = list(result.all_messages()) if result is not None and hasattr(result, "all_messages") else []
+        write_llm_transcript(
+            agent_name,
+            prompt,
+            messages,
+            {
+                "input_tokens": usage[0],
+                "output_tokens": usage[1],
+                "requests": usage[2],
+            },
+        )
+    except Exception:
+        logger.exception("failed to persist {} transcript", agent_name)
 
 
 async def run_agent_with_recovery(
@@ -91,6 +107,7 @@ async def run_agent_with_recovery(
         result = await _retry(agent, prompt, deps, usage_limits, message_history, partial)
     fin = _usage_counts(_usage_of(result))
     record_llm_usage(agent_name, failed[0] + fin[0], failed[1] + fin[1], failed[2] + fin[2])
+    _persist_transcript(agent_name, prompt, result, (failed[0] + fin[0], failed[1] + fin[1], failed[2] + fin[2]))
     return result
 
 

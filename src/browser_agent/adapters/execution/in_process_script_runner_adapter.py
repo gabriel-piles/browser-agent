@@ -29,9 +29,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime
 import io
 import json
 import os
+import sqlite3
 import sys
 import traceback
 import types
@@ -46,6 +48,58 @@ from browser_agent.adapters.emitted_asyncio_run import with_emitted_asyncio_run
 from browser_agent.domain.script_execution_result import ScriptExecutionResult
 from browser_agent.ports.browser_session_port import BrowserSessionPort
 from browser_agent.ports.script_runner_port import ScriptRunnerPort
+
+
+def _copy_discovered_link_slice(
+    source_db: Path,
+    dest_db: Path,
+    filter_labels: list[str] | None,
+    limit: int,
+) -> int:
+    """Copy up to ``limit`` 'discovered' rows (url+filter_label) from source to a fresh dest.
+
+    Picks the first, last, and evenly-spaced labels so legacy/mid/modern formats are covered.
+    """
+    if dest_db.exists():
+        dest_db.unlink()
+    src = sqlite3.connect(source_db)
+    try:
+        query = "SELECT url, filter_label FROM discovered_links WHERE status='discovered'"
+        params: list[object] = []
+        if filter_labels:
+            placeholders = ",".join("?" for _ in filter_labels)
+            query += f" AND filter_label IN ({placeholders})"
+            params.extend(filter_labels)
+        query += " ORDER BY CAST(filter_label AS INTEGER), url"
+        rows = src.execute(query, params).fetchall()
+    finally:
+        src.close()
+    n = len(rows)
+    if n == 0 or limit <= 0:
+        return 0
+    k = min(limit, n)
+    if k == 1:
+        indices = {0}
+    else:
+        indices = {round(i * (n - 1) / (k - 1)) for i in range(k)}
+    chosen = [rows[i] for i in sorted(indices)]
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    dst = sqlite3.connect(dest_db)
+    try:
+        dst.execute(
+            "CREATE TABLE IF NOT EXISTS discovered_links "
+            "(url TEXT PRIMARY KEY, filter_label TEXT NOT NULL DEFAULT '', "
+            "status TEXT NOT NULL DEFAULT 'discovered', discovered_at TEXT NOT NULL)"
+        )
+        dst.execute("CREATE INDEX IF NOT EXISTS idx_discovered_links_status_label ON discovered_links(status, filter_label)")
+        dst.executemany(
+            "INSERT INTO discovered_links (url, filter_label, status, discovered_at) VALUES (?, ?, 'discovered', ?)",
+            [(url, label, now) for url, label in chosen],
+        )
+        dst.commit()
+    finally:
+        dst.close()
+    return len(chosen)
 
 
 class InProcessScriptRunnerAdapter(ScriptRunnerPort):
@@ -79,11 +133,29 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
         metadata_db_path: Path | None = None,
         task_slug: str = "validation",
         filter_labels: list[str] | None = None,
+        validation_source_db: Path | None = None,
+        validation_slice_limit: int = 8,
     ) -> None:
         self._session = browser_session
         self._metadata_db_path = Path(metadata_db_path) if metadata_db_path else None
         self._task_slug = task_slug
         self._filter_labels = filter_labels
+        self._validation_source_db = Path(validation_source_db) if validation_source_db else None
+        self._validation_slice_limit = int(validation_slice_limit)
+
+    def _refresh_scratch(self) -> None:
+        if self._validation_source_db is None or self._metadata_db_path is None:
+            return
+        if self._validation_source_db.resolve() == self._metadata_db_path.resolve():
+            return
+        if not self._validation_source_db.exists():
+            return
+        _copy_discovered_link_slice(
+            self._validation_source_db,
+            self._metadata_db_path,
+            self._filter_labels,
+            self._validation_slice_limit,
+        )
 
     async def run(self, python_code: str, timeout: float = _DEFAULT_TIMEOUT) -> ScriptExecutionResult:
         transformed = self._augment(python_code)
@@ -92,6 +164,7 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
         buffer = io.StringIO()
         try:
             async with self._validation_lock:
+                self._refresh_scratch()
                 try:
                     return await asyncio.wait_for(
                         self._exec_main(transformed, namespace, buffer),

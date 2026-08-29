@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 from pathlib import Path
 from loguru import logger
 
@@ -106,7 +107,7 @@ class SubtaskPipeline:
                 )
                 return record
             _phase(subtask.subtask_id, "building")
-            bsession, builder = await self._build_session(profile_dir, subtask.subtask_id)
+            bsession, builder = await self._build_session(profile_dir, subtask)
             attempt_context = self._prior_script_context(record, context) if (attempt > 0 or record.script_path) else context
             try:
                 result, last_feedback = await self._attempt(
@@ -122,6 +123,7 @@ class SubtaskPipeline:
             finally:
                 await bsession.close()
                 delete_profile_dir(profile_dir)
+                shutil.rmtree(self._run_path / "validation" / subtask.subtask_id, ignore_errors=True)
             self._state_store.save(state)
             if result == "succeeded":
                 record.status = "succeeded"
@@ -171,7 +173,7 @@ class SubtaskPipeline:
             return record
         script = self._reuse_script_from_decision(subtask, decision)
         profile_dir = self._run_path / "profile_builder"
-        bsession, builder = await self._build_session(profile_dir, subtask.subtask_id)
+        bsession, builder = await self._build_session(profile_dir, subtask)
         try:
             _phase(subtask.subtask_id, "lint repair")
             script, findings = await self._lint_repair_loop(subtask, script, builder, _MAX_LINT_REPAIRS_PER_ATTEMPT, state)
@@ -188,6 +190,7 @@ class SubtaskPipeline:
         finally:
             await bsession.close()
             delete_profile_dir(profile_dir)
+            shutil.rmtree(self._run_path / "validation" / subtask.subtask_id, ignore_errors=True)
 
     def _read_source_script(self, source_script_path: Path) -> str | None:
         """Read the sibling script source (bounded), or None when unreadable."""
@@ -539,7 +542,7 @@ class SubtaskPipeline:
             return 0
         return int(count)
 
-    async def _build_session(self, profile_dir, task_slug):
+    async def _build_session(self, profile_dir, subtask) -> tuple:
         from browser_agent.adapters.browser.zendriver_browser_session import ZendriverBrowserSession
         from browser_agent.adapters.execution.in_process_script_runner_adapter import (
             InProcessScriptRunnerAdapter,
@@ -557,15 +560,18 @@ class SubtaskPipeline:
             user_data_dir=profile_dir,
         )
         await session.start()
+        scratch = self._run_path / "validation" / subtask.subtask_id
         deps = AgentDeps(
             llm=build_llm(),
             browser_session=session,
             script_runner=InProcessScriptRunnerAdapter(
                 browser_session=session,
-                metadata_db_path=self._run_path / "metadata.db",
-                task_slug=task_slug,
+                metadata_db_path=scratch / "metadata.db",
+                task_slug=f"validation_{subtask.subtask_id}",
+                filter_labels=subtask.filter_labels,
+                validation_source_db=self._run_path / "metadata.db",
             ),
-            pdf_downloader=CurlCffiPdfDownloaderAdapter(self._run_path / "downloads"),
+            pdf_downloader=CurlCffiPdfDownloaderAdapter(scratch / "downloads"),
         )
         return session, ScriptBuilderUseCase(deps)
 

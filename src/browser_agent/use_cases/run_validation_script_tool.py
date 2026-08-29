@@ -40,6 +40,10 @@ _TIMEOUT_NOTICE_RE = re.compile(r"\[TIMEOUT[^\]]*\]")
 # Consecutive pure-timeout streak (module state, like the LLM ledger). First
 # pure timeout stays uncharged; each subsequent one is charged as FAILED.
 _CONSECUTIVE_PURE_TIMEOUTS = 0
+PROCESSING_QUEUE_VALIDATION_TIMEOUT_S = 600.0
+# Ranged/queue processing scripts loop over many sessions via load_discovered_links;
+# match the discovery budget so the validation loop is not wall-clock-truncated.
+_PROCESSING_QUEUE_MARKERS = ("load_discovered_links(", "mark_link_processed(")
 
 # Environmental warning-noise lines that must never become the operator-log
 # tail. Python emits these around LLM-authored code (only visible when
@@ -255,7 +259,12 @@ async def run_validation_script(ctx: RunContext[AgentDeps], python_code: str) ->
     deps.validation_attempts += 1
     run_number = deps.validation_attempts
     runner: ScriptRunnerPort = deps.script_runner
-    timeout = DISCOVERY_VALIDATION_TIMEOUT_S if any(m in python_code for m in _DISCOVERY_MARKERS) else VALIDATION_TIMEOUT_S
+    if any(m in python_code for m in _DISCOVERY_MARKERS):
+        timeout = DISCOVERY_VALIDATION_TIMEOUT_S
+    elif any(m in python_code for m in _PROCESSING_QUEUE_MARKERS):
+        timeout = PROCESSING_QUEUE_VALIDATION_TIMEOUT_S
+    else:
+        timeout = VALIDATION_TIMEOUT_S
     async with traced_tool("run_validation_script"):
         result: ScriptExecutionResult = await runner.run(python_code, timeout=timeout)
     global _CONSECUTIVE_PURE_TIMEOUTS

@@ -50,6 +50,21 @@ class OrchestratorUseCase:
         run = await agent.run(summary, usage_limits=_usage_limits())
         u = run.usage
         record_llm_usage("orchestrator", u.input_tokens or 0, u.output_tokens or 0, u.requests or 0)
+        try:
+            from browser_agent.llm_transcript_logger import write_llm_transcript
+
+            write_llm_transcript(
+                "orchestrator",
+                summary,
+                list(run.all_messages()),
+                {
+                    "input_tokens": u.input_tokens or 0,
+                    "output_tokens": u.output_tokens or 0,
+                    "requests": u.requests or 0,
+                },
+            )
+        except Exception:
+            agent_logger.exception("failed to persist orchestrator transcript")
         output = getattr(run, "output", None)
         if isinstance(output, OrchestratorDecision):
             return output

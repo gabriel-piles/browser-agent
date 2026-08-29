@@ -25,19 +25,23 @@ LLM_PROVIDER_ENV_KEYS = {
 }
 # The single model identifier every adapter sends to its provider. Adapters
 # may remap it to a provider-specific catalog name (see ollama_adapter).
-MODEL = "deepseek-v4-pro"
+MODEL = "deepseek-v4-flash"
 LLM_MAX_RETRIES = 6
-# Per-request timeout (seconds) for the LLM HTTP client. Bounds how long a
-# single chat-completion request may stay unanswered before failing. Without an
-# explicit timeout the OpenAI SDK defaults to 600s *and* the app-layer
-# RetryingChatModel retries LLM_MAX_RETRIES times, so a half-open/stalled TCP
-# socket to the provider can hang the whole run for ~LLM_MAX_RETRIES*600s with
-# no recovery. A short read timeout fails a dead connection fast; live streamed
-# responses send chunks well under this window, so legitimate generation is
-# never killed.
-LLM_REQUEST_TIMEOUT_S = 600.0
+# LLM HTTP client timeouts (seconds). Two distinct bounds, because these
+# adapters make NON-streaming chat-completion requests: for those, httpx's
+# ``read`` timeout is a total-generation deadline (the response body arrives
+# only after the model finishes), not an inter-chunk gap. Keep ``connect``
+# short so an unreachable/dead endpoint fails fast — the OpenAI SDK default is
+# 5s, and a scalar ``timeout`` would inflate it to the read value — and keep
+# ``read`` generous so a legitimately slow reasoning turn (deepseek-v4-flash,
+# 96k output budget) is not killed mid-generation. A single non-streaming turn
+# on a large subtask routinely exceeds the SDK default 600s Read timeout,
+# which then restarts the whole turn from scratch; a 600s total bound also
+# defeats the app-layer RetryingChatModel (LLM_MAX_RETRIES × 600s hang).
+LLM_CONNECT_TIMEOUT_S = 30.0
+LLM_READ_TIMEOUT_S = 1800.0
 MAX_LLM_CALLS = 70
-EXPLORER_MAX_LLM_CALLS = 30
+EXPLORER_MAX_LLM_CALLS = 70
 WRITER_MAX_LLM_CALLS = 40
 ORCHESTRATOR_MAX_LLM_CALLS = 15
 # Output token budget sent to the provider on every LLM request. Without an

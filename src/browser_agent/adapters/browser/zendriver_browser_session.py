@@ -590,25 +590,29 @@ class ZendriverBrowserSession(BrowserSessionPort):
     async def _inspect_element(self, selector: str, context_chars: int) -> str | None:
         """Get HTML around the element matching ``selector`` via CDP evaluate."""
         escaped = json.dumps(selector)
-        result = await self._tab.evaluate(
-            f"""(() => {{
-                const el = document.querySelector({escaped});
-                if (!el) return ({{error: 'not found'}});
-                const parts = [];
-                let sib = el.previousElementSibling;
-                while (sib) {{ parts.unshift(sib.outerHTML); sib = sib.previousElementSibling; }}
-                parts.push(el.outerHTML);
-                sib = el.nextElementSibling;
-                while (sib) {{ parts.push(sib.outerHTML); sib = sib.nextElementSibling; }}
-                const html = parts.join('\\n');
-                if (html.length <= {context_chars})
-                    return ({{html}});
-                const idx = html.indexOf(el.outerHTML);
-                const start = Math.max(0, idx - {context_chars});
-                const end = Math.min(html.length, idx + el.outerHTML.length + {context_chars});
-                return ({{html: html.slice(start, end)}});
-            }})()"""
-        )
+        try:
+            result = await self._tab.evaluate(
+                f"""(() => {{
+                    const el = document.querySelector({escaped});
+                    if (!el) return ({{error: 'not found'}});
+                    const parts = [];
+                    let sib = el.previousElementSibling;
+                    while (sib) {{ parts.unshift(sib.outerHTML); sib = sib.previousElementSibling; }}
+                    parts.push(el.outerHTML);
+                    sib = el.nextElementSibling;
+                    while (sib) {{ parts.push(sib.outerHTML); sib = sib.nextElementSibling; }}
+                    const html = parts.join('\\n');
+                    if (html.length <= {context_chars})
+                        return ({{html}});
+                    const idx = html.indexOf(el.outerHTML);
+                    const start = Math.max(0, idx - {context_chars});
+                    const end = Math.min(html.length, idx + el.outerHTML.length + {context_chars});
+                    return ({{html: html.slice(start, end)}});
+                }})()"""
+            )
+        except _ProtocolException:
+            logger.warning("invalid selector for inspect, treating as no match: {s}", s=selector)
+            return None
         if not isinstance(result, dict) or result.get("error"):
             return None
         return result.get("html")

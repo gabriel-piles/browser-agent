@@ -65,6 +65,13 @@ DECISION PRIORITY:
   add_subtask (or accept_gap if budget is low) and note in ``focus``
   that the fix is expected site-side; a later re-run/refresh
   re-executes the same script.
+- TIMEOUT ≠ code defect — when ``evidence.execution`` or smoke shows a
+  ``[TIMEOUT …]`` marker or ``timed_out: true`` with no error tail, the
+  wall-clock budget was exceeded (slow site / oversized subtask), not a
+  structural bug. Do NOT emit a bare ``repair`` blaming lint or selectors
+  that show no reported violation; choose ``accept_gap`` (a later refresh
+  re-runs the same script) or, if the subtask is genuinely oversized,
+  ``replan`` with a granularity note in ``focus``.
 - repair ONLY when the digest shows a structural defect: wrong page
   type, missing table, wrong selector family.
 - Replan when the subtask structure is fundamentally wrong (wrong URL,

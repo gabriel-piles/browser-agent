@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic_ai import Agent, UsageLimits
 
+from loguru import logger
+
 from browser_agent.agent_logging import record_llm_usage
 from browser_agent.configuration import AGENT_INPUT_TOKEN_LIMIT, MAX_OUTPUT_TOKENS, ORCHESTRATOR_MAX_LLM_CALLS
 from browser_agent.domain.script_reuse_decision import ScriptReuseDecision
@@ -43,6 +45,21 @@ class ScriptReuseAdapter:
         run = await agent.run(prompt, usage_limits=_usage_limits())
         u = run.usage
         record_llm_usage("script_reuse", u.input_tokens or 0, u.output_tokens or 0, u.requests or 0)
+        try:
+            from browser_agent.llm_transcript_logger import write_llm_transcript
+
+            write_llm_transcript(
+                "script_reuse",
+                prompt,
+                list(run.all_messages()),
+                {
+                    "input_tokens": u.input_tokens or 0,
+                    "output_tokens": u.output_tokens or 0,
+                    "requests": u.requests or 0,
+                },
+            )
+        except Exception:
+            logger.exception("failed to persist script_reuse transcript")
         output = getattr(run, "output", None)
         if isinstance(output, ScriptReuseDecision):
             return output

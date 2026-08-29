@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import traceback
 
 from loguru import logger
 
@@ -30,9 +31,11 @@ from browser_agent.drivers.stall_watchdog import StallWatchdog
 from browser_agent.drivers.flow.subtask_pipeline import SubtaskPipeline
 from browser_agent.domain.run_config import RunConfig
 from browser_agent.agent_logging import log_llm_total_summary, reset_llm_estimates
+from browser_agent.llm_transcript_logger import configure_llm_transcript_dir
 from browser_agent.logging_config import add_run_log_file, configure_logging
 from browser_agent.use_cases.agent_deps import AgentDeps
 from browser_agent.use_cases.concurrency_context_renderer import render_concurrency_context
+from browser_agent.use_cases.debug_bundle_writer import DebugBundleWriter
 from browser_agent.use_cases.emitted_script_linter import EmittedScriptLinter
 from browser_agent.use_cases.final_verifier_use_case import FinalVerifierUseCase
 from browser_agent.use_cases.flow_state_store import FlowStateStore
@@ -66,6 +69,9 @@ class GenerateScriptDriver:
         logs_dir.mkdir(parents=True, exist_ok=True)
         add_run_log_file(logs_dir / "run.log")
         logger.info("run log file enabled path={p}", p=logs_dir / "run.log")
+        debug_dir = run_path / "debug"
+        configure_llm_transcript_dir(debug_dir / "llm")
+        logger.info("debug bundle enabled dir={p}", p=debug_dir)
         watchdog = StallWatchdog()
         watchdog.attach(logs_dir / "stall_dump.log")
         watchdog.arm()
@@ -73,16 +79,25 @@ class GenerateScriptDriver:
         heartbeat.start()
         guard = SignalGuard()
         guard.install()
+        outcome = "finished"
+        error_text = ""
         try:
-            return await self._run_flow(run, run_path, argv)
+            code = await self._run_flow(run, run_path, argv)
+            if code != 0:
+                outcome = "failed"
+            return code
         except asyncio.CancelledError:
+            outcome = f"interrupted_by_{guard.signal_name().lower()}"
             logger.warning("run cancelled by signal={sig} — rerun the same command to resume", sig=guard.signal_name())
             return guard.exit_code()
         except Exception:
+            outcome = "crashed"
+            error_text = traceback.format_exc()
             logger.exception("flow driver failed")
             return 2
         finally:
             await self._cleanup(guard, heartbeat, watchdog, run_path)
+            _safe(_write_debug_bundle, run, run_path, outcome, error_text)
 
     async def _run_flow(self, run: RunConfig, run_path, argv: list[str]) -> int:
         # Reap Chromium windows left by a previously crashed ``step_0`` run
@@ -189,6 +204,10 @@ def _safe(fn, *args) -> None:
         fn(*args)
     except Exception:
         logger.exception("cleanup step failed: {fn}", fn=getattr(fn, "__name__", repr(fn)))
+
+
+def _write_debug_bundle(run: RunConfig, run_path, outcome: str, error_text: str) -> None:
+    DebugBundleWriter(run_path).write(run, outcome, error_text)
 
 
 def main() -> None:
