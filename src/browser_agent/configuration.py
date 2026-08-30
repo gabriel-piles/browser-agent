@@ -25,7 +25,7 @@ LLM_PROVIDER_ENV_KEYS = {
 }
 # The single model identifier every adapter sends to its provider. Adapters
 # may remap it to a provider-specific catalog name (see ollama_adapter).
-MODEL = "deepseek-v4-flash"
+MODEL = "deepseek-v4-pro"
 LLM_MAX_RETRIES = 6
 # LLM HTTP client timeouts (seconds). Two distinct bounds, because these
 # adapters make NON-streaming chat-completion requests: for those, httpx's
