@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from loguru import logger
 
-from pydantic_ai import Agent, UnexpectedModelBehavior, UsageLimitExceeded
+from pydantic_ai import Agent, UnexpectedModelBehavior, UsageLimitExceeded, UserError as _UserError
 from browser_agent.agent_logging import record_llm_usage
 
 _FINALIZE_DIRECTIVE = (

@@ -55,7 +55,7 @@ You CAN edit:
 - Configuration (configuration.py — timeouts, limits)
 
 You CANNOT edit:
-- step_0_run_prompt.py (driver orchestration)
+- step_discarted_run_prompt.py (driver orchestration)
 - domain/*.py (pydantic models — output contract is stable)
 - scripts/*.py (test harness)
 

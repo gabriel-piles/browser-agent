@@ -42,6 +42,16 @@ LLM_CONNECT_TIMEOUT_S = 30.0
 LLM_READ_TIMEOUT_S = 1800.0
 MAX_LLM_CALLS = 70
 EXPLORER_MAX_LLM_CALLS = 70
+# Explore-call budget for the step-0 discover agent. Dense family verification
+# (opening every boundary page of every chunk: first, last, and the page after
+# the last) needs far more requests than generic exploration — ~2-3 per ranged
+# family plus per-session probes. 150 covers ~62 sessions with retries; the
+# runaway-loop guard is AGENT_INPUT_TOKEN_LIMIT, not this.
+DISCOVER_MAX_LLM_CALLS = 150
+# Explore-call budget for the step-0 discover agent (same rationale as
+# DISCOVER_MAX_LLM_CALLS: opening every boundary page of every chunk,
+# ~2-4 explore calls per session across ~62 sessions, plus retries).
+DISCOVER_MAX_EXPLORE_CALLS = 250
 WRITER_MAX_LLM_CALLS = 40
 ORCHESTRATOR_MAX_LLM_CALLS = 15
 # Output token budget sent to the provider on every LLM request. Without an
