@@ -59,6 +59,7 @@ class TaskDiscoverUseCase:
             self._deps,
             usage_limits=_usage_limits(),
             agent_name="task_discover",
+            finalize_hint=_FINALIZE_HONESTY_HINT,
         )
 
     @staticmethod
@@ -81,3 +82,11 @@ def _usage_limits() -> UsageLimits:
         request_limit=DISCOVER_MAX_LLM_CALLS,
         total_tokens_limit=AGENT_INPUT_TOKEN_LIMIT,
     )
+
+
+_FINALIZE_HONESTY_HINT = (
+    "You were interrupted before you finished verifying the whole task: set "
+    "coverage_complete=false, emit splits ONLY for ranges you actually opened "
+    "and verified, and list every page/range you did NOT reach in "
+    "discoverer_notes so a later pass covers them."
+)

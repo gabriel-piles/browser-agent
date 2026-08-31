@@ -16,6 +16,15 @@ class DiscoverPlan(BaseModel):
     site_overview: str = Field(
         description="Human-readable summary of the site/document structure",
     )
+    coverage_complete: bool = Field(
+        description=(
+            "True only when every page/path of the whole task is covered by this pass's "
+            "splits or by the existing splits shown in the prompt (when a chunk covers a "
+            "path, its scope is dynamic so later additions inside it need no new chunk). "
+            "False whenever any page/range was not opened/verified — the driver runs "
+            "another incremental pass until this is True"
+        ),
+    )
     splits: list[TaskSplit] = Field(
         default_factory=list,
         description="Empty list means an incremental pass found nothing new",

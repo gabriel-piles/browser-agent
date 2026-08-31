@@ -23,10 +23,10 @@ from browser_agent.drivers.generation.task_reader import TaskReader
 from browser_agent.drivers.run_elapsed_heartbeat import RunElapsedHeartbeat
 from browser_agent.drivers.signal_guard import SignalGuard
 from browser_agent.drivers.stall_watchdog import StallWatchdog
+from browser_agent.agent_logging import log_llm_total_summary, reset_llm_estimates
 from browser_agent.domain.discover_plan import DiscoverPlan
 from browser_agent.domain.run_config import RunConfig
-from browser_agent.domain.task_split import TaskSplit
-from browser_agent.agent_logging import log_llm_total_summary, reset_llm_estimates
+from browser_agent.use_cases.discover_coverage_loop import DiscoverCoverageLoop
 from browser_agent.llm_transcript_logger import configure_llm_transcript_dir
 from browser_agent.logging_config import add_run_log_file, configure_logging
 from browser_agent.use_cases.debug_bundle_writer import DebugBundleWriter
@@ -89,7 +89,7 @@ class DiscoverTaskDriver:
             await self._cleanup(guard, heartbeat, watchdog, run_path)
             _safe(_write_debug_bundle, run, run_path, outcome, error_text)
 
-    async def _run_flow(self, run: RunConfig, run_path, argv: list[str]) -> int:
+    async def _run_flow(self, run: RunConfig, run_path, argv) -> int:
         from browser_agent.adapters.browser.clean_browser_launcher import kill_chromium_under
 
         kill_chromium_under(run_path)
@@ -102,19 +102,11 @@ class DiscoverTaskDriver:
             run=run.name,
             s=len(existing),
         )
-        plan = await self._discover(task, reader.context(), run, run_path)
-        if plan.discoverer_notes:
-            logger.warning("discoverer notes (unverified remainder): {n}", n=plan.discoverer_notes)
-        created = self._write_splits(plan, reader, run_path)
-        return self._exit_code(plan, existing, created)
-
-    def _exit_code(self, plan: DiscoverPlan, existing: list[TaskSplit], created: list[str]) -> int:
-        if not plan.splits and not existing:
-            logger.error("first discover pass produced no splits — task could not be split")
-            return 1
-        if not created:
-            logger.info("incremental discover pass found nothing new")
-        return 0
+        loop = DiscoverCoverageLoop(
+            run_pass=lambda: self._discover(task, reader.context(), run, run_path),
+            write_pass=lambda plan: self._write_splits(plan, reader, run_path),
+        )
+        return await loop.run(existing)
 
     def _read_task(self, argv: list[str], run: RunConfig) -> str:
         return self._task_reader.read(argv, run)

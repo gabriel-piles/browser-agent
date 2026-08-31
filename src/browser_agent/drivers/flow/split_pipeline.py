@@ -1,0 +1,461 @@
+"""Per-split pipeline: explore → write → lint → emit → smoke → execute → verify → decide.
+
+The deterministic engine that drives ONE split folder end-to-end. No
+LLM orchestrator: the circuit breakers are integer caps and the only
+decider after verification is the verify agent's own ``decision``
+(rewrite_script / add_extra_script / accept), applied mechanically.
+"""
+
+from __future__ import annotations
+
+import datetime
+import hashlib
+from pathlib import Path
+
+from loguru import logger
+
+from browser_agent.adapters.browser.clean_browser_launcher import delete_profile_dir, kill_chromium_under
+from browser_agent.domain.flow_script_record import FlowScriptRecord, ScriptStatus
+from browser_agent.domain.flow_subtask_spec import FlowSubtaskSpec
+from browser_agent.domain.flow_verification_report import FlowVerificationReport
+from browser_agent.domain.generated_script import GeneratedScript
+from browser_agent.domain.lint_finding import LintFinding
+from browser_agent.domain.split_run_state import SplitRunState
+from browser_agent.drivers.flow.flow_script_emitter import FlowScriptEmitter
+from browser_agent.drivers.flow.flow_script_executor import FlowScriptExecutor
+from browser_agent.drivers.flow.split_flow_paths import SplitFlowPaths
+from browser_agent.use_cases.flow_verifier_use_case import FlowVerifierUseCase
+from browser_agent.use_cases.script_repair_prompt import (
+    format_execution_repair,
+    format_lint_repair,
+    format_smoke_repair,
+    format_verification_repair,
+)
+from browser_agent.use_cases.split_state_store import SplitStateStore
+
+_MAX_BUILD_ATTEMPTS = 3
+_MAX_POST_EMIT_REPAIRS = 3
+_MAX_EMITS_PER_SCRIPT = 8
+_MAX_EXTRA_SCRIPTS = 3
+_SMOKE_TIMEOUT_S = 60.0
+
+
+def _phase(split: str, label: str) -> None:
+    """Log a pipeline phase transition so slow/hung phases are visible."""
+    logger.info("split {id}: {label}", id=split, label=label)
+
+
+class SplitPipeline:
+    """Build, verify, and decide one split's scripts."""
+
+    def __init__(
+        self,
+        paths: SplitFlowPaths,
+        state_store: SplitStateStore,
+        emitter: FlowScriptEmitter,
+        verifier: FlowVerifierUseCase,
+        run_path: Path,
+        prior_context: str,
+    ) -> None:
+        self._paths: SplitFlowPaths = paths
+        self._state_store: SplitStateStore = state_store
+        self._emitter: FlowScriptEmitter = emitter
+        self._verifier: FlowVerifierUseCase = verifier
+        self._run_path: Path = run_path
+        self._prior_context: str = prior_context
+
+    async def run(self, state: SplitRunState, split_prompt: str) -> SplitRunState:
+        """Drive one split to a terminal outcome; state is persisted each phase."""
+        if state.finished:
+            _phase(state.split_name, "already finished — skipping")
+            return state
+        spec = await self._explore(state, split_prompt)
+        if spec is None or not split_prompt:
+            state.status = "exploration_failed"
+            state.finished = True
+            state.finished_at = _now()
+            self._state_store.save(state)
+            return state
+        record = await self._build_and_verify_primary(state, spec)
+        state = await self._apply_verify_decisions(state, spec, record)
+        state.finished = True
+        state.finished_at = _now()
+        self._state_store.save(state)
+        _phase(state.split_name, f"finished status={state.status}")
+        return state
+
+    async def _explore(self, state: SplitRunState, split_prompt: str) -> FlowSubtaskSpec | None:
+        """Run (or reuse) the explorer and persist the spec into the state."""
+        if state.spec:
+            _phase(state.split_name, "spec exists — skipping exploration")
+            return FlowSubtaskSpec.model_validate(state.spec)
+        _phase(state.split_name, "exploring")
+        spec = await self._run_explorer(split_prompt)
+        if spec is None:
+            return None
+        state.spec = spec.model_dump(mode="json")
+        self._state_store.save(state)
+        return spec
+
+    async def _run_explorer(self, split_prompt: str) -> FlowSubtaskSpec | None:
+        """One explorer agent pass over the split's pages."""
+        from browser_agent.adapters.browser.zendriver_browser_session import ZendriverBrowserSession
+        from browser_agent.adapters.execution.curl_cffi_pdf_downloader_adapter import (
+            CurlCffiPdfDownloaderAdapter,
+        )
+        from browser_agent.adapters.execution.in_process_script_runner_adapter import (
+            InProcessScriptRunnerAdapter,
+        )
+        from browser_agent.adapters.llm.llm_adapter_factory import build_llm
+        from browser_agent.configuration import ZENDRIVER_HEADLESS
+        from browser_agent.use_cases.agent_deps import AgentDeps
+        from browser_agent.use_cases.flow_explorer_use_case import FlowExplorerUseCase
+
+        session = ZendriverBrowserSession(
+            headless=ZENDRIVER_HEADLESS,
+            user_data_dir=self._paths.profile_dir("explorer"),
+        )
+        deps = AgentDeps(
+            llm=build_llm(),
+            browser_session=session,
+            script_runner=InProcessScriptRunnerAdapter(
+                browser_session=session,
+                metadata_db_path=self._run_path / "metadata.db",
+                task_slug="exploration",
+            ),
+            pdf_downloader=CurlCffiPdfDownloaderAdapter(self._run_path / "downloads"),
+        )
+        use_case = FlowExplorerUseCase(deps)
+        try:
+            return await use_case.execute(split_prompt, context=self._prior_context)
+        except Exception:
+            logger.exception("split explorer failed")
+            return None
+        finally:
+            await use_case.close()
+            delete_profile_dir(self._paths.profile_dir("explorer"))
+
+    async def _build_and_verify_primary(self, state: SplitRunState, spec: FlowSubtaskSpec) -> FlowScriptRecord:
+        """Build, lint, smoke, execute, and verify the primary script."""
+        record = self._record_for(state, 0)
+        record.status = "building"
+        feedback = ""
+        for attempt in range(_MAX_BUILD_ATTEMPTS):
+            state.attempts = attempt + 1
+            if record.emits >= _MAX_EMITS_PER_SCRIPT:
+                record.status = "emit_budget_exhausted"
+                logger.error(
+                    "split {id}: emit budget ({n}) exhausted",
+                    id=state.split_name,
+                    n=_MAX_EMITS_PER_SCRIPT,
+                )
+                self._state_store.save(state)
+                return record
+            _phase(state.split_name, "building")
+            outcome, feedback = await self._attempt(state, spec, record, attempt, feedback=feedback)
+            self._state_store.save(state)
+            if outcome in ("succeeded", "repair_noop"):
+                return record
+            if outcome == "verification_failed" and attempt + 1 >= _MAX_BUILD_ATTEMPTS:
+                break
+        if record.status == "building":
+            record.status = "execution_failed"
+        self._state_store.save(state)
+        return record
+
+    async def _attempt(
+        self,
+        state: SplitRunState,
+        spec: FlowSubtaskSpec,
+        record: FlowScriptRecord,
+        attempt: int,
+        feedback: str,
+    ) -> tuple[str, str]:
+        """One build attempt: write → lint → emit → smoke → execute → verify.
+
+        Returns ``(outcome, last_feedback)``. ``outcome`` is the record's
+        terminal status for this attempt (or ``building`` when the loop
+        should continue).
+        """
+        _phase(state.split_name, "writing")
+        context = self._writer_context(attempt, feedback, record)
+        script = await self._write(spec, context)
+        _phase(state.split_name, "lint repair")
+        script, findings = await self._lint_repair(spec, script)
+        if findings:
+            record.status = "lint_failed"
+            return "lint_failed", format_lint_repair(findings)
+        _phase(state.split_name, "emitting")
+        emit_result = self._emit(state, spec, script, record)
+        if emit_result is None:
+            return record.status, ""
+        _phase(state.split_name, "post-emit chain")
+        return await self._post_emit(state, spec, record, emit_result)
+
+    def _writer_context(self, attempt: int, feedback: str, record: FlowScriptRecord) -> str:
+        """Seed the writer with the prior emitted script and repair feedback."""
+        parts: list[str] = [self._prior_context] if self._prior_context else []
+        path = self._existing_script_path(record)
+        if path is not None and attempt > 0:
+            parts.append(
+                "## Prior emitted script (from the previous attempt)\n"
+                "Edit this incrementally instead of re-exploring the site. Keep its verified "
+                "selectors and page mechanics; change only what the repair finding describes.\n"
+                f"Path: {path}\n```python\n{path.read_text(encoding='utf-8', errors='replace')}\n```"
+            )
+        if feedback:
+            parts.append(feedback)
+        return "\n\n".join(parts)
+
+    async def _write(self, spec: FlowSubtaskSpec, context: str) -> GeneratedScript:
+        """One writer agent turn (fresh session per turn)."""
+        from browser_agent.adapters.browser.zendriver_browser_session import ZendriverBrowserSession
+        from browser_agent.adapters.execution.curl_cffi_pdf_downloader_adapter import (
+            CurlCffiPdfDownloaderAdapter,
+        )
+        from browser_agent.adapters.execution.in_process_script_runner_adapter import (
+            InProcessScriptRunnerAdapter,
+        )
+        from browser_agent.adapters.llm.llm_adapter_factory import build_llm
+        from browser_agent.configuration import ZENDRIVER_HEADLESS
+        from browser_agent.use_cases.agent_deps import AgentDeps
+        from browser_agent.use_cases.flow_writer_use_case import FlowWriterUseCase
+
+        session = ZendriverBrowserSession(
+            headless=ZENDRIVER_HEADLESS,
+            user_data_dir=self._paths.profile_dir("writer"),
+        )
+        deps = AgentDeps(
+            llm=build_llm(),
+            browser_session=session,
+            script_runner=InProcessScriptRunnerAdapter(
+                browser_session=session,
+                metadata_db_path=self._paths.scratch_dir() / "validation_metadata.db",
+                task_slug=f"validation_{spec.subtask_id}",
+            ),
+            pdf_downloader=CurlCffiPdfDownloaderAdapter(self._paths.scratch_dir() / "validation_downloads"),
+        )
+        writer = FlowWriterUseCase(deps)
+        try:
+            return await writer.execute_spec(spec, context)
+        finally:
+            await session.close()
+            delete_profile_dir(self._paths.profile_dir("writer"))
+
+    async def _lint_repair(
+        self, spec: FlowSubtaskSpec, script: GeneratedScript
+    ) -> tuple[GeneratedScript, list[LintFinding]]:
+        """One lint-repair writer turn; returns (script, remaining_error_findings)."""
+        findings = self._emitter.lint_findings(script.python_code)
+        if not findings:
+            return script, []
+        repaired = await self._write(spec, format_lint_repair(findings))
+        remaining = self._emitter.lint_findings(repaired.python_code)
+        return repaired, remaining
+
+    def _emit(self, state: SplitRunState, spec: FlowSubtaskSpec, script: GeneratedScript, record: FlowScriptRecord):
+        """Emit one script; detect repair stagnation via md5; None when budget is out."""
+        if record.emits >= _MAX_EMITS_PER_SCRIPT:
+            record.status = "emit_budget_exhausted"
+            self._state_store.save(state)
+            return None
+        record.emits += 1
+        emit_result = self._emitter.emit(spec.subtask_id, script, record.script_index)
+        record.script_path = str(emit_result.script_path)
+        code = emit_result.script_path.read_text(encoding="utf-8")
+        new_hash = hashlib.md5(code.encode()).hexdigest()
+        if record.script_hash and record.script_hash == new_hash:
+            record.status = "repair_noop"
+            self._state_store.save(state)
+            return emit_result
+        record.script_hash = new_hash
+        self._state_store.save(state)
+        return emit_result
+
+    async def _post_emit(
+        self, state: SplitRunState, spec: FlowSubtaskSpec, record: FlowScriptRecord, emit_result
+    ) -> tuple[str, str]:
+        """Smoke → execute → verify with bounded repairs; returns (outcome, feedback)."""
+        last_status: ScriptStatus = "verification_failed"
+        for _ in range(_MAX_POST_EMIT_REPAIRS + 1):
+            _phase(state.split_name, "smoke")
+            smoke_failed, smoke_output = await self._smoke(emit_result.script_path)
+            if smoke_failed:
+                record.status = "smoke_failed"
+                last_status, last_feedback = "smoke_failed", format_smoke_repair(smoke_output)
+                emit_result = await self._repair_and_reemit(state, spec, record, last_feedback, last_status)
+                if emit_result is None:
+                    return last_status, last_feedback
+                continue
+            _phase(state.split_name, "executing")
+            exec_report = await self._execute(spec, record, emit_result.script_path)
+            if exec_report.exit_code != 0:
+                record.status = "execution_failed"
+                last_status, last_feedback = "execution_failed", format_execution_repair(exec_report.output_tail)
+                emit_result = await self._repair_and_reemit(state, spec, record, last_feedback, last_status)
+                if emit_result is None:
+                    return last_status, last_feedback
+                continue
+            _phase(state.split_name, "verifying")
+            report = await self._verify(state, spec)
+            if self._verifier.passed(report):
+                record.status = "succeeded"
+                return "succeeded", ""
+            record.status = "verification_failed"
+            last_status = "verification_failed"
+            last_feedback = format_verification_repair(report)
+            emit_result = await self._repair_and_reemit(state, spec, record, last_feedback, last_status)
+            if emit_result is None:
+                return last_status, last_feedback
+        return last_status, last_feedback
+
+    async def _repair_and_reemit(
+        self,
+        state: SplitRunState,
+        spec: FlowSubtaskSpec,
+        record: FlowScriptRecord,
+        feedback: str,
+        failed_status: ScriptStatus,
+    ):
+        """One repair turn + re-emit; None when the repair or budget fails."""
+        try:
+            script = await self._write(spec, feedback)
+        except Exception:
+            logger.exception("writer repair turn failed")
+            record.status = failed_status
+            self._state_store.save(state)
+            return None
+        emit_result = self._emit(state, spec, script, record)
+        if emit_result is None:
+            return None
+        if record.status == "repair_noop":
+            record.status = failed_status
+            self._state_store.save(state)
+            return None
+        return emit_result
+
+    async def _smoke(self, script_path: Path) -> tuple[bool, str]:
+        """Run the smoke subprocess; returns (failed, output)."""
+        from browser_agent.drivers.generation.script_smoke_tester import log_smoke_test_result, smoke_test_script
+
+        result = await smoke_test_script(script_path, timeout=_SMOKE_TIMEOUT_S)
+        log_smoke_test_result(result, script_path)
+        return (not result.success), result.output
+
+    async def _execute(self, spec: FlowSubtaskSpec, record: FlowScriptRecord, script_path: Path):
+        """Run the emitted script as a subprocess against the shared stores."""
+        executor = FlowScriptExecutor(self._run_path, self._paths.execution_log_path(record.script_index))
+        try:
+            return await executor.run(spec.subtask_id, script_path)
+        finally:
+            kill_chromium_under(self._run_path)
+
+    async def _verify(self, state: SplitRunState, spec: FlowSubtaskSpec) -> FlowVerificationReport:
+        """Verify the split's downloads so far (all its scripts together)."""
+        sources = [
+            Path(r.script_path).read_text(encoding="utf-8", errors="replace")
+            for r in state.scripts
+            if r.script_path and Path(r.script_path).is_file()
+        ]
+        return await self._verifier.verify(spec, sources)
+
+    async def _apply_verify_decisions(
+        self,
+        state: SplitRunState,
+        spec: FlowSubtaskSpec,
+        record: FlowScriptRecord,
+    ) -> SplitRunState:
+        """Act on the last verification's decision: rewrite, extra script, or accept."""
+        if record.status == "succeeded":
+            state.status = "succeeded"
+            return state
+        report = await self._read_last_report()
+        if report is None:
+            state.status = (
+                "accepted_gap" if record.status in ("repair_noop", "emit_budget_exhausted") else "verification_failed"
+            )
+            return state
+        decision = report.decision
+        logger.info(
+            "split {id}: verify decision action={action} focus={focus}",
+            id=state.split_name,
+            action=decision.action,
+            focus=decision.focus[:200],
+        )
+        if decision.action == "rewrite_script" and record.status not in ("repair_noop", "emit_budget_exhausted"):
+            _phase(state.split_name, "verify-directed rewrite")
+            outcome, _feedback = await self._attempt(state, spec, record, attempt=state.attempts, feedback=decision.focus)
+            state.status = "succeeded" if outcome == "succeeded" else "accepted_gap"
+            return state
+        if decision.action == "add_extra_script":
+            return await self._build_extra_script(state, spec, decision.focus)
+        state.status = "accepted_gap"
+        return state
+
+    async def _build_extra_script(self, state: SplitRunState, spec: FlowSubtaskSpec, focus: str) -> SplitRunState:
+        """Build one verify-requested extra script for uncovered paths."""
+        extra_index = len(state.scripts)
+        if extra_index > _MAX_EXTRA_SCRIPTS:
+            logger.warning(
+                "split {id}: extra-script cap ({n}) reached — accepting",
+                id=state.split_name,
+                n=_MAX_EXTRA_SCRIPTS,
+            )
+            state.status = "accepted_gap"
+            return state
+        _phase(state.split_name, f"building extra script {extra_index}")
+        extra_record = FlowScriptRecord(script_index=extra_index, status="building")
+        state.scripts.append(extra_record)
+        self._state_store.save(state)
+        extra_spec = self._extra_spec(spec, focus)
+        outcome, _feedback = await self._attempt(state, extra_spec, extra_record, attempt=0, feedback=focus)
+        state.status = "succeeded" if outcome == "succeeded" else "accepted_gap"
+        return state
+
+    def _extra_spec(self, spec: FlowSubtaskSpec, focus: str) -> FlowSubtaskSpec:
+        """Derive the extra script's spec from the primary spec + verify focus."""
+        return FlowSubtaskSpec(
+            subtask_id=f"{spec.subtask_id}_extra",
+            description=(
+                "EXTRA SCRIPT requested by the verify agent to cover paths the primary "
+                f"script did not cover.\n\nPRIMARY SCRIPT'S SCOPE (do not duplicate):\n{spec.description}\n\n"
+                f"VERIFIER-DIRECTED SCOPE FOR THIS SCRIPT:\n{focus}"
+            ),
+            verified_selectors=spec.verified_selectors,
+            field_specs=spec.field_specs,
+            row_selector=spec.row_selector,
+            sample_document_urls=[],
+            pdf_download_strategy=spec.pdf_download_strategy,
+            expected_document_count=0,
+        )
+
+    async def _read_last_report(self) -> FlowVerificationReport | None:
+        """Load the last persisted flow verification report for this split."""
+        path = self._paths.verification_dir() / "verification_report.json"
+        if not path.is_file():
+            return None
+        try:
+            return FlowVerificationReport.model_validate_json(path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.exception("failed to load last verification report")
+            return None
+
+    def _existing_script_path(self, record: FlowScriptRecord) -> Path | None:
+        """Resolve the record's stored script path when the file exists."""
+        if not record.script_path:
+            return None
+        path = Path(record.script_path)
+        return path if path.is_file() else None
+
+    def _record_for(self, state: SplitRunState, script_index: int) -> FlowScriptRecord:
+        """Find or create the record for one script index."""
+        for record in state.scripts:
+            if record.script_index == script_index:
+                return record
+        record = FlowScriptRecord(script_index=script_index)
+        state.scripts.append(record)
+        return record
+
+
+def _now() -> str:
+    return datetime.datetime.now(datetime.UTC).isoformat()

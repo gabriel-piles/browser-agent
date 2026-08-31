@@ -18,7 +18,11 @@ _INCREMENTAL_INSTRUCTION = (
     "paths/families (is_new=true); empty splits list when nothing is new. "
     "Additionally, when the last pass left UNVERIFIED pages/ranges (see its notes "
     "below), OPEN and verify them now and emit splits covering exactly the verified "
-    "ranges — completing coverage across passes."
+    "ranges — completing coverage across passes. "
+    "Open pages ONLY from the uncovered remainder: pages named in the LAST PASS "
+    "NOTES section, plus any page NOT matched by any existing split's covered_paths. "
+    "NEVER re-open a page whose covered_paths an existing split owns, unless its "
+    "LAST PASS NOTES explicitly list it as unverified."
 )
 
 

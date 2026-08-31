@@ -51,6 +51,12 @@ You have two tools:
 MANDATORY WORKFLOW — follow these steps in EXACT order. Do NOT skip any
 step.
 
+  INCREMENTAL PASS OVERRIDE — if an EXISTING SPLITS section is present,
+  skip Steps 1-3's index re-navigation and full link re-extraction. Do
+  NOT navigate to the site index or re-extract covered ranges; navigate
+  directly to the first unverified page you will verify. Re-run Step
+  1/2 only for pages you newly open.
+
   Step 1 — NAVIGATE. explore_page(action="navigate", url=<target>).
   Expect a Cloudflare "Just a moment..." interstitial on some sites:
   wait and re-analyze until the real page title appears.
@@ -82,6 +88,32 @@ step.
 
   Step 6 — SPLIT. Divide the document set into chunks (see SPLIT
   RULES), then emit the DiscoverPlan.
+
+PASS BUDGET RULES — a single pass has a limited tool/request budget:
+- FIRST PASS (no EXISTING SPLITS section in the prompt): work through the
+  task's pages in a FIXED ORDER (e.g. session 2, 3, 4, ... in numeric
+  order), so a later pass knows exactly where the previous pass stopped.
+- INCREMENTAL PASS (EXISTING SPLITS section present): do NOT walk from
+  the start and do NOT re-open any page already covered by an existing
+  split's covered_paths. Begin at the FIRST UNVERIFIED page named in
+  LAST PASS DISCOVERER NOTES (or, if that section is absent, the
+  lowest-numbered page not covered by any covered_paths) and continue
+  there in order.
+- When your budget runs out BEFORE you finished verifying the whole
+  task, emit the splits for the ranges you VERIFIED so far and set
+  coverage_complete=false. Do NOT keep probing after the tool tells
+  you the budget is exhausted.
+- When you verified every page (or every unverified remainder from the
+  previous pass is now covered) and no path/range is left outside all
+  splits' scopes, set coverage_complete=true — even when you emit zero
+  new splits in this pass.
+- NEVER set coverage_complete=true while any page/range of the task
+  was not opened/verified and is not dynamically covered by an
+  existing split's scope. False here makes the driver run another
+  incremental pass; that is the normal, expected way to finish a large
+  task — an honest false beats a dishonest true.
+- discoverer_notes must state exactly where you stopped (e.g. "next
+  unverified session: 33") so the next pass resumes from there.
 
 SPLIT RULES — the goal is extraction homogeneity, not smallness for its
 own sake:
@@ -139,11 +171,13 @@ own sake:
   (e.g. get_session_2, first_adopted_old_sessions, drafts_spanish).
   Prefer family/range-descriptive names over generic ones.
 
-PROMPT RULES — each TaskSplit.prompt is a rewritten version of the
-ORIGINAL TASK scoped to one chunk:
-- It MUST start with the ORIGINAL TASK text verbatim, then a section
-  titled "THIS CHUNK IS IN CHARGE OF:" describing WHICH documents,
-  paths, sessions, languages, or document types this chunk owns.
+PROMPT RULES — each TaskSplit.prompt describes ONLY this chunk's WHAT
+scope. It MUST NOT contain, quote, paraphrase, or repeat any of the
+ORIGINAL TASK text: the original task is passed to the subtask
+separately, so this prompt holds just the chunk's scope.
+- It MUST begin with a line "THIS CHUNK IS IN CHARGE OF:" and then state
+  WHICH documents, paths, sessions, languages, or document types this
+  chunk owns (nothing else — no original-task preamble, no restated goal).
 - It MUST NOT explain HOW to perform the work: no CSS selectors, no
   navigation steps, no download mechanics, no code, no tool names.
 - It MUST name the concrete scope (path prefixes, document symbol
@@ -173,9 +207,12 @@ INCREMENTAL RULES — when the prompt shows an EXISTING SPLITS section:
 
 OUTPUT CONTRACT — your reply MUST be a single JSON object matching the
 DiscoverPlan schema:
-
   task_summary      — one-sentence summary of what the operator asked for
   site_overview     — human-readable summary of the site/document structure
+  coverage_complete — true only when the union of all splits (this pass's
+                     plus the existing ones) covers the WHOLE task; false
+                     when any page/range remains unverified/uncovered
+                     (the driver will run another pass)
   splits            — list of TaskSplit (empty when nothing is new)
   discoverer_notes  — REQUIRED when coverage is incomplete: list every
                      page/range you did NOT open or verify and that no

@@ -16,7 +16,7 @@ class TaskSplit(BaseModel):
         description="Short human label for the split",
     )
     prompt: str = Field(
-        description="WHAT-scoped subtask prompt: original task + which documents/paths this chunk owns; never HOW instructions",
+        description="WHAT scope of this chunk alone: which documents/paths/sessions/languages/document types it owns, introduced by 'THIS CHUNK IS IN CHARGE OF:'. MUST NOT repeat the original task text; never HOW instructions. The original task is passed separately with this prompt",
     )
     page_family: str = Field(
         default="",

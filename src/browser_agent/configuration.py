@@ -25,7 +25,7 @@ LLM_PROVIDER_ENV_KEYS = {
 }
 # The single model identifier every adapter sends to its provider. Adapters
 # may remap it to a provider-specific catalog name (see ollama_adapter).
-MODEL = "deepseek-v4-pro"
+MODEL = "deepseek-v4-flash"
 LLM_MAX_RETRIES = 6
 # LLM HTTP client timeouts (seconds). Two distinct bounds, because these
 # adapters make NON-streaming chat-completion requests: for those, httpx's
@@ -52,6 +52,11 @@ DISCOVER_MAX_LLM_CALLS = 150
 # DISCOVER_MAX_LLM_CALLS: opening every boundary page of every chunk,
 # ~2-4 explore calls per session across ~62 sessions, plus retries).
 DISCOVER_MAX_EXPLORE_CALLS = 250
+# Max incremental discover passes the step-0 driver runs in ONE invocation,
+# chasing coverage_complete=true. Each pass gets a fresh LLM/explore budget;
+# passes continue while the plan reports uncovered pages and NEW splits keep
+# appearing. A pass that claims nothing new AND nothing left ends the loop.
+DISCOVER_MAX_PASSES = 12
 WRITER_MAX_LLM_CALLS = 40
 ORCHESTRATOR_MAX_LLM_CALLS = 15
 # Output token budget sent to the provider on every LLM request. Without an

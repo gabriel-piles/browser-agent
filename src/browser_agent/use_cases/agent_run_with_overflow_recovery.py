@@ -14,6 +14,8 @@ to emit a correct structured result.
 
 from __future__ import annotations
 
+from typing import Any
+
 from loguru import logger
 
 from pydantic_ai import Agent, UnexpectedModelBehavior, UsageLimitExceeded, UserError as _UserError
@@ -78,6 +80,7 @@ async def run_agent_with_recovery(
     usage_limits: Any,
     message_history: list[Any] | None = None,
     agent_name: str = "agent",
+    finalize_hint: str = "",
 ) -> Any:
     """Run ``agent`` via ``iter()`` and retry on overflow with partial history.
 
@@ -86,6 +89,9 @@ async def run_agent_with_recovery(
     built so far (tool calls, exploration results). The retry truncates that
     history to the last few messages and appends a finalize directive so the
     model emits its structured result without further tool calls.
+
+    ``finalize_hint`` appends agent-specific guidance to the retry prompt
+    when the run had to be rescued from an overflow.
     """
     agent_run = None
     result = None
@@ -104,11 +110,17 @@ async def run_agent_with_recovery(
     except (UnexpectedModelBehavior, UsageLimitExceeded):
         partial: list[Any] = list(agent_run.all_messages()) if agent_run else []
         failed = _failed_usage_counts(agent_run)
-        result = await _retry(agent, prompt, deps, usage_limits, message_history, partial)
+        result = await _retry(agent, prompt, deps, usage_limits, message_history, partial, finalize_hint)
     fin = _usage_counts(_usage_of(result))
     record_llm_usage(agent_name, failed[0] + fin[0], failed[1] + fin[1], failed[2] + fin[2])
     _persist_transcript(agent_name, prompt, result, (failed[0] + fin[0], failed[1] + fin[1], failed[2] + fin[2]))
     return result
+
+
+def _finalize_prompt(prompt: str, finalize_hint: str) -> str:
+    """Append the finalize directive plus any agent-specific honesty hint."""
+    hint = f" {finalize_hint.strip()}" if finalize_hint.strip() else ""
+    return prompt + _FINALIZE_DIRECTIVE + hint
 
 
 async def _retry(
@@ -118,6 +130,7 @@ async def _retry(
     usage_limits: Any,
     message_history: list[Any] | None,
     partial_messages: list[Any],
+    finalize_hint: str = "",
 ) -> Any:
     """Retry with a finalize directive using the best available history.
 
@@ -129,13 +142,14 @@ async def _retry(
     ``ModelResponse`` that contains a ``ToolCallPart`` so the retry starts
     from a clean, balanced message history.
     """
+    final_prompt = _finalize_prompt(prompt, finalize_hint)
     source: list[Any] = partial_messages if partial_messages else (message_history or [])
     if source:
         truncated: list[Any] = _strip_unprocessed_tool_calls(list(source[-_TRUNCATED_HISTORY_WINDOW:]))
         if truncated:
             try:
                 return await agent.run(
-                    prompt + _FINALIZE_DIRECTIVE,
+                    final_prompt,
                     deps=deps,
                     usage_limits=usage_limits,
                     message_history=truncated,
@@ -143,7 +157,7 @@ async def _retry(
             except _UserError:
                 pass
     return await agent.run(
-        prompt + _FINALIZE_DIRECTIVE,
+        final_prompt,
         deps=deps,
         usage_limits=usage_limits,
     )
