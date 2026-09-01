@@ -57,7 +57,7 @@ DISCOVER_MAX_EXPLORE_CALLS = 250
 # passes continue while the plan reports uncovered pages and NEW splits keep
 # appearing. A pass that claims nothing new AND nothing left ends the loop.
 DISCOVER_MAX_PASSES = 12
-WRITER_MAX_LLM_CALLS = 40
+WRITER_MAX_LLM_CALLS = 200
 ORCHESTRATOR_MAX_LLM_CALLS = 15
 # Output token budget sent to the provider on every LLM request. Without an
 # explicit `max_tokens`, reasoning models (deepseek-v4-flash) can spend the
