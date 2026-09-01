@@ -28,7 +28,8 @@ from loguru import logger
 
 from browser_agent.adapters.runs_config_loader import RunsConfigLoader
 from browser_agent.agent_logging import log_llm_total_summary, reset_llm_estimates
-from browser_agent.drivers.flow.active_flow_parser import ActiveFlowError, parse_active_flow
+from browser_agent.drivers.flow.active_flow_parser import parse_active_flow
+from browser_agent.drivers.flow.active_flow_source import load_active_flow_raw
 from browser_agent.drivers.generation.task_reader import TaskReader
 from browser_agent.drivers.run_elapsed_heartbeat import RunElapsedHeartbeat
 from browser_agent.drivers.signal_guard import SignalGuard
@@ -101,7 +102,7 @@ class RunPromptsDriver:
 
         kill_chromium_under(run_path)
         ensure_metadata_schema(run_path / "metadata.db")
-        selection = parse_active_flow(self._active_flow_raw())
+        selection = parse_active_flow(load_active_flow_raw())
         task = self._read_task(argv, run)
         split_dirs = resolve_split_dirs(run_path, selection)
         if not split_dirs:
@@ -122,19 +123,12 @@ class RunPromptsDriver:
         )
         return await orchestrator.run(split_dirs)
 
-    def _active_flow_raw(self) -> str:
-        """Return the raw ``active_flow`` value from ``active_run.yaml``."""
-        import yaml
-
-        from browser_agent.configuration import RUNS_FILE
-
-        data = yaml.safe_load(RUNS_FILE.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise ActiveFlowError(f"active_run.yaml must be a mapping (got {data!r})")
-        return str(data.get("active_flow", ""))
-
     def _read_task(self, argv: list[str], run) -> str:
         return self._task_reader.read(argv, run)
+
+    def _active_flow_raw(self) -> str:
+        """Return the raw ``active_flow`` value from ``active_run.yaml``."""
+        return load_active_flow_raw()
 
     async def _cleanup(self, guard, heartbeat, watchdog, run_path) -> None:
         from browser_agent.adapters.browser.clean_browser_launcher import delete_profile_dir, kill_chromium_under

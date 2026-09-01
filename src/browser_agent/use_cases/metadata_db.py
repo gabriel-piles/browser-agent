@@ -60,6 +60,20 @@ def query_rows(db_path: Path, run: str | None = None) -> list[tuple[str, str, st
         conn.close()
 
 
+def query_rows_by_task_slugs(db_path: Path, task_slugs: frozenset[str]) -> list[tuple[str, str, str]]:
+    """Return ``(core_id, task_slug, data_json)`` rows whose ``task_slug`` is in the set."""
+    uri = f"file:{db_path.as_posix()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        marks = ",".join("?" for _ in task_slugs)
+        return conn.execute(
+            f"SELECT core_id, task_slug, data FROM metadata WHERE task_slug IN ({marks})",
+            tuple(task_slugs),
+        ).fetchall()
+    finally:
+        conn.close()
+
+
 def count_discovered_links(db_path: Path) -> int:
     """Count rows in ``discovered_links``; 0 when the file/table is missing."""
     uri = f"file:{db_path.as_posix()}?mode=ro"

@@ -19,11 +19,19 @@ from uwazi_api.client import UwaziClient
 class ApplyPlanBuilder:
     """Build a :class:`SyncPlan` for one mapping against the live metadata.db."""
 
-    def __init__(self, client: UwaziClient, metadata_db_path, thesauri_mappings_dir, downloads_dir=None) -> None:
+    def __init__(
+        self,
+        client: UwaziClient,
+        metadata_db_path,
+        task_slugs: frozenset[str],
+        thesauri_mappings_dir,
+        downloads_dir=None,
+    ) -> None:
         self._client = client
         self._metadata_db_path = metadata_db_path
         self._thesauri_mappings_dir = thesauri_mappings_dir
         self._downloads_dir = downloads_dir
+        self._task_slugs = task_slugs
 
     def build(self, mapping: UwaziMapping, run_config: RunConfig):
         """Return the :class:`SyncPlan` for the run's metadata.db rows."""
@@ -32,6 +40,6 @@ class ApplyPlanBuilder:
             metadata_db_path=self._metadata_db_path,
             client=self._client,
             thesauri_mappings_dir=self._thesauri_mappings_dir,
-            run=run_config.run_filter,
+            task_slugs=self._task_slugs,
             downloads_dir=self._downloads_dir,
         )

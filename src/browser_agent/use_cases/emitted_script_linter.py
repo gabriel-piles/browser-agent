@@ -146,23 +146,17 @@ _HTML_CAPTURE_MSG = (
     "(rule 14). AUTOMATICALLY save the HTML of the page richest in metadata "
     "about each downloaded document — its own page, or the earlier "
     "listing/table page carrying its metadata when that holds more of the "
-    "record's fields. Either: (a) call result = await save_page_html(tab, out_dir, "
+    "record's fields. Call result = await save_page_html(tab, out_dir, "
     "page_url) for that page and store "
     "Path(result['saved_path']).name as 'core_html_filename' (and the page URL "
     "as 'core_source_page_url') in EVERY save_record data dict that has a "
-    "core_pdf_filename — use this for per-document-page "
-    "tasks; or (b) for listing-page-walk tasks where metadata lives in table "
-    "rows and whole-page HTML is the wrong granularity, call "
-    "extract_rows(tab, row_selector, cell_specs, include_html=True) and "
-    "store its 'core_source_html' field (the row's outerHTML) in every save_record "
-    "data dict. On SPA pages pass ready_selector naming the late-bound "
+    "core_pdf_filename. On SPA pages pass ready_selector naming the late-bound "
     "metadata element. Set 'core_html_filename': '' only when no HTML was captured "
     "for that row."
 )
 _HTML_CAPTURE_REQUIRES_FILE_MSG = (
     "this task requires a saved HTML file per downloaded document (registry/"
-    "related-document flow), so a bare 'core_source_html' row snippet is NOT "
-    "sufficient (rule 14). You MUST call result = await save_page_html(tab, "
+    "related-document flow; rule 14). You MUST call result = await save_page_html(tab, "
     "out_dir, page_url) for the page richest in metadata about each PDF/doc "
     "— its own page, or the earlier listing/table page carrying its metadata "
     "when that holds more of the record's fields — and "
@@ -176,14 +170,10 @@ _HTML_CAPTURE_REQUIRES_FILE_MSG = (
 def _check_html_capture(python_code: str, require_files: bool = False) -> list[LintFinding]:
     """Rule 14: a script that downloads documents must also capture page HTML.
 
-    Accepts either ``save_page_html`` + ``core_html_filename`` key (per-document-page
-    shape) or a ``core_source_html`` key (listing-page-walk shape, populated via
-    ``extract_rows(include_html=True)``).
-
-    When ``require_files`` is True (registry/related-document flows need an
-    on-disk HTML file per document), the ``core_source_html`` row snippet alone
-    does NOT satisfy the rule — the script must call ``save_page_html`` and
-    set ``core_html_filename``.
+    The only accepted shape: call ``save_page_html`` and set the
+    ``core_html_filename`` key. When ``require_files`` is True
+    (registry/related-document flows), the same requirement applies — the
+    script must call ``save_page_html`` and set ``core_html_filename``.
     """
     download = re.search(
         r"\b(?:download_pdf_browser|download_pdf_curl_cffi|download_file_browser|download_file_curl_cffi)\s*\(",
@@ -196,9 +186,6 @@ def _check_html_capture(python_code: str, require_files: bool = False) -> list[L
     has_html_call = re.search(r"\bsave_page_html\s*\(", python_code) is not None
     has_html_key = re.search(r"['\"]core_html_filename['\"]", python_code) is not None
     if has_html_call and has_html_key:
-        return []
-    has_source_html_key = re.search(r"['\"]core_source_html['\"]", python_code) is not None
-    if not require_files and has_source_html_key:
         return []
     message = _HTML_CAPTURE_REQUIRES_FILE_MSG if require_files else _HTML_CAPTURE_MSG
     return [

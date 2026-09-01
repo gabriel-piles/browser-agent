@@ -17,7 +17,7 @@ from browser_agent.domain.sync_plan import SyncAction, SyncPlan, SyncPlanRow
 from browser_agent.domain.uwazi_mapping import UwaziMapping
 from browser_agent.domain.uwazi_template import UwaziTemplate
 from browser_agent.drivers.classification.existing_entities_fetcher import ExistingEntitiesFetcher
-from browser_agent.use_cases.metadata_db import parse_row_data, query_rows
+from browser_agent.use_cases.metadata_db import parse_row_data, query_rows, query_rows_by_task_slugs
 from browser_agent.use_cases.metadata_value_transformer import (
     MetadataValueTransformer,
     build_thesaurus_parents,
@@ -378,7 +378,15 @@ def execute(
     thesauri_mappings_dir: Path,
     run: str | None = None,
     downloads_dir: Path | None = None,
+    task_slugs: frozenset[str] | None = None,
 ) -> SyncPlan:
     thesaurus_lookup_by_property = load_thesauri_mappings_by_property(thesauri_mappings_dir)
-    rows = query_rows(metadata_db_path, run)
+    rows = _query_rows(metadata_db_path, run, task_slugs)
     return SyncPlan(mapping=mapping, rows=_plan_rows(rows, mapping, client, thesaurus_lookup_by_property, downloads_dir))
+
+
+def _query_rows(metadata_db_path: Path, run: str | None, task_slugs: frozenset[str] | None):
+    """Select metadata rows by explicit slug set, single slug, or everything."""
+    if task_slugs:
+        return query_rows_by_task_slugs(metadata_db_path, task_slugs)
+    return query_rows(metadata_db_path, run)

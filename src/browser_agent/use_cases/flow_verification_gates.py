@@ -110,8 +110,6 @@ def _missing_html_records(
         html_name = (data.get("core_html_filename") or "").strip()
         if html_name and (downloads_path / html_name).is_file():
             continue
-        if not require_html_files and (data.get("core_source_html") or "").strip():
-            continue
         missing.append(
             f"{core_id} (downloaded document has no captured HTML; set core_html_filename to a save_page_html result)"
         )

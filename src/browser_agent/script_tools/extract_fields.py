@@ -119,15 +119,14 @@ async def extract_links(tab, selector: str, base_url: str = "") -> list[str]:
             out.append(abs_url)
 
 
-async def extract_rows(tab, row_selector: str, cell_specs: list[dict], include_html: bool = False) -> list[dict]:
+async def extract_rows(tab, row_selector: str, cell_specs: list[dict]) -> list[dict]:
     """Return one dict per matching row.
 
     cell_specs: [{'field': str, 'selector': str, 'source':
     'text'|'attr'|'href'|'list_text'|'list_attr', 'attr': str,
     'transform': list[str]}]. Each cell selector is evaluated relative to
     its row element; list sources return every match within the row.
-    Returns [] on error. When ``include_html`` is True, each record also
-    carries ``core_source_html`` set to the row element's ``outerHTML``.
+    Returns [] on error.
     """
     if not row_selector or not cell_specs:
         return []
@@ -135,7 +134,6 @@ async def extract_rows(tab, row_selector: str, cell_specs: list[dict], include_h
         "(() => {"
         "const rows = Array.from(document.querySelectorAll(" + json.dumps(row_selector) + "));"
         "const specs = " + json.dumps(cell_specs) + ";"
-        "const includeHtml = " + json.dumps(bool(include_html)) + ";" + _clean_js() + "const out = [];"
         "for (const row of rows) {"
         "const rec = {};"
         "for (const s of specs) {"
@@ -152,7 +150,6 @@ async def extract_rows(tab, row_selector: str, cell_specs: list[dict], include_h
         "else if (s.source === 'href') rec[s.field] = clean(el.getAttribute('href') || '', steps);"
         "else rec[s.field] = clean(el.textContent || '', steps);"
         "}"
-        "if (includeHtml) rec['core_source_html'] = row.outerHTML;"
         "out.push(rec);"
         "}"
         "return JSON.stringify(out);"

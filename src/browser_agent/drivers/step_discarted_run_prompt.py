@@ -123,7 +123,7 @@ class GenerateScriptDriver:
         path_builder = ScriptPathBuilder(run_path)
         emitter = ScriptEmitter(path_builder)
         # Registry/related-document runs (scraper_registry_template set) require a
-        # saved HTML file per downloaded document, not just a core_source_html snippet.
+        # saved HTML file per downloaded document, not just a row snippet.
         require_html_files = bool(run.scraper_registry_template)
         linter = EmittedScriptLinter(require_html_files=require_html_files)
         executor = SubtaskExecutor()

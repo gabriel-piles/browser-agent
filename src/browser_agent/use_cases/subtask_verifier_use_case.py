@@ -62,10 +62,7 @@ def _missing_html_records(
 
     * When ``require_html_files`` is True (registry/related-document flow),
       the record MUST carry a non-empty ``html_filename`` whose file exists
-      under ``downloads/``. A bare ``source_html`` row snippet is metadata,
-      not the required HTML file, so it does not satisfy the gate.
-    * When ``require_html_files`` is False, a non-empty ``source_html`` row
-      snippet is accepted in lieu of an on-disk HTML file.
+      under ``downloads/``.
 
     Rows without a downloaded document are skipped — there is nothing to
     attach the HTML to. A missing DB table yields no findings (empty run).
@@ -88,8 +85,6 @@ def _missing_html_records(
                     continue
                 missing.append(f"{core_id} ({problem})")
                 continue
-        if not require_html_files and (data.get("core_source_html") or "").strip():
-            continue
         missing.append(
             f"{core_id} (downloaded document has no captured HTML; set core_html_filename to a save_page_html result)"
         )

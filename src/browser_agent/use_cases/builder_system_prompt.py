@@ -537,7 +537,7 @@ does inline extraction only (no ``load_discovered_links()`` call).
       async def fill_text(tab, selector: str, value: str, event: str = "change") -> bool
       async def extract_fields(tab, specs: list[dict]) -> dict[str, str | list[str]]
       async def extract_links(tab, selector: str, base_url: str = "") -> list[str]
-      async def extract_rows(tab, row_selector: str, cell_specs: list[dict], include_html: bool = False) -> list[dict]
+      async def extract_rows(tab, row_selector: str, cell_specs: list[dict]) -> list[dict]
       async def is_challenge(tab) -> bool
       async def wait_for_challenge_clear(tab, max_wait=45.0, poll_interval=5.0) -> bool
       def normalize_text(value: str) -> str
@@ -859,16 +859,6 @@ does inline extraction only (no ``load_discovered_links()`` call).
     strip detaches held handles (``DOM.resolveNode`` -32000). Hidden
     elements (``display:none``) ARE found by ``querySelector`` — you do
     NOT need to "open" a dropdown before extracting links from inside it.
-    LISTING-PAGE-WALK EXCEPTION — for listing-page-walk tasks (rule 20)
-    where the metadata lives in table rows on a listing page and
-    whole-page HTML is the wrong granularity, ``core_source_html`` per row
-    satisfies the HTML-capture intent. Call
-    ``rows = await extract_rows(tab, row_selector, CELL_SPECS, include_html=True)``
-    and store ``row["core_source_html"]`` (the row's outerHTML) in every
-    ``save_record`` data dict for variants derived from that row. The
-    linter accepts a ``core_source_html`` key in lieu of ``save_page_html`` +
-    ``core_html_filename`` for this task shape. ``save_page_html`` remains
-    MANDATORY for the pre-existing per-document-page shape (above).
 
 14b. Per-document gate + download-widget variants — when the task
     processes many document pages, gate each page's readiness on the
@@ -1113,21 +1103,17 @@ does inline extraction only (no ``load_discovered_links()`` call).
        selector is the one the Explorer verified for the document-table
        rows across ALL sections (Resolutions + Decisions + President's
        statements), scoped with ``:is()`` if multi-table (rule 4d).
-    b) Extract rows with HTML::
-         rows = await extract_rows(tab, "<row selector>", CELL_SPECS,
-                                   include_html=True)
+    b) Extract rows::
+         rows = await extract_rows(tab, "<row selector>", CELL_SPECS)
        ``CELL_SPECS`` read, per row: ``document_ref`` (adopted-text
        column link TEXT — old-era hrefs are generic with no symbol, so
        the ref is in the link text, not the href), ``title`` (title
        column text), ``date``/``item``/``action`` (action-taken column
        text), ``adopted_href`` (adopted-text column link href),
        ``draft_ref`` + ``draft_href`` (draft column link text + href).
-       ``include_html=True`` populates ``row["core_source_html"]`` = the
-       row's outerHTML — store it verbatim in EVERY ``save_record`` data
-       dict for variants derived from that row. This is the task's
-       ``core_source_html`` requirement; it replaces ``core_html_filename``/
-       ``save_page_html`` for this task shape (rule 14 listing-page-walk
-       exception; the linter agrees).
+       Satisfy the HTML requirement via ``save_page_html`` +
+       ``core_html_filename`` per rule 14 (per-page capture as step g
+       prescribes).
     c) Per row, emit up to TWO documents: the ADOPTED (from
        ``adopted_href``/``document_ref``) and the DRAFT (from
        ``draft_href``/``draft_ref``, when not "n/a"/"N/A"). For each
@@ -1146,7 +1132,7 @@ does inline extraction only (no ``load_discovered_links()`` call).
        (``"English"``/``"Spanish"``), ``file_type``
        (``"pdf"``/``"doc"``/``"docx"``), ``core_file_url`` (absolute,
        percent-encoded per rule 13), ``title``, ``date``,
-       ``core_source_html``, ``core_source_page_url`` (the listing-page URL),
+       ``core_source_page_url`` (the listing-page URL),
        plus the existing download-discipline keys
        (``core_pdf_filename``/``core_download_status``/``core_download_error``).
        ``core_id`` (PK) =
@@ -1156,7 +1142,6 @@ does inline extraction only (no ``load_discovered_links()`` call).
        without error — do NOT record a ``failed`` row for a merely-absent
        variant. DOC/DOCX may not exist for every ref; capture whatever
        formats appear (the task's "whatever format they appear" clause).
-       No failure for absent DOC/DOCX.
     f) Rate limiting: ``await tab.sleep(1.5)`` between listing-page
        navigations (the download helpers already throttle between
        downloads).
