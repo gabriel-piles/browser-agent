@@ -56,6 +56,7 @@ class StubExplorer:
         from browser_agent.domain.flow_subtask_spec import FlowSubtaskSpec
 
         assert "PRIOR SPLIT" in context, "explorer must receive the prior split context"
+        assert "## ORIGINAL TASK" in context, "explorer must receive the original task"
         return FlowSubtaskSpec(subtask_id="sub_stub", description="stub description")
 
     async def close(self) -> None:
@@ -165,6 +166,7 @@ async def main() -> None:
             verifier=cast(FlowVerifierUseCase, cast(object, verifier)),
             run_path=run_path,
             prior_context=prior,
+            original_task="Original task: get all docs.",
         )
         state = SplitRunState(split_name=split_dir.name)
         store.save(state)

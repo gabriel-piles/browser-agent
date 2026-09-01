@@ -147,17 +147,41 @@ class RunPromptsDriver:
         _safe(watchdog.close)
         _safe(kill_chromium_under, run_path)
         _safe(delete_profile_dir, run_path / "profile")
+        _safe(delete_profile_dir, run_path / "profile_builder")
         _safe(delete_profile_dir, run_path / "profile_verifier")
         for split in self._split_profiles(run_path):
             _safe(delete_profile_dir, split)
+        for scratch in self._scratch_profiles(run_path):
+            _safe(delete_profile_dir, scratch)
 
     @staticmethod
     def _split_profiles(run_path) -> list[Path]:
-        """Every per-split profile directory under ``flow/*/profile``."""
+        """Every per-split Chromium profile directory under ``flow/*/profile``."""
         flow = run_path / "flow"
         if not flow.is_dir():
             return []
         return [entry / "profile" for entry in sorted(flow.iterdir()) if entry.is_dir() and (entry / "profile").is_dir()]
+
+    @staticmethod
+    def _scratch_profiles(run_path) -> list[Path]:
+        """Per-split smoke/self-check scratch profiles under ``flow/*/*/profile``.
+
+        ``smoke_test_script`` / ``processing_self_check`` point the smoke runs
+        at scratch dirs derived from each emitted script's path, so their
+        Chromium profiles land at ``flow/<split>/smoke/profile`` and
+        ``flow/<split>/selfcheck/profile`` — outside the split's own
+        ``profile/`` tree and thus missed by :meth:`_split_profiles`.
+        """
+        flow = run_path / "flow"
+        if not flow.is_dir():
+            return []
+        return [
+            area / "profile"
+            for entry in sorted(flow.iterdir())
+            if entry.is_dir()
+            for area in (entry / "smoke", entry / "selfcheck")
+            if area.is_dir() and (area / "profile").is_dir()
+        ]
 
 
 def _safe(fn, *args) -> None:

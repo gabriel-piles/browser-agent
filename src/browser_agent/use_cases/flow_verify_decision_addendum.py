@@ -38,4 +38,9 @@ when the current script can plausibly cover the gap with a small fix;
 that is a ``rewrite_script``. When every declared path the site actually
 serves is covered and only unavailable documents remain, choose
 ``accept``.
+
+Judge coverage ONLY against THIS SPLIT's scope as stated first in the task
+prompt. The original task after it is context; sessions/areas the chunk
+description does not own are other splits' work and must NEVER be reported
+as missing coverage or trigger rewrite_script/add_extra_script.
 """.strip()

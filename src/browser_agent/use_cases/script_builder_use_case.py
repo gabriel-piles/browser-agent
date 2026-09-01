@@ -41,6 +41,7 @@ class ScriptBuilderUseCase:
         )
 
     async def execute(self, subtask: SubtaskSpec, context: str = "") -> GeneratedScript:
+        await self._deps.browser_session.start()
         prompt = self._build_prompt(subtask, context)
         agent = self._build_agent(self._deps.llm.get_model())
         run = await self._run_agent(agent, prompt)
@@ -51,6 +52,7 @@ class ScriptBuilderUseCase:
         return script
 
     async def repair(self, feedback: str) -> GeneratedScript:
+        await self._deps.browser_session.start()
         agent = self._build_agent(self._deps.llm.get_model())
         run = await self._run_agent(agent, feedback, message_history=self._last_messages)
         self._last_messages = list(run.all_messages())

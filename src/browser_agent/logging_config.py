@@ -88,6 +88,6 @@ def _maybe_add_file_handler() -> None:
     logger.add(log_file, rotation="10 MB", retention=5, format=_LOG_FORMAT, level="INFO")
 
 
-def add_run_log_file(log_path: Path) -> None:
-    """Add a run-directory file sink (synchronous, no queue thread)."""
-    logger.add(str(log_path), rotation="10 MB", retention=5, format=_LOG_FORMAT, level="INFO")
+def add_run_log_file(log_path: Path) -> int:
+    """Add a run-directory file sink (synchronous, no queue thread); return sink id."""
+    return logger.add(str(log_path), rotation="10 MB", retention=5, format=_LOG_FORMAT, level="INFO")

@@ -33,6 +33,7 @@ class FlowVerifierUseCase:
         verification_dir: Path,
         require_html_files: bool = False,
         original_task: str = "",
+        split_prompt: str = "",
     ) -> None:
         self._db_path: Path = db_path
         self._downloads_path: Path = downloads_path
@@ -40,6 +41,7 @@ class FlowVerifierUseCase:
         self._verification_dir: Path = verification_dir
         self._require_html_files: bool = require_html_files
         self._original_task: str = original_task
+        self._split_prompt: str = split_prompt
 
     async def verify(self, spec: FlowSubtaskSpec, script_sources: list[str]) -> FlowVerificationReport:
         """Run the whole verification pipeline for one flow subtask.
@@ -53,9 +55,16 @@ class FlowVerifierUseCase:
         per_row, findings = reconciler.reconcile()
         _ = ReconcilerReportWriter(self._verification_dir).write(per_row, findings)
 
-        gap_map = ScrapingGapMapBuilder(self._db_path).build()
+        gap_map = ScrapingGapMapBuilder(self._db_path).build(task_slug=spec.subtask_id)
+        scope = (self._split_prompt or spec.description).strip()
+        task_prompt = scope + (
+            "\n\n## ORIGINAL TASK (context only — coverage is judged ONLY against the scope above; "
+            "paths owned by other chunks/splits are NOT gaps here)\n" + self._original_task
+            if self._original_task
+            else ""
+        )
         request = VerificationRequest(
-            task_prompt=self._original_task or spec.description,
+            task_prompt=task_prompt or spec.description,
             discovery_script="",
             processing_script="\n\n# --- next script ---\n\n".join(script_sources),
             gap_map=gap_map,

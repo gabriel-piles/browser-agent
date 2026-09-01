@@ -7,9 +7,9 @@ lives inside ``<split>/scripts/``, but its downloads and metadata rows
 belong to the SHARED run root. A script that computes ``out_dir`` from
 ``__file__`` would write into the split folder — the flow injects
 ``BROWSER_AGENT_*`` env vars and the script must use
-``Path(__file__).resolve().parent.parent.parent / "downloads"``
-(three levels up: scripts → split → run root). The gate accepts exactly
-that shape or an env-var indirection.
+``Path(__file__).resolve().parent.parent.parent.parent / "downloads"``
+(four levels up: scripts → split folder → flow → run root). The gate accepts
+exactly that shape or an env-var indirection.
 """
 
 from __future__ import annotations
@@ -23,17 +23,19 @@ _SHARED_STORE_MSG = (
     "flow scripts live inside <split>/scripts/ but downloads and metadata.db are SHARED "
     "at the run root. The driver sets BROWSER_AGENT_SAVE_RECORD_DB_PATH and runs the script "
     "with the run root as its working directory; compute out_dir as "
-    'Path(__file__).resolve().parent.parent.parent / "downloads" '
-    "(scripts → split folder → run root), never parent.parent alone (that is the SPLIT "
-    "folder, which would create a private downloads/ inside the split)."
+    'Path(__file__).resolve().parent.parent.parent.parent / "downloads" '
+    "(scripts → split folder → flow → run root, FOUR levels). Never use two or three "
+    ".parent levels: two resolves to the split folder, three to flow/ — both create a "
+    "private downloads/ the shared verifier cannot see."
 )
 
-# ``parent.parent / "downloads"`` (two levels) — the legacy layout — is a
-# private split-local downloads dir in the flow layout. Three levels is the
-# shared run root. The gate matches Path(...) expressions containing exactly
-# two ``.parent`` references before a "downloads" literal.
-_TWO_PARENT_DOWNLOADS = re.compile(
-    r"""Path\(\s*__file__\s*\)\s*\.resolve\(\)\s*\.parent\s*\.parent\s*/\s*["']downloads["']"""
+# ``parent.parent / "downloads"`` (two levels) and
+# ``parent.parent.parent / "downloads"`` (three levels) both miss the shared
+# run root: two resolves to the split folder, three to flow/. Four levels
+# (scripts → split → flow → run root) is correct. The gate matches Path(...)
+# expressions with two or three ``.parent`` references before "downloads".
+_NON_RUN_ROOT_DOWNLOADS = re.compile(
+    r"""Path\(\s*__file__\s*\)\s*\.resolve\(\)\s*(?:\.parent\s*){2,3}/\s*["']downloads["']"""
 )
 
 
@@ -51,9 +53,9 @@ class FlowScriptLinter:
 
     @staticmethod
     def _shared_store_findings(python_code: str) -> list[LintFinding]:
-        """Flag a two-level ``__file__``-relative downloads path (split-local)."""
+        """Flag a non-run-root ``__file__``-relative downloads path (2-3 levels)."""
         out: list[LintFinding] = []
-        for match in _TWO_PARENT_DOWNLOADS.finditer(python_code):
+        for match in _NON_RUN_ROOT_DOWNLOADS.finditer(python_code):
             out.append(
                 LintFinding(
                     rule="flow-shared-store",

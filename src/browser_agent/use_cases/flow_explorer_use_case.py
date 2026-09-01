@@ -38,8 +38,9 @@ class FlowExplorerUseCase:
     async def execute(self, split_prompt: str, context: str = "") -> FlowSubtaskSpec:
         """Explore and return the spec for one split folder.
 
-        ``context`` carries the prior split's spec+script when one exists,
-        so the explorer records what must change to adapt it.
+        ``context`` carries the overall original task (``## ORIGINAL TASK``
+        block) plus the prior split's spec+script when one exists, so the
+        explorer records what must change to adapt it.
         """
         await self._deps.browser_session.start()
         agent = self._build_agent(self._deps.llm.get_model())

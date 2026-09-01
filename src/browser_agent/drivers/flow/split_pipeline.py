@@ -38,11 +38,28 @@ _MAX_POST_EMIT_REPAIRS = 3
 _MAX_EMITS_PER_SCRIPT = 8
 _MAX_EXTRA_SCRIPTS = 3
 _SMOKE_TIMEOUT_S = 60.0
+_SPEC_TRUST_BLOCK = (
+    "## SPEC TRUST — the spec's verified_selectors, row_selector, and sample URLs were verified "
+    "live by the explorer minutes ago. Do NOT re-verify them page by page; explore only mechanics "
+    "the spec leaves uncertain."
+)
+_SHARED_OUTPUT_BLOCK = (
+    "## OUTPUT PATH — split-flow scripts live in <run>/flow/<split>/scripts/. Downloads and "
+    "metadata are SHARED at the run root, FOUR levels up (scripts → split → flow → run root). "
+    'Compute out_dir as Path(__file__).resolve().parent.parent.parent.parent / "downloads" '
+    "(never two or three .parent levels — those land in the split folder or flow/, not "
+    "the shared store the verifier reads)."
+)
 
 
 def _phase(split: str, label: str) -> None:
     """Log a pipeline phase transition so slow/hung phases are visible."""
     logger.info("split {id}: {label}", id=split, label=label)
+
+
+def _original_task_block(task: str) -> str:
+    """Render the overall goal as a context block shown before a split's own prompt."""
+    return f"## ORIGINAL TASK (the overall goal this split is part of)\n{task}" if task else ""
 
 
 class SplitPipeline:
@@ -56,6 +73,7 @@ class SplitPipeline:
         verifier: FlowVerifierUseCase,
         run_path: Path,
         prior_context: str,
+        original_task: str = "",
     ) -> None:
         self._paths: SplitFlowPaths = paths
         self._state_store: SplitStateStore = state_store
@@ -63,6 +81,7 @@ class SplitPipeline:
         self._verifier: FlowVerifierUseCase = verifier
         self._run_path: Path = run_path
         self._prior_context: str = prior_context
+        self._original_task: str = original_task
 
     async def run(self, state: SplitRunState, split_prompt: str) -> SplitRunState:
         """Drive one split to a terminal outcome; state is persisted each phase."""
@@ -97,6 +116,11 @@ class SplitPipeline:
         self._state_store.save(state)
         return spec
 
+    def _builder_context(self) -> str:
+        """Context handed to the explorer: original task + prior split's spec+script."""
+        blocks = [b for b in (_original_task_block(self._original_task), self._prior_context) if b]
+        return "\n\n---\n\n".join(blocks)
+
     async def _run_explorer(self, split_prompt: str) -> FlowSubtaskSpec | None:
         """One explorer agent pass over the split's pages."""
         from browser_agent.adapters.browser.zendriver_browser_session import ZendriverBrowserSession
@@ -127,7 +151,7 @@ class SplitPipeline:
         )
         use_case = FlowExplorerUseCase(deps)
         try:
-            return await use_case.execute(split_prompt, context=self._prior_context)
+            return await use_case.execute(split_prompt, context=self._builder_context())
         except Exception:
             logger.exception("split explorer failed")
             return None
@@ -178,10 +202,10 @@ class SplitPipeline:
         should continue).
         """
         _phase(state.split_name, "writing")
-        context = self._writer_context(attempt, feedback, record)
+        context = self._writer_context(feedback, record)
         script = await self._write(spec, context)
         _phase(state.split_name, "lint repair")
-        script, findings = await self._lint_repair(spec, script)
+        script, findings = await self._lint_repair(spec, script, record)
         if findings:
             record.status = "lint_failed"
             return "lint_failed", format_lint_repair(findings)
@@ -192,17 +216,25 @@ class SplitPipeline:
         _phase(state.split_name, "post-emit chain")
         return await self._post_emit(state, spec, record, emit_result)
 
-    def _writer_context(self, attempt: int, feedback: str, record: FlowScriptRecord) -> str:
-        """Seed the writer with the prior emitted script and repair feedback."""
-        parts: list[str] = [self._prior_context] if self._prior_context else []
+    def _prior_script_block(self, record: FlowScriptRecord) -> str:
+        """Render the prior emitted script as context; "" when absent."""
         path = self._existing_script_path(record)
-        if path is not None and attempt > 0:
-            parts.append(
-                "## Prior emitted script (from the previous attempt)\n"
-                "Edit this incrementally instead of re-exploring the site. Keep its verified "
-                "selectors and page mechanics; change only what the repair finding describes.\n"
-                f"Path: {path}\n```python\n{path.read_text(encoding='utf-8', errors='replace')}\n```"
-            )
+        if path is None:
+            return ""
+        return (
+            "## Prior emitted script (from the previous attempt)\n"
+            "Edit this incrementally instead of re-exploring the site. Keep its verified "
+            "selectors and page mechanics; change only what the repair finding describes.\n"
+            f"Path: {path}\n```python\n{path.read_text(encoding='utf-8', errors='replace')}\n```"
+        )
+
+    def _writer_context(self, feedback: str, record: FlowScriptRecord) -> str:
+        """Seed the writer with the prior emitted script and repair feedback."""
+        parts = [b for b in (_original_task_block(self._original_task), self._prior_context) if b]
+        prior = self._prior_script_block(record)
+        if prior:
+            parts.append(prior)
+        parts.extend((_SPEC_TRUST_BLOCK, _SHARED_OUTPUT_BLOCK))
         if feedback:
             parts.append(feedback)
         return "\n\n".join(parts)
@@ -243,13 +275,16 @@ class SplitPipeline:
             delete_profile_dir(self._paths.profile_dir("writer"))
 
     async def _lint_repair(
-        self, spec: FlowSubtaskSpec, script: GeneratedScript
+        self, spec: FlowSubtaskSpec, script: GeneratedScript, record: FlowScriptRecord
     ) -> tuple[GeneratedScript, list[LintFinding]]:
         """One lint-repair writer turn; returns (script, remaining_error_findings)."""
         findings = self._emitter.lint_findings(script.python_code)
         if not findings:
             return script, []
-        repaired = await self._write(spec, format_lint_repair(findings))
+        context = format_lint_repair(findings)
+        prior = self._prior_script_block(record)
+        context = f"{prior}\n\n{context}" if prior else context
+        repaired = await self._write(spec, context)
         remaining = self._emitter.lint_findings(repaired.python_code)
         return repaired, remaining
 
@@ -319,7 +354,9 @@ class SplitPipeline:
     ):
         """One repair turn + re-emit; None when the repair or budget fails."""
         try:
-            script = await self._write(spec, feedback)
+            prior = self._prior_script_block(record)
+            context = feedback if not prior else f"{prior}\n\n{feedback}"
+            script = await self._write(spec, context)
         except Exception:
             logger.exception("writer repair turn failed")
             record.status = failed_status

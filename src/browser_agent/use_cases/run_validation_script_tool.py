@@ -110,6 +110,11 @@ def _ast_static_check(python_code: str) -> str:
 # errors. Each entry is (regex, fix). Checked in order; first match wins.
 _STATIC_CHECK_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (
+        re.compile(r"\bsys\.(?:stdout|stderr)\.reconfigure\s*\("),
+        "sys.stdout/sys.stderr.reconfigure(...) is NOT available inside validation runs "
+        "(stdout/stderr are captured StringIO buffers). Delete the reconfigure call; print plain text.",
+    ),
+    (
         re.compile(
             r"^\s*(?:async\s+)?def\s+(?:get_text|get_attr|trusted_click|extract_fields|extract_rows|extract_links|goto_ready)\s*\(",
             re.MULTILINE,
@@ -249,6 +254,11 @@ async def run_validation_script(ctx: RunContext[AgentDeps], python_code: str) ->
     When the limit is reached the tool refuses to run and tells you
     to emit the best script you can from the exploration you already
     did — do NOT keep retrying.
+
+    Your validation script MUST finish within its timeout (~90s for a plain
+    processing script). If the full strategy needs longer, BOUND the
+    validation run (process a 1-2 item slice: one session, one page) — only
+    the FINAL emitted GeneratedScript must be unbounded.
     """
     deps = ctx.deps
     if deps.validation_attempts >= deps.validation_limit:

@@ -118,6 +118,18 @@ class DiscoverTaskDriver:
             return await use_case.execute(task, context=context)
         finally:
             await use_case.close()
+            self._delete_profile(run_path)
+
+    def _delete_profile(self, run_path) -> None:
+        """Remove the discover profile once its browser session is closed.
+
+        Called after every discover pass so a lingering profile never
+        survives into the next pass, a crash, or a hard kill. ``_safe``
+        logging (not retrying) when Chromium still holds the directory.
+        """
+        from browser_agent.adapters.browser.clean_browser_launcher import delete_profile_dir
+
+        _safe(delete_profile_dir, run_path / "profile")
 
     def _build_deps(self, run: RunConfig, run_path):
         from browser_agent.adapters.browser.zendriver_browser_session import (

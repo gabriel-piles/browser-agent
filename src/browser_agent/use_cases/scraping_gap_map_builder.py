@@ -33,9 +33,9 @@ class ScrapingGapMapBuilder:
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
 
-    def build(self) -> str:
-        """Return a text summary of DB coverage for the agent."""
-        rows = query_rows(self._db_path)
+    def build(self, task_slug: str | None = None) -> str:
+        """Return a text summary of DB coverage for the agent, scoped by task_slug."""
+        rows = query_rows(self._db_path, task_slug)
         file_urls, field_counts, sources, year_state = self._summarise(rows)
         if not file_urls:
             return self._empty_message()
