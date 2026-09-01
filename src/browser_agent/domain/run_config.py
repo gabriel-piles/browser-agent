@@ -35,8 +35,8 @@ class RunConfig(BaseModel):
     run_filter: str | None = Field(
         default=None,
         description=(
-            "Optional task_slug to filter metadata.db rows by when building an "
-            "upload plan. When set, only rows with this task_slug are pushed. "
+            "Optional core_task_slug to filter metadata.db rows by when building an "
+            "upload plan. When set, only rows with this core_task_slug are pushed. "
             "When None, every row in the metadata db is included."
         ),
     )

@@ -38,12 +38,12 @@ def connect() -> sqlite3.Connection:
 
 
 def all_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    return conn.execute("SELECT core_id, task_slug, scraped_at, data FROM metadata ORDER BY scraped_at").fetchall()
+    return conn.execute("SELECT core_id, core_task_slug, scraped_at, data FROM metadata ORDER BY scraped_at").fetchall()
 
 
 def parsed(row: sqlite3.Row) -> dict:
     data = json.loads(row["data"]) if row["data"] else {}
-    return {"core_id": row["core_id"], "task_slug": row["task_slug"], "scraped_at": row["scraped_at"], **data}
+    return {"core_id": row["core_id"], "core_task_slug": row["core_task_slug"], "scraped_at": row["scraped_at"], **data}
 
 
 def is_url_key(key: str) -> bool:
@@ -59,7 +59,7 @@ def render_card(record: dict, width: int = 64) -> str:
     rows = [header(f"core_pdf_filename = {record.get('core_pdf_filename', '<missing>')}", width)]
     keys = [
         "core_id",
-        "task_slug",
+        "core_task_slug",
         "scraped_at",
         "core_pdf_name",
         "core_pdf_type",
@@ -128,7 +128,7 @@ def find(conn: sqlite3.Connection, query: str) -> list[dict]:
 
 def summary(conn: sqlite3.Connection) -> None:
     rows = all_rows(conn)
-    slugs = sorted({r["task_slug"] for r in rows})
+    slugs = sorted({r["core_task_slug"] for r in rows})
     with_fn = sum(1 for r in rows if parsed(r).get("core_pdf_filename"))
     print(header(f"metadata.db — {len(rows)} rows", 64))
     print(f"  task_slugs : {', '.join(slugs)}")

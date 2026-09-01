@@ -106,7 +106,7 @@ class RowIssueClassifier:
         """Return ``(action counts, [(core_id, title, issues), ...])`` for the rows."""
         counts: dict[str, int] = {"create": 0, "update": 0, "skip": 0}
         issues: list[tuple[str, str, list[str]]] = []
-        for core_id, _task_slug, raw_data in records:
+        for core_id, _core_task_slug, raw_data in records:
             record = self._parse_record(raw_data)
             record.setdefault("core_pdf_filename", resolve_pdf_filename(record, core_id, self._downloads_dir))
             action, row_issues = self.classify_one(

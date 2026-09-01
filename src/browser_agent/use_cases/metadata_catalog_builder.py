@@ -53,7 +53,7 @@ class MetadataCatalogBuilder:
         )
 
     def _query_rows(self, db_path: Path) -> list[tuple[str, str, str]]:
-        """Return ``(core_id, task_slug, data_json)`` rows from ``metadata.db``."""
+        """Return ``(core_id, core_task_slug, data_json)`` rows from ``metadata.db``."""
         return query_rows(db_path)
 
     def _aggregate(self, rows) -> tuple[dict, Counter, int]:
@@ -61,7 +61,7 @@ class MetadataCatalogBuilder:
         distinct: dict[str, list[str]] = {}
         page_count: Counter[str] = Counter()
         total_rows = 0
-        for _core_id, _task_slug, raw_data in rows:
+        for _core_id, _core_task_slug, raw_data in rows:
             record = self._parse_row(raw_data)
             if not record:
                 continue

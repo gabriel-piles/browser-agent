@@ -62,7 +62,7 @@ def _ensure_schema(conn) -> None:
     """Create the ``metadata`` table if it does not exist (fixed schema)."""
     conn.execute(
         "CREATE TABLE IF NOT EXISTS metadata "
-        "(core_id TEXT PRIMARY KEY, task_slug TEXT NOT NULL, "
+        "(core_id TEXT PRIMARY KEY, core_task_slug TEXT NOT NULL, "
         "scraped_at TEXT NOT NULL, data TEXT NOT NULL)"
     )
 
@@ -140,18 +140,27 @@ def save_record(core_id: str, data: dict) -> None:
     Omit when no HTML was captured.
     """
     core_id = _canonical_url(core_id)
+    canonical_file_url = ""
     if isinstance(data, dict):
         _pu = data.get("core_file_url")
         if isinstance(_pu, str):
-            data = {**data, "core_file_url": _canonical_url(_pu)}
+            canonical_file_url = _canonical_url(_pu)
+            data = {**data, "core_file_url": canonical_file_url}
     db_path = _resolve_db_path()
     task_slug = _resolve_task_slug()
     conn = sqlite3.connect(db_path, timeout=5.0)
     try:
         conn.execute("PRAGMA busy_timeout=5000")
         _ensure_schema(conn)
+        if canonical_file_url:
+            existing = conn.execute(
+                "SELECT core_id FROM metadata WHERE json_extract(data, '$.core_file_url') = ? LIMIT 1",
+                (canonical_file_url,),
+            ).fetchone()
+            if existing:
+                core_id = existing[0]
         conn.execute(
-            "INSERT OR REPLACE INTO metadata (core_id, task_slug, scraped_at, data) VALUES (?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO metadata (core_id, core_task_slug, scraped_at, data) VALUES (?, ?, ?, ?)",
             (core_id, task_slug, datetime.datetime.now(datetime.UTC).isoformat(), json.dumps(data, ensure_ascii=False)),
         )
         conn.commit()

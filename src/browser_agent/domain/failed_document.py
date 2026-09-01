@@ -14,7 +14,7 @@ class FailedDocument(BaseModel):
     download_error: str = ""
     subtask_id: str = Field(
         default="",
-        description="Owning subtask (metadata.task_slug column)",
+        description="Owning subtask (metadata.core_task_slug column)",
     )
     gap_reason: str = Field(
         default="",

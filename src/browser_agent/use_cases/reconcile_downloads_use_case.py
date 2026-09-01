@@ -64,11 +64,11 @@ class ReconcileDownloadsUseCase:
         try:
             if self._task_slug is not None:
                 return conn.execute(
-                    "SELECT core_id, task_slug, data FROM metadata WHERE task_slug = ?",
+                    "SELECT core_id, core_task_slug, data FROM metadata WHERE core_task_slug = ?",
                     (self._task_slug,),
                 ).fetchall()
             return conn.execute(
-                "SELECT core_id, task_slug, data FROM metadata",
+                "SELECT core_id, core_task_slug, data FROM metadata",
             ).fetchall()
         finally:
             conn.close()

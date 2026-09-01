@@ -366,7 +366,7 @@ def _plan_rows(records, mapping, client, thesaurus_lookup_by_property, downloads
             primary_entities_by_key=primary_entities_by_key,
             registry_transformer=registry_transformer,
         )
-        for core_id, _task_slug, raw_data in records
+        for core_id, _core_task_slug, raw_data in records
     )
 
 

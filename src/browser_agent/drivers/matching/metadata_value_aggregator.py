@@ -34,7 +34,7 @@ class MetadataValueAggregator:
         distinct label rather than one ``str([...])`` blob.
         """
         field_counters: dict[str, Counter] = {}
-        for _core_id, _task_slug, raw_data in self._query_rows():
+        for _core_id, _core_task_slug, raw_data in self._query_rows():
             fields = self._parse_row(raw_data)
             if not isinstance(fields, dict):
                 continue
@@ -43,10 +43,10 @@ class MetadataValueAggregator:
         return field_counters
 
     def _query_rows(self) -> list[tuple[str, str, str]]:
-        """Return ``(core_id, task_slug, data_json)`` rows from ``metadata.db``."""
+        """Return ``(core_id, core_task_slug, data_json)`` rows from ``metadata.db``."""
         conn = sqlite3.connect(str(self._db_path))
         try:
-            return conn.execute("SELECT core_id, task_slug, data FROM metadata").fetchall()
+            return conn.execute("SELECT core_id, core_task_slug, data FROM metadata").fetchall()
         finally:
             conn.close()
 

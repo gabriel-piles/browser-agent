@@ -28,7 +28,7 @@ def ensure_metadata_schema(db_path: Path) -> None:
     try:
         conn.execute(
             "CREATE TABLE IF NOT EXISTS metadata "
-            "(core_id TEXT PRIMARY KEY, task_slug TEXT NOT NULL, "
+            "(core_id TEXT PRIMARY KEY, core_task_slug TEXT NOT NULL, "
             "scraped_at TEXT NOT NULL, data TEXT NOT NULL)"
         )
         conn.execute(
@@ -42,9 +42,9 @@ def ensure_metadata_schema(db_path: Path) -> None:
 
 
 def query_rows(db_path: Path, run: str | None = None) -> list[tuple[str, str, str]]:
-    """Return ``(core_id, task_slug, data_json)`` rows from ``metadata.db``.
+    """Return ``(core_id, core_task_slug, data_json)`` rows from ``metadata.db``.
 
-    When ``run`` is not None the rows are filtered by ``task_slug``;
+    When ``run`` is not None the rows are filtered by ``core_task_slug``;
     pass None to read every row in the table.
     """
     uri = f"file:{db_path.as_posix()}?mode=ro"
@@ -52,22 +52,22 @@ def query_rows(db_path: Path, run: str | None = None) -> list[tuple[str, str, st
     try:
         if run is not None:
             return conn.execute(
-                "SELECT core_id, task_slug, data FROM metadata WHERE task_slug = ?",
+                "SELECT core_id, core_task_slug, data FROM metadata WHERE core_task_slug = ?",
                 (run,),
             ).fetchall()
-        return conn.execute("SELECT core_id, task_slug, data FROM metadata").fetchall()
+        return conn.execute("SELECT core_id, core_task_slug, data FROM metadata").fetchall()
     finally:
         conn.close()
 
 
 def query_rows_by_task_slugs(db_path: Path, task_slugs: frozenset[str]) -> list[tuple[str, str, str]]:
-    """Return ``(core_id, task_slug, data_json)`` rows whose ``task_slug`` is in the set."""
+    """Return ``(core_id, core_task_slug, data_json)`` rows whose ``core_task_slug`` is in the set."""
     uri = f"file:{db_path.as_posix()}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
     try:
         marks = ",".join("?" for _ in task_slugs)
         return conn.execute(
-            f"SELECT core_id, task_slug, data FROM metadata WHERE task_slug IN ({marks})",
+            f"SELECT core_id, core_task_slug, data FROM metadata WHERE core_task_slug IN ({marks})",
             tuple(task_slugs),
         ).fetchall()
     finally:
