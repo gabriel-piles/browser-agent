@@ -38,6 +38,7 @@ _MAX_POST_EMIT_REPAIRS = 3
 _MAX_EMITS_PER_SCRIPT = 8
 _MAX_EXTRA_SCRIPTS = 3
 _SMOKE_TIMEOUT_S = 60.0
+_AUTO_ACCEPT_MISSING_THRESHOLD = 3
 _SPEC_TRUST_BLOCK = (
     "## SPEC TRUST — the spec's verified_selectors, row_selector, and sample URLs were verified "
     "live by the explorer minutes ago. Do NOT re-verify them page by page; explore only mechanics "
@@ -49,6 +50,16 @@ _SHARED_OUTPUT_BLOCK = (
     'Compute out_dir as Path(__file__).resolve().parent.parent.parent.parent / "downloads" '
     "(never two or three .parent levels — those land in the split folder or flow/, not "
     "the shared store the verifier reads)."
+)
+_REPAIR_PRESERVE_MARKERS_BLOCK = (
+    "## REPAIR SCOPE — targeted retry, not full re-walk\n"
+    "This is a repair of an already-working script. PRESERVE the existing "
+    "session completion markers and skip-existing logic: do NOT clear markers "
+    "or force a full re-walk of sessions whose parse logic is unchanged. Only "
+    "re-walk a session when its parse logic actually changed. Prefer the "
+    "targeted retry phase (load_failed_downloads) to re-attempt the specific "
+    "missing/failed rows; already-complete records must be skipped, not "
+    "re-downloaded."
 )
 
 
@@ -240,6 +251,7 @@ class SplitPipeline:
             parts.append(prior)
         parts.extend((_SPEC_TRUST_BLOCK, _SHARED_OUTPUT_BLOCK))
         if feedback:
+            parts.append(_REPAIR_PRESERVE_MARKERS_BLOCK)
             parts.append(feedback)
         return "\n\n".join(parts)
 
@@ -336,6 +348,7 @@ class SplitPipeline:
                     return last_status, last_feedback
                 continue
             _phase(state.split_name, "verifying")
+            previous = await self._read_last_report()
             report = await self._verify(state, spec)
             if report.decision.action == "accept" and report.missing_count == 0:
                 record.status = "accepted_gap"
@@ -343,6 +356,14 @@ class SplitPipeline:
             if self._verifier.passed(report):
                 record.status = "succeeded"
                 return "succeeded", ""
+            if self._should_auto_accept(report, previous):
+                record.status = "accepted_gap"
+                logger.info(
+                    "split {id}: missing set unchanged from prior verify (<= {n}) — auto-accepting",
+                    id=state.split_name,
+                    n=_AUTO_ACCEPT_MISSING_THRESHOLD,
+                )
+                return "accepted_gap", ""
             record.status = "verification_failed"
             last_status = "verification_failed"
             last_feedback = (
@@ -487,6 +508,34 @@ class SplitPipeline:
         except Exception:
             logger.exception("failed to load last verification report")
             return None
+
+    def _should_auto_accept(
+        self,
+        report: FlowVerificationReport,
+        previous: FlowVerificationReport | None,
+    ) -> bool:
+        """Auto-accept when the missing set is unchanged and small.
+
+        Two consecutive verifies with an identical missing set (same
+        missing-coverage paths and non-present URLs) and a count at or
+        below the threshold mean the last rewrite did not move the gap —
+        another build/verify cycle would only re-attempt the same dead
+        paths. This is the deterministic guard against the verify agent
+        repeatedly choosing ``rewrite_script`` for a stable, small gap.
+        """
+        if previous is None:
+            return False
+        current = self._gap_signature(report)
+        if not current or len(current) > _AUTO_ACCEPT_MISSING_THRESHOLD:
+            return False
+        return current == self._gap_signature(previous)
+
+    @staticmethod
+    def _gap_signature(report: FlowVerificationReport) -> frozenset[str]:
+        """Stable identity of the reported gap: missing paths + non-present URLs."""
+        paths = {mc.navigation_path for mc in report.missing_coverage}
+        urls = {r.url for r in report.pdf_results if r.verdict != "present"}
+        return frozenset(paths | urls)
 
     def _existing_script_path(self, record: FlowScriptRecord) -> Path | None:
         """Resolve the record's stored script path when the file exists."""
