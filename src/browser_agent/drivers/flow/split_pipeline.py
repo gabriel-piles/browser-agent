@@ -297,9 +297,7 @@ class SplitPipeline:
         findings = self._emitter.lint_findings(script.python_code)
         if not findings:
             return script, []
-        context = format_lint_repair(findings)
-        prior = self._prior_script_block(record)
-        context = f"{prior}\n\n{context}" if prior else context
+        context = self._writer_context(format_lint_repair(findings), record)
         repaired = await self._write(spec, context)
         remaining = self._emitter.lint_findings(repaired.python_code)
         return repaired, remaining
@@ -440,9 +438,10 @@ class SplitPipeline:
             return state
         report = await self._read_last_report()
         if report is None:
-            state.status = (
-                "accepted_gap" if record.status in ("repair_noop", "emit_budget_exhausted") else "verification_failed"
-            )
+            if record.status in ("repair_noop", "emit_budget_exhausted"):
+                state.status = "accepted_gap"
+            else:
+                state.status = record.status
             return state
         decision = report.decision
         logger.info(

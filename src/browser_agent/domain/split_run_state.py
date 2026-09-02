@@ -28,7 +28,7 @@ class SplitRunState(BaseModel):
     finished: bool = Field(default=False, description="True when the split reached a terminal outcome.")
     status: str = Field(
         default="pending",
-        description="Split-level outcome: pending, building, verification_failed, succeeded, accepted_gap.",
+        description="Split-level outcome: pending, building, lint_failed, smoke_failed, execution_failed, verification_failed, succeeded, accepted_gap.",
     )
     started_at: str = Field(default="", description="ISO timestamp of the first build attempt (empty before).")
     finished_at: str = Field(default="", description="ISO timestamp of the terminal outcome (empty while running).")

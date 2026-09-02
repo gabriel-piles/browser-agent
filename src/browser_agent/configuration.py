@@ -16,7 +16,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 # to any name in ``LLM_PROVIDERS``; the matching adapter lives in
 # ``adapters/llm/`` (add new providers there and to both constants below).
 LLM_PROVIDERS = ("ollama", "opencode", "openrouter")
-LLM_PROVIDER = "opencode"
+LLM_PROVIDER = "ollama"
 # Environment variable that carries each provider's API key (set in .env).
 LLM_PROVIDER_ENV_KEYS = {
     "ollama": "OLLAMA_API_KEY",
@@ -25,7 +25,9 @@ LLM_PROVIDER_ENV_KEYS = {
 }
 # The single model identifier every adapter sends to its provider. Adapters
 # may remap it to a provider-specific catalog name (see ollama_adapter).
-MODEL = "deepseek-v4-flash"
+MODEL = ("deepseek-v4-flash:0731-cloud", "glm-5.3:cloud", "deepseek-v4-flash:0731-cloud")
+# The primary model identifier; ollama_adapter (no fallback chain) uses this.
+MODEL_PRIMARY = MODEL[0]
 LLM_MAX_RETRIES = 6
 # LLM HTTP client timeouts (seconds). Two distinct bounds, because these
 # adapters make NON-streaming chat-completion requests: for those, httpx's
