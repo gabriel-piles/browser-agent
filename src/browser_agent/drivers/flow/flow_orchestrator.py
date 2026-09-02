@@ -84,6 +84,7 @@ class FlowOrchestrator:
         try:
             configure_llm_transcript_dir(paths.debug_dir() / "llm")
             state = await pipeline.run(state, split_prompt)
+            self._prune_orphan_scripts(state, paths)
         except Exception:
             logger.exception("split {name} crashed", name=name)
             state.status = "crashed"
@@ -99,6 +100,31 @@ class FlowOrchestrator:
             return 0
         logger.warning("flow: split {name} finished with status={status}", name=name, status=state.status)
         return 1
+
+    def _prune_orphan_scripts(self, state: SplitRunState, paths: SplitFlowPaths) -> None:
+        """Delete scripts/ files not referenced by the final state.scripts records."""
+        scripts_dir = paths.scripts_dir()
+        if not scripts_dir.is_dir():
+            return
+        keep = self._kept_script_paths(state)
+        for candidate in scripts_dir.iterdir():
+            if not candidate.is_file() or candidate.suffix not in {".py", ".json"} or candidate.resolve() in keep:
+                continue
+            try:
+                candidate.unlink()
+                logger.info("flow: pruned orphan script {p}", p=candidate.name)
+            except OSError:
+                logger.exception("flow: failed to prune orphan script {p}", p=candidate.name)
+
+    def _kept_script_paths(self, state: SplitRunState) -> set[Path]:
+        """Return the referenced script paths plus their .raw.py and .json siblings."""
+        keep: set[Path] = set()
+        for record in state.scripts:
+            if not record.script_path:
+                continue
+            path = Path(record.script_path).resolve()
+            keep.update({path, path.with_suffix(".raw.py"), path.with_suffix(".json")})
+        return keep
 
     def _read_prompt(self, split_dir: Path) -> str:
         """Read the split's prompt.md (step 0 wrote it)."""

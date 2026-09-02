@@ -80,6 +80,7 @@ class ApplyDriver:
     def _build_plan(self, client, mapping, run_config):
         """Build the :class:`SyncPlan` for the run's metadata.db rows."""
         builder = ApplyPlanBuilder(
+            client=client,
             metadata_db_path=self._paths.metadata_db_path(),
             thesauri_mappings_dir=self._paths.thesauri_mappings_dir(),
             downloads_dir=self._paths.downloads_dir(),
