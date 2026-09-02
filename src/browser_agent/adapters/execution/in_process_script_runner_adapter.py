@@ -203,7 +203,14 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
                     await main()
                 return ScriptExecutionResult(exit_code=0, output=buffer.getvalue(), success=True)
             except SystemExit as exc:
-                code_exit = int(exc.code) if exc.code is not None else 0
+                if exc.code is None:
+                    code_exit = 0
+                elif isinstance(exc.code, int):
+                    code_exit = exc.code
+                else:
+                    # A non-integer SystemExit code (e.g. SystemExit("FAIL ..."))
+                    # is a script failure, not a numeric exit status.
+                    code_exit = 1
                 return ScriptExecutionResult(
                     exit_code=code_exit,
                     output=buffer.getvalue(),
