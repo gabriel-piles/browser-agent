@@ -278,7 +278,28 @@ class ReconcileDownloadsUseCase:
         findings.extend(self._url_findings(rows))
         findings.extend(self._disk_findings(disk_files, per_row))
         findings.extend(self._size_cluster_findings(per_row))
+        findings.extend(self._exhausted_findings(rows))
         return findings
+
+    @staticmethod
+    def _exhausted_findings(rows: list[tuple[str, str, str]]) -> list[CorpusFinding]:
+        """One corpus finding for rows whose retry budget is exhausted."""
+        items = [
+            core_id
+            for core_id, _slug, data_json in rows
+            if parse_row_data(data_json).get("core_download_status") == "permanently_failed"
+        ]
+        if not items:
+            return []
+        return [
+            CorpusFinding(
+                kind="retry_exhausted",
+                detail=f"{len(items)} row(s) exhausted their retry budget "
+                "(core_download_status='permanently_failed') — repeatedly failed "
+                "downloads now excluded from automatic retry.",
+                items=sorted(items)[:_MAX_FINDING_ITEMS],
+            )
+        ]
 
     def _url_findings(self, rows: list[tuple[str, str, str]]) -> list[CorpusFinding]:
         urls: list[str] = []

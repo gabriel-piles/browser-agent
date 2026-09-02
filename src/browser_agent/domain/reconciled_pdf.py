@@ -37,5 +37,5 @@ class ReconciledPdf(BaseModel):
     notes: str = Field(default="", description="Human-readable detail.")
     download_status: str = Field(
         default="",
-        description="The core_download_status stored in the row data ('downloaded', 'failed', or '' when the row has no download).",
+        description="The core_download_status stored in the row data ('downloaded', 'failed', 'unavailable', 'permanently_failed', or '' when the row has no download).",
     )

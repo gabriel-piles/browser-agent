@@ -15,7 +15,8 @@ class CorpusFinding(BaseModel):
     """A whole-corpus anomaly reported by the reconciler."""
 
     kind: str = Field(
-        description="One of: orphan_file, part_leftover, identical_size_cluster, " + "duplicate_pdf_url, empty_pdf_url.",
+        description="One of: orphan_file, part_leftover, identical_size_cluster, "
+        + "duplicate_pdf_url, empty_pdf_url, retry_exhausted.",
     )
     detail: str = Field(description="Human-readable description of the finding.")
     items: list[str] = Field(

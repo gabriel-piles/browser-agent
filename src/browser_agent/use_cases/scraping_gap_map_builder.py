@@ -25,6 +25,7 @@ _GAP_FIELDS = ("subcategory", "year", "state")
 _MAX_SOURCE_ANCHORS = 20
 _MAX_FIELD_VALUES = 15
 _NUMERIC_GAP_THRESHOLD = 3
+_MAX_EXHAUSTED_ITEMS = 15
 
 
 class ScrapingGapMapBuilder:
@@ -36,19 +37,20 @@ class ScrapingGapMapBuilder:
     def build(self, task_slug: str | None = None) -> str:
         """Return a text summary of DB coverage for the agent, scoped by task_slug."""
         rows = query_rows(self._db_path, task_slug)
-        file_urls, field_counts, sources, year_state = self._summarise(rows)
+        file_urls, field_counts, sources, year_state, exhausted = self._summarise(rows)
         if not file_urls:
             return self._empty_message()
-        return self._render(file_urls, field_counts, sources, year_state)
+        return self._render(file_urls, field_counts, sources, year_state, exhausted)
 
     def _summarise(
         self, rows: list[tuple[str, str, str]]
-    ) -> tuple[set[str], dict[str, Counter[str]], list[str], dict[tuple[str, str], int]]:
+    ) -> tuple[set[str], dict[str, Counter[str]], list[str], dict[tuple[str, str], int], list[str]]:
         """Walk rows, collecting file_urls, per-field counts, source anchors, year×state."""
         file_urls: set[str] = set()
         field_counts: dict[str, Counter[str]] = {f: Counter() for f in _GAP_FIELDS}
         sources: list[str] = []
         year_state: dict[tuple[str, str], int] = {}
+        exhausted: list[str] = []
         for core_id, _slug, data_json in rows:
             data = parse_row_data(data_json)
             url = data.get("core_file_url")
@@ -62,9 +64,11 @@ class ScrapingGapMapBuilder:
             state = str(data.get("state", "") or "")
             if year and state:
                 year_state[(year, state)] = year_state.get((year, state), 0) + 1
+            if data.get("core_download_status") == "permanently_failed" and len(exhausted) < _MAX_EXHAUSTED_ITEMS:
+                exhausted.append(f"{core_id} — {str(data.get('core_download_error', ''))[:80]}")
             if len(sources) < _MAX_SOURCE_ANCHORS:
                 sources.append(core_id)
-        return file_urls, field_counts, sources, year_state
+        return file_urls, field_counts, sources, year_state, exhausted
 
     def _render(
         self,
@@ -72,6 +76,7 @@ class ScrapingGapMapBuilder:
         field_counts: dict[str, Counter[str]],
         sources: list[str],
         year_state: dict[tuple[str, str], int],
+        exhausted: list[str],
     ) -> str:
         """Render the gap map text from collected stats."""
         lines = [f"Total files in DB: {len(file_urls)}"]
@@ -90,6 +95,13 @@ class ScrapingGapMapBuilder:
         )
         if not any(field_counts.values()):
             lines.append(self._render_anchors(sources))
+        if exhausted:
+            lines.append("")
+            lines.append(
+                "Retry-exhausted rows (core_download_status='permanently_failed' — "
+                "5 consecutive failed writes, excluded from automatic retry):"
+            )
+            lines.extend(f"- {e}" for e in exhausted)
         return "\n".join(lines)
 
     def _render_field(self, field: str, counts: Counter[str]) -> str:

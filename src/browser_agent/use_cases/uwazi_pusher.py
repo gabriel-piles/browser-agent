@@ -23,7 +23,26 @@ from uwazi_api.domain.entity_file_upload import EntityFileUpload
 
 # Uwazi's originalname field is limited to 255 characters.
 # Entity titles can be longer, so we truncate for file uploads.
-_UPLOAD_TITLE_MAX_LENGTH = 255
+_UPLOAD_FILENAME_MAX_LENGTH = 255
+
+
+def _truncate_filename(filename: str, max_length: int = _UPLOAD_FILENAME_MAX_LENGTH) -> str:
+    """Return ``filename`` truncated to ``max_length`` chars with its suffix kept.
+
+    The naive ``filename[:max_length]`` slice can cut a long title's extension
+    (``<title>.html`` when the title alone approaches the 255-char cap), so
+    Uwazi stores the file without a type. Truncate the stem instead and always
+    keep the suffix.
+    """
+    if len(filename) <= max_length:
+        return filename
+    path = Path(filename)
+    stem, suffix = path.stem, path.suffix
+    keep = max_length - len(suffix)
+    if keep <= 0:
+        return filename[:max_length]
+    return f"{stem[:keep]}{suffix}"
+
 
 _SUPPORTED_FILE_TYPES = {
     ".doc": FileType.DOC,
@@ -191,7 +210,7 @@ class UwaziPusher:
         """Read ``path`` and wrap it as one :class:`EntityFileUpload` for the entity call."""
         return EntityFileUpload(
             fieldname=fieldname,
-            filename=filename[:_UPLOAD_TITLE_MAX_LENGTH],
+            filename=_truncate_filename(filename),
             content=Path(path).read_bytes(),
             content_type=file_type,
         )

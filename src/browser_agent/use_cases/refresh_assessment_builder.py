@@ -72,7 +72,7 @@ class RefreshAssessmentBuilder:
         """Return the gap reason, or ``""`` when the row needs no retry."""
         status = data.get("core_download_status", "")
         filename = str(data.get("core_pdf_filename", ""))
-        if status == "no_files":
+        if status in ("no_files", "permanently_failed"):
             return ""
         if status in ("failed", "load_failed") or not filename:
             return "download_failed"

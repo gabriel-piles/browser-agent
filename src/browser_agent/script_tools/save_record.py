@@ -19,6 +19,47 @@ from pathlib import Path
 
 from script_tools._file_utils import _canonical_url
 
+_RETRY_ATTEMPT_LIMIT = 5
+_COUNTED_FAILURE_STATUSES = ("failed", "unavailable")
+_TERMINAL_DOWNLOAD_STATUS = "permanently_failed"
+
+
+def _existing_row_data(conn, core_id: str) -> dict:
+    """Return the stored data dict for ``core_id``, or ``{}`` when absent/corrupt."""
+    row = conn.execute("SELECT data FROM metadata WHERE core_id = ?", (core_id,)).fetchone()
+    if not row:
+        return {}
+    try:
+        loaded = json.loads(row[0])
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _apply_retry_budget(existing: dict, data: dict) -> dict:
+    """Ratchet ``core_retry_attempts`` on failed writes; go terminal at the limit.
+
+    Every save with status ``failed``/``unavailable`` bumps the persisted
+    counter; ``_RETRY_ATTEMPT_LIMIT`` consecutive such writes flip the row
+    to ``permanently_failed`` so the retry queue skips it forever. Any other
+    status (downloaded, no_files, load_failed) drops the counter — a
+    successful download fully resets the budget. To re-enable a terminal
+    row by hand: set status back to ``failed`` AND remove
+    ``core_retry_attempts`` from the row's data JSON.
+    """
+    status = data.get("core_download_status")
+    if status not in _COUNTED_FAILURE_STATUSES:
+        data.pop("core_retry_attempts", None)
+        return data
+    attempts = int(existing.get("core_retry_attempts") or 0) + 1
+    data["core_retry_attempts"] = attempts
+    if attempts < _RETRY_ATTEMPT_LIMIT:
+        return data
+    data["core_download_status"] = _TERMINAL_DOWNLOAD_STATUS
+    reason = data.get("core_download_error") or "download failed"
+    data["core_download_error"] = f"{reason} — retry budget exhausted ({attempts} consecutive failed attempts)"
+    return data
+
 
 def _resolve_db_path() -> str:
     """Return the SQLite path: env var, else ``<run>/metadata.db`` for emitted scripts."""
@@ -116,6 +157,13 @@ def save_record(core_id: str, data: dict) -> None:
     and ``core_pdf_filename=""`` — the retry queue skips ``no_files``
     rows.
 
+    Statuses ``failed`` and ``unavailable`` auto-increment the persisted
+    ``core_retry_attempts`` counter; after 5 consecutive such writes the
+    store writes ``core_download_status="permanently_failed"`` and
+    ``load_failed_downloads()`` skips the row forever; never write
+    ``core_retry_attempts`` by hand; operator reset = status ``failed``
+    + counter key removed.
+
     ``core_pdf_filename`` holds the downloaded file's on-disk basename
     for EVERY downloaded file — PDF or non-PDF document (``.doc``/``.docx``/
     ``.rtf``/…); there is no separate supporting role. Never set
@@ -159,6 +207,8 @@ def save_record(core_id: str, data: dict) -> None:
             ).fetchone()
             if existing:
                 core_id = existing[0]
+        if isinstance(data, dict) and data.get("core_download_status") in _COUNTED_FAILURE_STATUSES:
+            data = _apply_retry_budget(_existing_row_data(conn, core_id), data)
         conn.execute(
             "INSERT OR REPLACE INTO metadata (core_id, core_task_slug, scraped_at, data) VALUES (?, ?, ?, ?)",
             (core_id, task_slug, datetime.datetime.now(datetime.UTC).isoformat(), json.dumps(data, ensure_ascii=False)),
@@ -176,8 +226,9 @@ def load_failed_downloads() -> list[tuple[str, dict]]:
     matches the rule-8a retry semantics: ``core_download_status ==
     "failed"`` OR ``not core_pdf_filename``. Rows lacking
     ``core_pdf_filename`` (legacy pre-``core_`` runs) are treated as
-    not-downloaded. Rows with ``core_download_status == "no_files"``
-    (metadata-only pages, rule 14b) are excluded — there is nothing to
+    not-downloaded. Rows with ``core_download_status`` ``"no_files"`` or
+    ``"permanently_failed"`` (metadata-only pages, rule 14b, and
+    retry-budget-exhausted rows) are excluded — there is nothing to
     retry.
     """
     db_path = _resolve_db_path()
@@ -191,7 +242,7 @@ def load_failed_downloads() -> list[tuple[str, dict]]:
     pending = []
     for core_id, raw in rows:
         data = json.loads(raw)
-        if data.get("core_download_status") == "no_files":
+        if data.get("core_download_status") in ("no_files", "permanently_failed"):
             continue
         if data.get("core_download_status") == "failed" or not data.get("core_pdf_filename"):
             pending.append((core_id, data))

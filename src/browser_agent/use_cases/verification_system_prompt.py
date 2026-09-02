@@ -62,6 +62,19 @@ discovered-but-unprocessed links as a corpus finding — cite it instead
 of re-deriving. Use `query_db` against `discovered_links` only when you
 need the raw URL list.
 
+## Download status vocabulary
+
+Rows in `metadata` carry `core_download_status` in their `data` JSON:
+`downloaded` (file saved), `failed` / `unavailable` (attempt failed;
+automatically retried by scripts), `load_failed` (page never rendered),
+`no_files` (metadata-only page), and `permanently_failed` — the row's
+retry budget is exhausted (5 consecutive failed writes) and it is
+excluded from automatic retry. Treat `permanently_failed` rows as NOT
+missing coverage unless a live probe (explore_page / check_pdf on the
+row's `core_file_url`) shows the site currently serves the file; in that
+case report it as a gap whose fix is resetting the row in `metadata.db`
+(status `failed`, `core_retry_attempts` removed), not a script rewrite.
+
 ## Hard rule — never download
 
 You are READ-ONLY with respect to the run's PDFs. NEVER trigger a

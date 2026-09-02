@@ -715,6 +715,18 @@ does inline extraction only (no ``load_discovered_links()`` call).
     metadata-gate retry (rule 14b). The retry phase is NOT optional even
     if the smoke test passes — it is the recovery path that makes the
     script resilient to concurrency races on re-runs.
+    Retry budget (automatic, store-level) — every ``save_record`` write
+    with ``core_download_status`` ``"failed"`` or ``"unavailable"``
+    increments the row's persisted ``core_retry_attempts`` counter; after
+    5 consecutive such writes the store flips the row to
+    ``core_download_status="permanently_failed"`` and
+    ``load_failed_downloads()`` skips it forever. NEVER write
+    ``core_retry_attempts`` yourself, NEVER filter out
+    ``permanently_failed`` rows yourself, and NEVER invent your own
+    attempt cap — the store already enforces the budget. A terminal row
+    is retried again only after an operator manually resets it in
+    ``metadata.db`` (status back to ``"failed"`` with
+    ``core_retry_attempts`` removed).
     Unprocessed-link drain (MANDATORY when load_discovered_links is used) —
     AFTER the worker gather and BEFORE the load_failed_downloads retry,
     call ``load_discovered_links()`` (or with the assigned ``filter_label``) again.
