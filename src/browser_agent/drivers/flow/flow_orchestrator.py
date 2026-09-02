@@ -117,13 +117,13 @@ class FlowOrchestrator:
                 logger.exception("flow: failed to prune orphan script {p}", p=candidate.name)
 
     def _kept_script_paths(self, state: SplitRunState) -> set[Path]:
-        """Return the referenced script paths plus their .raw.py and .json siblings."""
+        """Return the referenced script paths plus their .json sidecar siblings."""
         keep: set[Path] = set()
         for record in state.scripts:
             if not record.script_path:
                 continue
             path = Path(record.script_path).resolve()
-            keep.update({path, path.with_suffix(".raw.py"), path.with_suffix(".json")})
+            keep.update({path, path.with_suffix(".json")})
         return keep
 
     def _read_prompt(self, split_dir: Path) -> str:
