@@ -36,6 +36,7 @@ from browser_agent.drivers.signal_guard import SignalGuard
 from browser_agent.drivers.stall_watchdog import StallWatchdog
 from browser_agent.llm_transcript_logger import configure_llm_transcript_dir
 from browser_agent.logging_config import add_run_log_file, configure_logging
+from browser_agent.use_cases.concurrency_context_renderer import render_concurrency_context
 from browser_agent.use_cases.debug_bundle_writer import DebugBundleWriter
 
 DEFAULT_PROMPT = "Visit https://quotes.toscrape.com and print every quote on the first three pages."
@@ -116,10 +117,12 @@ class RunPromptsDriver:
             n=len(task) // 4,
         )
         require_html_files = bool(run.scraper_registry_template)
+        concurrency_directive = render_concurrency_context(run, flow=True)
         orchestrator = FlowOrchestrator(
             run_path=run_path,
             require_html_files=require_html_files,
             original_task=task,
+            concurrency_directive=concurrency_directive,
         )
         return await orchestrator.run(split_dirs)
 

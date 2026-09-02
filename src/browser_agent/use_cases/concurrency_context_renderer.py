@@ -10,16 +10,23 @@ from __future__ import annotations
 from browser_agent.domain.run_config import RunConfig
 
 
-def render_concurrency_context(run: RunConfig) -> str:
+def render_concurrency_context(run: RunConfig, flow: bool = False) -> str:
     """Render the concurrency directive the agent sees, or "" for single-tab.
 
     When ``run.parallel_runners`` is set (>= 2), returns a directive that
-    instructs the agent to fan the per-document phase out across that many
-    tabs; otherwise returns "" so the classic single-tab flow is unchanged.
+    instructs the agent to fan the parallelizable phase out across that many
+    workers; otherwise returns "" so the classic single-tab flow is unchanged.
+
+    ``flow=True`` selects the flow's inline-extraction variant (no discovery
+    script): the grid/page walk stays single-tab and only the download phase
+    fans out. ``flow=False`` (the legacy default) fans the per-document
+    navigation out across tabs.
     """
     pr = run.parallel_runners
     if pr is None or pr <= 1:
         return ""
+    if flow:
+        return _flow_download_directive(pr)
     return (
         "# Concurrency requirement\n"
         f"parallel_runners = {pr}\n"
@@ -42,4 +49,23 @@ def render_concurrency_context(run: RunConfig) -> str:
         "navigate + bring_to_front + metadata-gate (+ retry) block in "
         "`async with gate_lock:`; release before extraction/download so PDF "
         "I/O still parallelizes (rule 15h, lint-enforced)."
+    )
+
+
+def _flow_download_directive(pr: int) -> str:
+    """Directive for flow inline-extraction splits: fan out the download phase."""
+    return (
+        "# Concurrency requirement\n"
+        f"parallel_runners = {pr}\n"
+        "This split's script does inline extraction (no discovery script). The "
+        "grid/page walk MUST stay single-tab (ASP.NET postback state, pagination). "
+        "The parallelizable unit is the DOWNLOAD phase: collect every (data, "
+        "file_url) download task during the single-tab walk WITHOUT downloading, "
+        f"then after the walk fan the downloads out across {pr} worker coroutines. "
+        "Each worker calls download_pdf_curl_cffi / download_file_curl_cffi with "
+        "tab=None (public files; no cookies needed). The browser-fetch fallback "
+        "(download_pdf_browser / download_file_browser) runs serially on the main "
+        "tab only when curl_cffi fails. save_record is concurrency-safe (own "
+        "SQLite connection per call). Keep the per-download throttle (the helpers "
+        "already sleep 2-5s) so the site is not hammered."
     )

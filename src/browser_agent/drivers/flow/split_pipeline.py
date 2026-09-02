@@ -74,6 +74,7 @@ class SplitPipeline:
         run_path: Path,
         prior_context: str,
         original_task: str = "",
+        concurrency_directive: str = "",
     ) -> None:
         self._paths: SplitFlowPaths = paths
         self._state_store: SplitStateStore = state_store
@@ -82,6 +83,7 @@ class SplitPipeline:
         self._run_path: Path = run_path
         self._prior_context: str = prior_context
         self._original_task: str = original_task
+        self._concurrency_directive: str = concurrency_directive
 
     async def run(self, state: SplitRunState, split_prompt: str) -> SplitRunState:
         """Drive one split to a terminal outcome; state is persisted each phase."""
@@ -178,7 +180,7 @@ class SplitPipeline:
             _phase(state.split_name, "building")
             outcome, feedback = await self._attempt(state, spec, record, attempt, feedback=feedback)
             self._state_store.save(state)
-            if outcome in ("succeeded", "repair_noop"):
+            if outcome in ("succeeded", "repair_noop", "accepted_gap"):
                 return record
             if outcome == "verification_failed" and attempt + 1 >= _MAX_BUILD_ATTEMPTS:
                 break
@@ -230,7 +232,9 @@ class SplitPipeline:
 
     def _writer_context(self, feedback: str, record: FlowScriptRecord) -> str:
         """Seed the writer with the prior emitted script and repair feedback."""
-        parts = [b for b in (_original_task_block(self._original_task), self._prior_context) if b]
+        parts = [
+            b for b in (self._concurrency_directive, _original_task_block(self._original_task), self._prior_context) if b
+        ]
         prior = self._prior_script_block(record)
         if prior:
             parts.append(prior)
@@ -333,16 +337,20 @@ class SplitPipeline:
                 continue
             _phase(state.split_name, "verifying")
             report = await self._verify(state, spec)
+            if report.decision.action == "accept" and report.missing_count == 0:
+                record.status = "accepted_gap"
+                return "accepted_gap", ""
             if self._verifier.passed(report):
                 record.status = "succeeded"
                 return "succeeded", ""
             record.status = "verification_failed"
             last_status = "verification_failed"
-            last_feedback = format_verification_repair(report)
+            last_feedback = (
+                report.decision.focus if report.decision.action == "rewrite_script" else format_verification_repair(report)
+            )
             emit_result = await self._repair_and_reemit(state, spec, record, last_feedback, last_status)
             if emit_result is None:
                 return last_status, last_feedback
-        return last_status, last_feedback
 
     async def _repair_and_reemit(
         self,
@@ -403,6 +411,9 @@ class SplitPipeline:
         record: FlowScriptRecord,
     ) -> SplitRunState:
         """Act on the last verification's decision: rewrite, extra script, or accept."""
+        if record.status == "accepted_gap":
+            state.status = "accepted_gap"
+            return state
         if record.status == "succeeded":
             state.status = "succeeded"
             return state

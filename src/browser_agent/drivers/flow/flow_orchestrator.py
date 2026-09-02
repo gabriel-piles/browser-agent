@@ -31,10 +31,12 @@ class FlowOrchestrator:
         run_path: Path,
         require_html_files: bool,
         original_task: str,
+        concurrency_directive: str = "",
     ) -> None:
         self._run_path = run_path
         self._require_html_files = require_html_files
         self._original_task = original_task
+        self._concurrency_directive = concurrency_directive
         self._prior_block = ""
 
     async def run(self, split_dirs: list[Path]) -> int:
@@ -72,6 +74,7 @@ class FlowOrchestrator:
             run_path=self._run_path,
             prior_context=prior_context,
             original_task=self._original_task,
+            concurrency_directive=self._concurrency_directive,
         )
         state = state_store.load() or SplitRunState(split_name=name)
         state.started_at = state.started_at or _now()

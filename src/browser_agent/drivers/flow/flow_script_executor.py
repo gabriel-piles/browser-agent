@@ -30,6 +30,11 @@ from loguru import logger
 from browser_agent.domain.script_execution_report import ScriptExecutionReport
 
 _RUN_TIMEOUT_S = int(os.environ.get("SCRAPER_RUN_TIMEOUT_S", str(6 * 3600)))
+_STALL_TIMEOUT_S = int(os.environ.get("SCRAPER_STALL_TIMEOUT_S", str(15 * 60)))
+
+
+class _StallError(Exception):
+    pass
 
 
 class FlowScriptExecutor:
@@ -88,6 +93,11 @@ class FlowScriptExecutor:
                 self._stream_output(proc, output_lines, live_fh),
                 timeout=_RUN_TIMEOUT_S,
             )
+        except _StallError:
+            await self._kill_process_group(proc)
+            timed_out = True
+            exit_code = 124
+            logger.error("flow subtask stalled (no output for {t}s) - killed process group", t=_STALL_TIMEOUT_S)
         except asyncio.TimeoutError:
             await self._kill_process_group(proc)
             timed_out = True
@@ -121,7 +131,10 @@ class FlowScriptExecutor:
         """Stream the subprocess's combined output; return the collected lines."""
         assert proc.stdout is not None
         while True:
-            line = await proc.stdout.readline()
+            try:
+                line = await asyncio.wait_for(proc.stdout.readline(), timeout=_STALL_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                raise _StallError() from None
             if not line:
                 break
             text = line.decode("utf-8", errors="replace")
