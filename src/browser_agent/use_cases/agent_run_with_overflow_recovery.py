@@ -19,6 +19,7 @@ from typing import Any
 from loguru import logger
 
 from pydantic_ai import Agent, UnexpectedModelBehavior, UsageLimitExceeded, UserError as _UserError
+from pydantic_ai.settings import ModelSettings
 from browser_agent.agent_logging import record_llm_usage
 
 _FINALIZE_DIRECTIVE = (
@@ -143,6 +144,11 @@ async def _retry(
     from a clean, balanced message history.
     """
     final_prompt = _finalize_prompt(prompt, finalize_hint)
+    # Disable thinking on the retry: the overflow happened because the model
+    # spent the entire ``max_tokens`` budget on reasoning_content. The
+    # finalize directive already has all context needed; ``thinking=False``
+    # sends ``reasoning_effort='none'`` so the full budget goes to output.
+    no_thinking: ModelSettings = {"thinking": False}
     source: list[Any] = partial_messages if partial_messages else (message_history or [])
     if source:
         truncated: list[Any] = _strip_unprocessed_tool_calls(list(source[-_TRUNCATED_HISTORY_WINDOW:]))
@@ -153,6 +159,7 @@ async def _retry(
                     deps=deps,
                     usage_limits=usage_limits,
                     message_history=truncated,
+                    model_settings=no_thinking,
                 )
             except _UserError:
                 pass
@@ -160,6 +167,7 @@ async def _retry(
         final_prompt,
         deps=deps,
         usage_limits=usage_limits,
+        model_settings=no_thinking,
     )
 
 
