@@ -25,7 +25,7 @@ LLM_PROVIDER_ENV_KEYS = {
 }
 # The single model identifier every adapter sends to its provider. Adapters
 # may remap it to a provider-specific catalog name (see ollama_adapter).
-MODEL = ("deepseek-v4-flash:0731-cloud", "glm-5.3:cloud", "deepseek-v4-flash:0731-cloud")
+MODEL = ("glm-5.3-flash:cloud", "deepseek-v4-flash:0731-cloud", "glm-5.3-flash:cloud")
 # The primary model identifier; ollama_adapter (no fallback chain) uses this.
 MODEL_PRIMARY = MODEL[0]
 LLM_MAX_RETRIES = 6
