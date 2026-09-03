@@ -21,9 +21,10 @@ from browser_agent.use_cases.metadata_db import parse_row_data
 class RefreshAssessmentBuilder:
     """Scan a finished run for retryable download gaps and new links."""
 
-    def __init__(self, db_path: Path, downloads_path: Path) -> None:
+    def __init__(self, db_path: Path, downloads_path: Path, task_slug: str | None = None) -> None:
         self._db_path = db_path
         self._downloads_path = downloads_path
+        self._task_slug = task_slug
 
     def build(self) -> RefreshAssessment:
         """Return the assessment; never raises on missing DB or tables."""
@@ -32,21 +33,26 @@ class RefreshAssessmentBuilder:
             new_discovered_links=self._new_discovered_links(),
         )
 
-    def _query(self, sql: str) -> list[tuple[str, ...]]:
+    def _query(self, sql: str, params: tuple[str, ...] = ()) -> list[tuple[str, ...]]:
         if not self._db_path.exists():
             return []
         uri = f"file:{self._db_path.as_posix()}?mode=ro"
         try:
             conn = sqlite3.connect(uri, uri=True)
             try:
-                return conn.execute(sql).fetchall()
+                return conn.execute(sql, params).fetchall()
             finally:
                 conn.close()
         except sqlite3.Error:
             return []
 
     def _failed_documents(self) -> list[FailedDocument]:
-        rows = self._query("SELECT core_id, core_task_slug, data FROM metadata")
+        sql = "SELECT core_id, core_task_slug, data FROM metadata"
+        params: tuple[str, ...] = ()
+        if self._task_slug is not None:
+            sql += " WHERE core_task_slug = ?"
+            params = (self._task_slug,)
+        rows = self._query(sql, params)
         docs: list[FailedDocument] = []
         for core_id, core_task_slug, raw in rows:
             doc = self._gap(core_id, core_task_slug, parse_row_data(raw))

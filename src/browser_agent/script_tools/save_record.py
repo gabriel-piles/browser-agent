@@ -219,7 +219,12 @@ def save_record(core_id: str, data: dict) -> None:
 
 
 def load_failed_downloads() -> list[tuple[str, dict]]:
-    """Return rows whose download failed or whose PDF filename is empty.
+    """Return the running script's rows whose download failed or PDF filename is empty.
+
+    The queue is scoped to the running script's ``core_task_slug``
+    (same resolution as the write side: env ``BROWSER_AGENT_TASK_SLUG``,
+    else ``__main__.__file__`` stem) — rows written by other splits are
+    never returned, so each flow only retries its own work.
 
     Ensures the schema exists FIRST so a fresh run returns ``[]`` instead
     of raising ``OperationalError: no such table: metadata``. The filter
@@ -236,7 +241,10 @@ def load_failed_downloads() -> list[tuple[str, dict]]:
     try:
         conn.execute("PRAGMA busy_timeout=5000")
         _ensure_schema(conn)
-        rows = conn.execute("SELECT core_id, data FROM metadata").fetchall()
+        rows = conn.execute(
+            "SELECT core_id, data FROM metadata WHERE core_task_slug = ?",
+            (_resolve_task_slug(),),
+        ).fetchall()
     finally:
         conn.close()
     pending = []
