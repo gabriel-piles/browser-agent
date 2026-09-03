@@ -371,6 +371,8 @@ class SplitPipeline:
             if emit_result is None:
                 return last_status, last_feedback
 
+        return last_status, last_feedback
+
     async def _repair_and_reemit(
         self,
         state: SplitRunState,

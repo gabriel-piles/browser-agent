@@ -77,8 +77,10 @@ class FlowOrchestrator:
             concurrency_directive=self._concurrency_directive,
         )
         state = state_store.load() or SplitRunState(split_name=name)
+        if state.status == "crashed":
+            logger.info("flow: split {name} crashed previously — rolling back to resumable", name=name)
+            self._mark_resumable(state)
         state.started_at = state.started_at or _now()
-        state_store.save(state)
         # Keep each split self-contained: its own run.log sink + LLM transcripts.
         split_sink = add_run_log_file(paths.logs_dir() / "run.log")
         try:
@@ -99,7 +101,17 @@ class FlowOrchestrator:
             logger.info("flow: split {name} succeeded", name=name)
             return 0
         logger.warning("flow: split {name} finished with status={status}", name=name, status=state.status)
+
         return 1
+
+    def _mark_resumable(self, state: SplitRunState) -> None:
+        """Roll a crashed split back to resumable: clear finished, reopen budget."""
+        state.finished = False
+        state.status = "pending"
+        state.finished_at = ""
+        for record in state.scripts:
+            record.status = "pending"
+            record.emits = 0
 
     def _prune_orphan_scripts(self, state: SplitRunState, paths: SplitFlowPaths) -> None:
         """Delete scripts/ files not referenced by the final state.scripts records."""
