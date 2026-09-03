@@ -5,6 +5,10 @@ The discoverer's LLM/explore budget can run out mid-task on large sites
 splits for the ranges it verified and reports ``coverage_complete=false``
 plus notes about the remainder; the driver reruns the discoverer with
 the accumulated splits as context until coverage completes.
+
+A pass that verifies pages already inside an existing split's dynamic
+scope makes progress WITHOUT emitting splits; only a pass whose notes
+repeat the previous pass's notes verbatim is a true stall.
 """
 
 from __future__ import annotations
@@ -31,6 +35,7 @@ class DiscoverCoverageLoop:
 
     async def run(self, existing: list[TaskSplit]) -> int:
         """Run passes; return the process exit code."""
+        previous_notes = ""
         total_created: list[str] = []
         for attempt in range(1, DISCOVER_MAX_PASSES + 1):
             plan = await self._run_pass()
@@ -45,9 +50,10 @@ class DiscoverCoverageLoop:
             )
             if plan.coverage_complete:
                 return self._exit_code(existing, total_created)
-            if not created:
+            if not created and plan.discoverer_notes == previous_notes:
                 self._log_stalled(plan)
                 return 1
+            previous_notes = plan.discoverer_notes
         logger.error(
             "coverage still incomplete after {m} discover passes — rerun the same command to resume",
             m=DISCOVER_MAX_PASSES,
@@ -64,6 +70,7 @@ class DiscoverCoverageLoop:
     @staticmethod
     def _log_stalled(plan: DiscoverPlan) -> None:
         logger.error(
-            "discover pass reported coverage_complete=false but created no new splits — coverage cannot advance (notes: {n})",
+            "discover pass emitted no splits and its notes repeat the previous "
+            "pass's notes verbatim — coverage cannot advance (notes: {n})",
             n=plan.discoverer_notes,
         )

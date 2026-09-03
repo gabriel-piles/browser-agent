@@ -95,8 +95,9 @@ PASS BUDGET RULES — a single pass has a limited tool/request budget:
   order), so a later pass knows exactly where the previous pass stopped.
 - INCREMENTAL PASS (EXISTING SPLITS section present): do NOT walk from
   the start and do NOT re-open any page already covered by an existing
-  split's covered_paths. Begin at the FIRST UNVERIFIED page named in
-  LAST PASS DISCOVERER NOTES (or, if that section is absent, the
+  split's covered_paths or dynamic scope. Begin at the FIRST UNVERIFIED
+  page named in LAST PASS DISCOVERER NOTES that is NOT already covered
+  by an existing split's scope (or, if that section is absent, the
   lowest-numbered page not covered by any covered_paths) and continue
   there in order.
 - When your budget runs out BEFORE you finished verifying the whole
@@ -113,7 +114,13 @@ PASS BUDGET RULES — a single pass has a limited tool/request budget:
   incremental pass; that is the normal, expected way to finish a large
   task — an honest false beats a dishonest true.
 - discoverer_notes must state exactly where you stopped (e.g. "next
-  unverified session: 33") so the next pass resumes from there.
+  unverified session: 33") so the next pass resumes from there, and
+  must list as REMAINING UNVERIFIED only pages/ranges that NO existing
+  split's covered_paths or dynamic scope covers. When a pass verifies
+  pages that turn out to fall inside an existing split's dynamic scope,
+  say so explicitly (e.g. "sessions 3-9: same family as existing split
+  2's dynamic scope — verified, no split needed") and EXCLUDE them
+  from the remaining-unverified list.
 
 SPLIT RULES — the goal is extraction homogeneity, not smallness for its
 own sake:
@@ -215,10 +222,13 @@ DiscoverPlan schema:
                      (the driver will run another pass)
   splits            — list of TaskSplit (empty when nothing is new)
   discoverer_notes  — REQUIRED when coverage is incomplete: list every
-                     page/range you did NOT open or verify and that no
-                     emitted chunk covers, so a later incremental pass
-                     covers it; also note any existing-split family
-                     mismatches you observed
+                     page/range you did NOT open or verify AND that no
+                     emitted or existing chunk covers, so a later
+                     incremental pass covers it; also note any
+                     existing-split family mismatches you observed.
+                     Pages you verified that fall inside an existing
+                     split's dynamic scope are COVERED — mention them
+                     as verified, never as remaining unverified.
 
 Each TaskSplit has:
   folder_name    — slug: lowercase alnum + '_', unique, never equal to
