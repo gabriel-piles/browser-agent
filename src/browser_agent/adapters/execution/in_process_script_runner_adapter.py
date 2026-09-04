@@ -187,6 +187,7 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
             try:
                 with (
                     _shim_modules(namespace["start_browser"]),
+                    _isolated_os_env(),
                     _env_vars_for(self._metadata_db_path, self._task_slug, self._filter_labels),
                     _sys_path_insert(self._metadata_db_path),
                     _restore_warning_filters(),
@@ -388,6 +389,25 @@ def _env_vars_for(
             os.environ.pop("BROWSER_AGENT_SUBTASK_FILTER_LABELS", None)
         else:
             os.environ["BROWSER_AGENT_SUBTASK_FILTER_LABELS"] = saved_labels
+
+
+@contextlib.contextmanager
+def _isolated_os_env():
+    """Snapshot ``os.environ`` around untrusted generated code, restoring after.
+
+    Generated validation scripts mutate the environment directly (e.g.
+    ``os.environ.setdefault("VAL_MAX_TASKS", "6")`` to bound their own
+    validation slice to the runner timeout). Without a snapshot those
+    values leak into the driver process and every subprocess it later
+    launches — ``FlowScriptExecutor`` passes ``**os.environ`` — so a
+    real run silently inherits the validation bounds.
+    """
+    snapshot = dict(os.environ)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(snapshot)
 
 
 @contextlib.contextmanager
