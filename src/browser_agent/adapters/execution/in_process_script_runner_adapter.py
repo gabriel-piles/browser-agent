@@ -135,6 +135,7 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
         filter_labels: list[str] | None = None,
         validation_source_db: Path | None = None,
         validation_slice_limit: int = 8,
+        namespace_file: Path | None = None,
     ) -> None:
         self._session = browser_session
         self._metadata_db_path = Path(metadata_db_path) if metadata_db_path else None
@@ -142,6 +143,7 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
         self._filter_labels = filter_labels
         self._validation_source_db = Path(validation_source_db) if validation_source_db else None
         self._validation_slice_limit = int(validation_slice_limit)
+        self._namespace_file = Path(namespace_file) if namespace_file else None
 
     def _refresh_scratch(self) -> None:
         if self._validation_source_db is None or self._metadata_db_path is None:
@@ -241,11 +243,13 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
         import start_browser`` binds it. Every other ``script_tools.*``
         import resolves to the real copied helpers via ``sys.path[0]``.
 
-        ``__file__`` points inside the runner's ``scripts/`` directory.
-        The DB path and task slug are set via env vars (``_env_vars``)
-        rather than namespace globals — unlike the exec namespace's
-        ``__file__``, ``save_record`` reads the real ``__main__``
-        module's ``__file__``, so only the env var is load-bearing.
+        ``__file__`` points at the emitted validation script's location
+        (``namespace_file`` when given, else inside the runner's
+        ``scripts/`` directory). The DB path and task slug are set via
+        env vars (``_env_vars``) rather than namespace globals — unlike
+        the exec namespace's ``__file__``, ``save_record`` reads the
+        real ``__main__`` module's ``__file__``, so only the env var is
+        load-bearing.
         """
         real_browser = _unwrap_browser(self._session)
         wrapper = _ValidationBrowser(real_browser, tab)
@@ -253,7 +257,9 @@ class InProcessScriptRunnerAdapter(ScriptRunnerPort):
             "__name__": "__validation__",
             "asyncio": asyncio,
         }
-        if self._metadata_db_path is not None:
+        if self._namespace_file is not None:
+            ns["__file__"] = str(self._namespace_file)
+        elif self._metadata_db_path is not None:
             run_path = self._metadata_db_path.parent
             scripts_dir = run_path / "scripts"
             scripts_dir.mkdir(parents=True, exist_ok=True)

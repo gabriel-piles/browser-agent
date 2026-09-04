@@ -35,7 +35,7 @@ from browser_agent.drivers.flow.active_flow_source import load_active_flow_raw
 from browser_agent.drivers.flow.flow_task_slug_resolver import resolve_flow_task_slugs
 from browser_agent.drivers.clients.uwazi_client_factory import UwaziClientFactory
 
-MAX_ENTITIES_TO_UPLOAD = 300000
+MAX_ENTITIES_TO_UPLOAD = 500
 
 
 class ApplyDriver:

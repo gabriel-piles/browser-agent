@@ -176,6 +176,7 @@ class SplitPipeline:
                 browser_session=session,
                 metadata_db_path=self._run_path / "metadata.db",
                 task_slug="exploration",
+                namespace_file=self._paths.scripts_dir() / "validation.py",
             ),
             pdf_downloader=CurlCffiPdfDownloaderAdapter(self._run_path / "downloads"),
         )
@@ -297,6 +298,7 @@ class SplitPipeline:
                 browser_session=session,
                 metadata_db_path=self._paths.scratch_dir() / "validation_metadata.db",
                 task_slug=f"validation_{spec.subtask_id}",
+                namespace_file=self._paths.scripts_dir() / "validation.py",
             ),
             pdf_downloader=CurlCffiPdfDownloaderAdapter(self._paths.scratch_dir() / "validation_downloads"),
         )
