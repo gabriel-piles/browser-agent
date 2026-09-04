@@ -17,5 +17,5 @@ class FlowVerificationReport(VerificationReport):
     """
 
     decision: VerifyDecision = Field(
-        description="The verify agent's verdict: rewrite_script, add_extra_script, or accept.",
+        description="The verify agent's verdict: rewrite_script, add_extra_script, re_execute, or accept.",
     )

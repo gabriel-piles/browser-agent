@@ -25,6 +25,15 @@ with ``action``, ``focus``, and ``reasoning``. Choose exactly one:
   around). ``focus`` = exactly which paths/URLs the EXTRA script must
   cover and the mechanics it needs; a NEW separate script will be built
   for them.
+- ``re_execute`` — the emitted script is CORRECT and already enumerates the
+  gap; the missing files are due to an interrupted or incomplete execution
+  (a backfill/repair run that died mid-way, a bounded run that stopped
+  early), not a logic bug. ``focus`` = the concrete re-run instruction
+  (which sessions/paths to re-run, or "re-run the default run to
+  completion"). Do NOT choose this when the script has a selector or
+  navigation bug — that is ``rewrite_script``. Do NOT choose
+  ``rewrite_script`` when the only fix is to re-run the already-correct
+  script to completion.
 - ``accept`` — the remaining documents are NOT AVAILABLE on the site
   (404s, empty sessions, removed pages) or the gap is too small to
   justify investing another build/verify cycle (e.g. a handful of

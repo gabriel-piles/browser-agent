@@ -4,8 +4,8 @@ Reuses the legacy verification machinery unchanged — the deterministic
 reconciler scoped by task_slug, the probe corpus, the gap map, and the
 independent LLM verify agent with its 5 tools — and extends the
 structured output with the flow ``decision`` (rewrite_script /
-add_extra_script / accept). Discovery verification is removed: every
-flow script is a processing script.
+add_extra_script / re_execute / accept). Discovery verification is
+removed: every flow script is a processing script.
 """
 
 from __future__ import annotations

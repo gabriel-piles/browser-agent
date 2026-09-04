@@ -3,7 +3,8 @@
 The deterministic engine that drives ONE split folder end-to-end. No
 LLM orchestrator: the circuit breakers are integer caps and the only
 decider after verification is the verify agent's own ``decision``
-(rewrite_script / add_extra_script / accept), applied mechanically.
+(rewrite_script / add_extra_script / re_execute / accept), applied
+mechanically.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ _MAX_BUILD_ATTEMPTS = 3
 _MAX_POST_EMIT_REPAIRS = 3
 _MAX_EMITS_PER_SCRIPT = 8
 _MAX_EXTRA_SCRIPTS = 3
+_MAX_RE_EXECUTES = 1
 _SMOKE_TIMEOUT_S = 60.0
 _AUTO_ACCEPT_MISSING_THRESHOLD = 3
 _SPEC_TRUST_BLOCK = (
@@ -59,7 +61,10 @@ _REPAIR_PRESERVE_MARKERS_BLOCK = (
     "re-walk a session when its parse logic actually changed. Prefer the "
     "targeted retry phase (load_failed_downloads) to re-attempt the specific "
     "missing/failed rows; already-complete records must be skipped, not "
-    "re-downloaded."
+    "re-downloaded. Never narrow the script's DEFAULT run scope to a repair "
+    "subset (e.g. a backfill session list). The default run must always walk "
+    "the FULL declared range with skip-existing idempotency; a bounded re-run "
+    "belongs behind an env-var override (e.g. VAL_SESSIONS), never the default."
 )
 
 
@@ -362,6 +367,8 @@ class SplitPipeline:
                     n=_AUTO_ACCEPT_MISSING_THRESHOLD,
                 )
                 return "accepted_gap", ""
+            if report.decision.action == "re_execute":
+                return await self._re_execute_and_reverify(state, spec, record, emit_result)
             record.status = "verification_failed"
             last_status = "verification_failed"
             last_feedback = (
@@ -372,6 +379,35 @@ class SplitPipeline:
                 return last_status, last_feedback
 
         return last_status, last_feedback
+
+    async def _re_execute_and_reverify(
+        self,
+        state: SplitRunState,
+        spec: FlowSubtaskSpec,
+        record: FlowScriptRecord,
+        emit_result,
+    ) -> tuple[str, str]:
+        """Re-run the already-correct script (idempotent) and re-verify once.
+
+        The verify agent chose ``re_execute``: the gap is an interrupted or
+        incomplete execution, not a code bug. Re-running the emitted script
+        (skip-existing) completes the gap with no writer turn and no emit.
+        Bounded to one re-execute: after the re-verify the outcome is
+        terminal (succeeded or accepted_gap) regardless of the second
+        report's decision, so a stubborn verifier cannot loop.
+        """
+        _phase(state.split_name, "re-executing")
+        exec_report = await self._execute(spec, record, emit_result.script_path)
+        if exec_report.exit_code != 0:
+            record.status = "execution_failed"
+            return "execution_failed", format_execution_repair(exec_report.output_tail)
+        _phase(state.split_name, "re-verifying")
+        report = await self._verify(state, spec)
+        if self._verifier.passed(report) or report.missing_count == 0:
+            record.status = "succeeded"
+            return "succeeded", ""
+        record.status = "accepted_gap"
+        return "accepted_gap", ""
 
     async def _repair_and_reemit(
         self,
