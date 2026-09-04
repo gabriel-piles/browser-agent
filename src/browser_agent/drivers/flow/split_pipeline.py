@@ -21,6 +21,7 @@ from browser_agent.domain.flow_subtask_spec import FlowSubtaskSpec
 from browser_agent.domain.flow_verification_report import FlowVerificationReport
 from browser_agent.domain.generated_script import GeneratedScript
 from browser_agent.domain.lint_finding import LintFinding
+from browser_agent.domain.script_execution_report import ScriptExecutionReport
 from browser_agent.domain.split_run_state import SplitRunState
 from browser_agent.drivers.flow.flow_script_emitter import FlowScriptEmitter
 from browser_agent.drivers.flow.flow_script_executor import FlowScriptExecutor
@@ -39,6 +40,7 @@ _MAX_POST_EMIT_REPAIRS = 3
 _MAX_EMITS_PER_SCRIPT = 8
 _MAX_EXTRA_SCRIPTS = 3
 _MAX_RE_EXECUTES = 1
+_MAX_TIMEOUTS = 2
 _SMOKE_TIMEOUT_S = 60.0
 _AUTO_ACCEPT_MISSING_THRESHOLD = 3
 _SPEC_TRUST_BLOCK = (
@@ -76,6 +78,16 @@ def _phase(split: str, label: str) -> None:
 def _original_task_block(task: str) -> str:
     """Render the overall goal as a context block shown before a split's own prompt."""
     return f"## ORIGINAL TASK (the overall goal this split is part of)\n{task}" if task else ""
+
+
+def _timeout_note(exec_report) -> str:
+    """Partial-progress prefix for verify after a timed-out execution."""
+    return f"TIMED OUT after {exec_report.duration_s:.0f}s — coverage below is partial progress, not a completed run.\n"
+
+
+def _timeout_repair_feedback(base: str, exec_report, report) -> str:
+    """Repair prompt for timeouts: force speed/scope fix, not re-emit."""
+    return f"{base}\ntimed_out=True missing={report.missing_count} duration={exec_report.duration_s:.0f}s — shrink scope or speed up instead of re-emitting the same run."
 
 
 class SplitPipeline:
@@ -343,7 +355,9 @@ class SplitPipeline:
                 continue
             _phase(state.split_name, "executing")
             exec_report = await self._execute(spec, record, emit_result.script_path)
-            if exec_report.exit_code != 0:
+            if exec_report.timed_out and self._note_timeout(state, record):
+                return "accepted_gap", ""
+            if exec_report.exit_code != 0 and not exec_report.timed_out:
                 record.status = "execution_failed"
                 last_status, last_feedback = "execution_failed", format_execution_repair(exec_report.output_tail)
                 emit_result = await self._repair_and_reemit(state, spec, record, last_feedback, last_status)
@@ -352,7 +366,7 @@ class SplitPipeline:
                 continue
             _phase(state.split_name, "verifying")
             previous = await self._read_last_report()
-            report = await self._verify(state, spec)
+            report = await self._verify(state, spec, exec_report=exec_report, previous=previous)
             if report.decision.action == "accept" and report.missing_count == 0:
                 record.status = "accepted_gap"
                 return "accepted_gap", ""
@@ -368,12 +382,14 @@ class SplitPipeline:
                 )
                 return "accepted_gap", ""
             if report.decision.action == "re_execute":
-                return await self._re_execute_and_reverify(state, spec, record, emit_result)
+                return await self._re_execute_and_reverify(state, spec, record, emit_result, report)
             record.status = "verification_failed"
             last_status = "verification_failed"
             last_feedback = (
                 report.decision.focus if report.decision.action == "rewrite_script" else format_verification_repair(report)
             )
+            if exec_report.timed_out:
+                last_feedback = _timeout_repair_feedback(last_feedback, exec_report, report)
             emit_result = await self._repair_and_reemit(state, spec, record, last_feedback, last_status)
             if emit_result is None:
                 return last_status, last_feedback
@@ -386,6 +402,7 @@ class SplitPipeline:
         spec: FlowSubtaskSpec,
         record: FlowScriptRecord,
         emit_result,
+        report: FlowVerificationReport,
     ) -> tuple[str, str]:
         """Re-run the already-correct script (idempotent) and re-verify once.
 
@@ -396,13 +413,20 @@ class SplitPipeline:
         terminal (succeeded or accepted_gap) regardless of the second
         report's decision, so a stubborn verifier cannot loop.
         """
+        if record.re_executes >= _MAX_RE_EXECUTES:
+            logger.warning("split {id}: re-execute cap ({n}) reached — accepting", id=state.split_name, n=_MAX_RE_EXECUTES)
+            record.status = "accepted_gap"
+            self._state_store.save(state)
+            return "accepted_gap", ""
+        record.re_executes += 1
+        self._state_store.save(state)
         _phase(state.split_name, "re-executing")
         exec_report = await self._execute(spec, record, emit_result.script_path)
         if exec_report.exit_code != 0:
             record.status = "execution_failed"
             return "execution_failed", format_execution_repair(exec_report.output_tail)
         _phase(state.split_name, "re-verifying")
-        report = await self._verify(state, spec)
+        report = await self._verify(state, spec, exec_report=exec_report, previous=report)
         if self._verifier.passed(report) or report.missing_count == 0:
             record.status = "succeeded"
             return "succeeded", ""
@@ -446,20 +470,43 @@ class SplitPipeline:
 
     async def _execute(self, spec: FlowSubtaskSpec, record: FlowScriptRecord, script_path: Path):
         """Run the emitted script as a subprocess against the shared stores."""
+        from browser_agent.drivers.generation.script_tools_copier import ScriptToolsCopier
+
+        ScriptToolsCopier().copy(self._paths.split_dir())
         executor = FlowScriptExecutor(self._run_path, self._paths.execution_log_path(record.script_index))
         try:
             return await executor.run(spec.subtask_id, script_path)
         finally:
             kill_chromium_under(self._run_path)
 
-    async def _verify(self, state: SplitRunState, spec: FlowSubtaskSpec) -> FlowVerificationReport:
+    def _note_timeout(self, state: SplitRunState, record: FlowScriptRecord) -> bool:
+        """Count a timeout; True when the two-timeout accept backstop hits."""
+        record.timeouts += 1
+        self._state_store.save(state)
+        if record.timeouts < _MAX_TIMEOUTS:
+            return False
+        logger.warning("split {id}: timeout cap ({n}) reached — accepting", id=state.split_name, n=_MAX_TIMEOUTS)
+        record.status = "accepted_gap"
+        self._state_store.save(state)
+        return True
+
+    async def _verify(
+        self,
+        state: SplitRunState,
+        spec: FlowSubtaskSpec,
+        exec_report: ScriptExecutionReport | None = None,
+        previous: FlowVerificationReport | None = None,
+    ) -> FlowVerificationReport:
         """Verify the split's downloads so far (all its scripts together)."""
         sources = [
             Path(r.script_path).read_text(encoding="utf-8", errors="replace")
             for r in state.scripts
             if r.script_path and Path(r.script_path).is_file()
         ]
-        return await self._verifier.verify(spec, sources)
+        summary = exec_report.output_tail[-2000:] if exec_report is not None else ""
+        if exec_report is not None and exec_report.timed_out:
+            summary = _timeout_note(exec_report) + summary
+        return await self._verifier.verify(spec, sources, execution_summary=summary, previous_report=previous)
 
     async def _apply_verify_decisions(
         self,

@@ -17,6 +17,7 @@ from browser_agent.domain.reconciled_pdf import ReconciledPdf
 
 _RECONCILER_MD = "reconciler_inventory.md"
 _RECONCILER_JSON = "reconciler_inventory.json"
+_COMPACT_MAX_ROWS = 200
 
 
 class ReconcilerReportWriter:
@@ -38,6 +39,19 @@ class ReconcilerReportWriter:
     def render_section(self, per_row: list[ReconciledPdf], findings: list[CorpusFinding]) -> str:
         """Return the markdown section for embedding in the agent prompt."""
         return self._render(per_row, findings)
+
+    def render_compact_section(
+        self, per_row: list[ReconciledPdf], findings: list[CorpusFinding], max_rows: int = _COMPACT_MAX_ROWS
+    ) -> str:
+        """Return bounded inventory: summary + non-present rows + findings."""
+        pending = [r for r in per_row if r.verdict != "present"]
+        omitted = len(per_row) - len(pending)
+        header = "## Per-row inventory\n\n| file_url | verdict | match_mode | file | size | dl_status | notes |\n| --- | --- | --- | --- | --- | --- | --- |"
+        rows = "\n".join(self._table_row(r) for r in pending[:max_rows])
+        table = header + ("\n" + rows if rows else "")
+        tail = f"(+{omitted} present rows omitted — all present rows are OK)"
+        lines = [self._summary(per_row), "", table, "", tail, "", self._findings_section(findings)]
+        return "\n".join(lines)
 
     def _render(self, per_row: list[ReconciledPdf], findings: list[CorpusFinding]) -> str:
         lines = [

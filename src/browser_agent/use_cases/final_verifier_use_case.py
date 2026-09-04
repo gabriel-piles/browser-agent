@@ -43,7 +43,7 @@ class FinalVerifierUseCase:
             discovery_script="",
             processing_script="",
             gap_map=gap_map,
-            reconciler_inventory="",
+            reconciler_inventory=ReconcilerReportWriter(self._run_path).render_compact_section(per_row, findings),
         )
 
         session = ZendriverBrowserSession(

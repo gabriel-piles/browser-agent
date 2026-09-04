@@ -34,6 +34,14 @@ class VerificationRequest(BaseModel):
         default="",
         description="Deterministic DB-vs-disk inventory from the reconciler (ground truth).",
     )
+    execution_summary: str = Field(
+        default="",
+        description="Deterministic tail of the emitted script's execution log (row counts, download results).",
+    )
+    previous_decision: str = Field(
+        default="",
+        description="The previous verification round's decision and gap, for delta context.",
+    )
 
     def render_prompt(self) -> str:
         parts = [f"## Original Task\n{self.task_prompt}\n\n---\n\n"]
@@ -49,5 +57,9 @@ class VerificationRequest(BaseModel):
             parts.append(
                 f"## Deterministic Reconciler Inventory (DB vs disk)\n{self.reconciler_inventory}\n\n---\n\n",
             )
+        if self.execution_summary:
+            parts.append(f"## Execution evidence (deterministic, script's own log)\n{self.execution_summary}\n\n---\n\n")
+        if self.previous_decision:
+            parts.append(f"## Previous verification round (delta context)\n{self.previous_decision}\n\n---\n\n")
         parts.append(_TASK_DIRECTIVE)
         return "".join(parts)

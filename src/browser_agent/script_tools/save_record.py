@@ -17,11 +17,12 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from script_tools._file_utils import _canonical_url
+from script_tools._file_utils import _NON_DOCUMENT_MARKER, _canonical_url
 
 _RETRY_ATTEMPT_LIMIT = 5
 _COUNTED_FAILURE_STATUSES = ("failed", "unavailable")
 _TERMINAL_DOWNLOAD_STATUS = "permanently_failed"
+_RETRY_QUEUE_LIMIT = 500
 
 
 def _existing_row_data(conn, core_id: str) -> dict:
@@ -47,6 +48,12 @@ def _apply_retry_budget(existing: dict, data: dict) -> dict:
     row by hand: set status back to ``failed`` AND remove
     ``core_retry_attempts`` from the row's data JSON.
     """
+    error = data.get("core_download_error") or ""
+    if _NON_DOCUMENT_MARKER in error:
+        data["core_download_status"] = _TERMINAL_DOWNLOAD_STATUS
+        data["core_retry_attempts"] = _RETRY_ATTEMPT_LIMIT
+        data["core_download_error"] = f"{error} — non-document body, not retryable"
+        return data
     status = data.get("core_download_status")
     if status not in _COUNTED_FAILURE_STATUSES:
         data.pop("core_retry_attempts", None)
@@ -106,6 +113,7 @@ def _ensure_schema(conn) -> None:
         "(core_id TEXT PRIMARY KEY, core_task_slug TEXT NOT NULL, "
         "scraped_at TEXT NOT NULL, data TEXT NOT NULL)"
     )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_metadata_file_url ON metadata(json_extract(data, '$.core_file_url'))")
 
 
 def save_record(core_id: str, data: dict) -> None:
@@ -160,7 +168,9 @@ def save_record(core_id: str, data: dict) -> None:
     Statuses ``failed`` and ``unavailable`` auto-increment the persisted
     ``core_retry_attempts`` counter; after 5 consecutive such writes the
     store writes ``core_download_status="permanently_failed"`` and
-    ``load_failed_downloads()`` skips the row forever; never write
+    ``load_failed_downloads()`` skips the row forever; fast-fail ``HTML error page``
+    rows go ``permanently_failed`` on the first write and are skipped by
+    ``load_failed_downloads`` forever; never write
     ``core_retry_attempts`` by hand; operator reset = status ``failed``
     + counter key removed.
 
@@ -234,7 +244,7 @@ def load_failed_downloads() -> list[tuple[str, dict]]:
     not-downloaded. Rows with ``core_download_status`` ``"no_files"`` or
     ``"permanently_failed"`` (metadata-only pages, rule 14b, and
     retry-budget-exhausted rows) are excluded — there is nothing to
-    retry.
+    retry. Capped to the oldest ``_RETRY_QUEUE_LIMIT`` rows (rowid order).
     """
     db_path = _resolve_db_path()
     conn = sqlite3.connect(db_path, timeout=5.0)
@@ -254,4 +264,4 @@ def load_failed_downloads() -> list[tuple[str, dict]]:
             continue
         if data.get("core_download_status") == "failed" or not data.get("core_pdf_filename"):
             pending.append((core_id, data))
-    return pending
+    return pending[:_RETRY_QUEUE_LIMIT]

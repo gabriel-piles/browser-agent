@@ -34,3 +34,5 @@ class FlowScriptRecord(BaseModel):
     script_path: str = ""
     script_hash: str = Field(default="", description="md5 of the emitted .py — detects repair stagnation.")
     emits: int = 0
+    re_executes: int = Field(default=0, ge=0, description="Re-execute rounds already consumed by this script record.")
+    timeouts: int = Field(default=0, ge=0, description="Consecutive timed-out executions for this script record.")

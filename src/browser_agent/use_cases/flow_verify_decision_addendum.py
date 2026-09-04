@@ -40,6 +40,8 @@ with ``action``, ``focus``, and ``reasoning``. Choose exactly one:
   missing variants out of thousands, all optional formats). ``focus`` =
   why the gap is acceptable.
 
+When the prompt carries a **Previous verification round** block, treat it as your own earlier verdict: if the gap is unchanged and the evidence (deterministic reconciler inventory + execution summary) confirms the same cause, choose ``accept`` — another identical rewrite cannot change what the site itself does not serve. The **Execution evidence** block is the script's own deterministic log; cite it instead of re-deriving row counts with `query_db`/`run_read_script`.
+
 Be decisive with the site's evidence: probe the missing paths live
 before requesting a rewrite — do NOT ask for a rewrite when the site
 itself does not serve the documents. Do NOT request ``add_extra_script``

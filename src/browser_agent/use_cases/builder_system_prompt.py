@@ -672,7 +672,10 @@ does inline extraction only (no ``load_discovered_links()`` call).
    the helper navigates the visible browser tab to the blocked URL so
    the operator can manually click the Cloudflare checkbox, polls until
    the challenge clears, then retries with fresh cookies. Do NOT add
-   your own backoff/block logic; call them inside try/except. NEVER use
+   your own backoff/block logic; call them inside try/except. One helper call
+   per URL per phase: no worker-level second attempt, no ``sleep()`` between a
+   helper failure and the next phase, no re-fetching in the serial fallback rows
+   the parallel phase already failed through the same helper. NEVER use
    ``tab.get`` to download a PDF (it renders a viewer, not a download).
    Every download attempt — success OR failure — MUST persist a
    ``save_record`` row (success: ``core_pdf_filename=Path(result["saved_path"]).name``,
@@ -720,7 +723,9 @@ does inline extraction only (no ``load_discovered_links()`` call).
     increments the row's persisted ``core_retry_attempts`` counter; after
     5 consecutive such writes the store flips the row to
     ``core_download_status="permanently_failed"`` and
-    ``load_failed_downloads()`` skips it forever. NEVER write
+    ``load_failed_downloads()`` skips it forever. Fast-fail ``HTML error page``
+    rows go ``permanently_failed`` on the first write and are skipped by
+    ``load_failed_downloads`` forever. NEVER write
     ``core_retry_attempts`` yourself, NEVER filter out
     ``permanently_failed`` rows yourself, and NEVER invent your own
     attempt cap — the store already enforces the budget. A terminal row

@@ -43,7 +43,13 @@ class FlowVerifierUseCase:
         self._original_task: str = original_task
         self._split_prompt: str = split_prompt
 
-    async def verify(self, spec: FlowSubtaskSpec, script_sources: list[str]) -> FlowVerificationReport:
+    async def verify(
+        self,
+        spec: FlowSubtaskSpec,
+        script_sources: list[str],
+        execution_summary: str = "",
+        previous_report: FlowVerificationReport | None = None,
+    ) -> FlowVerificationReport:
         """Run the whole verification pipeline for one flow subtask.
 
         ``script_sources`` are the emitted scripts' sources (primary + any
@@ -63,12 +69,17 @@ class FlowVerifierUseCase:
             if self._original_task
             else ""
         )
+        previous_decision = ""
+        if previous_report is not None:
+            previous_decision = f"action={previous_report.decision.action}\nfocus={previous_report.decision.focus}\nreasoning={previous_report.decision.reasoning}\nmissing_count={previous_report.missing_count} observed_pdf_total={previous_report.observed_pdf_total} expected_pdf_total={previous_report.expected_pdf_total}"
         request = VerificationRequest(
             task_prompt=task_prompt or spec.description,
             discovery_script="",
             processing_script="\n\n# --- next script ---\n\n".join(script_sources),
             gap_map=gap_map,
-            reconciler_inventory="",
+            reconciler_inventory=ReconcilerReportWriter(self._verification_dir).render_compact_section(per_row, findings),
+            execution_summary=execution_summary,
+            previous_decision=previous_decision,
         )
         report = await self._run_agent(request, spec.sample_document_urls)
         report = apply_processing_gates(

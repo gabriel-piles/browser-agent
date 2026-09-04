@@ -142,6 +142,7 @@ _PDF_MAGIC = b"%PDF"
 _DOC_OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 _RTF_MAGIC = b"{\\rtf"
 _ZIP_MAGIC = b"PK\x03\x04"
+_NON_DOCUMENT_MARKER = "HTML error page"
 
 _ODF_MIMETYPE = {
     b"application/vnd.oasis.opendocument.text": ".odt",

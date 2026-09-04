@@ -120,6 +120,7 @@ class SubtaskVerifierUseCase:
         from browser_agent.adapters.llm.llm_adapter_factory import build_llm
         from browser_agent.adapters.execution.subprocess_read_script_runner import SubprocessReadScriptRunner
         from browser_agent.use_cases.reconcile_downloads_use_case import ReconcileDownloadsUseCase
+        from browser_agent.use_cases.reconciler_report_writer import ReconcilerReportWriter
         from browser_agent.use_cases.verify_downloads_use_case import VerifyDownloadsUseCase
         from browser_agent.use_cases.verification_agent_deps import VerificationAgentDeps
         from browser_agent.use_cases.probe_corpus_verifier import ProbeCorpusVerifier
@@ -131,6 +132,7 @@ class SubtaskVerifierUseCase:
             task_slug=subtask.subtask_id,
         )
         _per_row, _findings = reconciler.reconcile()
+        ReconcilerReportWriter(self._run_path).write(_per_row, _findings)
 
         # Probe stage
         probe_results: list = []
@@ -147,7 +149,7 @@ class SubtaskVerifierUseCase:
             discovery_script="",
             processing_script="",
             gap_map=gap_map,
-            reconciler_inventory="",
+            reconciler_inventory=ReconcilerReportWriter(self._run_path).render_compact_section(_per_row, _findings),
         )
 
         session = ZendriverBrowserSession(

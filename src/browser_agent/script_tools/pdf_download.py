@@ -18,10 +18,12 @@ import asyncio
 import base64
 import json
 import random
+import re
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 from script_tools._file_utils import (
+    _NON_DOCUMENT_MARKER,
     _assert_pdf_magic,
     _existing_size,
     _find_matching,
@@ -61,6 +63,21 @@ _CF_PROMPT = (
 import os
 
 _ATTENDED = bool(os.environ.get("BROWSER_AGENT_ATTENDED"))
+_NON_DOCUMENT_BODY_RE = re.compile(r"\s*<(!doctype html|html)\b", re.IGNORECASE)
+
+
+class _NonDocumentBody(RuntimeError):
+    """A URL deterministically serving an HTML error page, never a document."""
+
+
+def _assert_document_body(body: bytes, url: str) -> None:
+    """Raise ``_NonDocumentBody`` when ``body`` is an HTML error page."""
+    if not _NON_DOCUMENT_BODY_RE.search(body[:512].decode("utf-8", errors="replace")):
+        return
+    head = body[:2048].decode("utf-8", errors="replace").lower()
+    if any(marker in head for marker in _CF_TITLES):
+        return
+    raise _NonDocumentBody(f"{_NON_DOCUMENT_MARKER} for {url} (body starts with HTML, not a document)")
 
 
 def _cf_wait_timeout() -> float:
@@ -235,6 +252,8 @@ async def _fetch_curl_body(url, tab):
                 async with AsyncSession() as s:
                     r = await s.get(url, impersonate="chrome", cookies=cookies, timeout=60.0)
             except Exception as e:
+                if isinstance(e, _NonDocumentBody):
+                    raise
                 last_exc = RuntimeError(f"curl_cffi request failed for {url}: {e}")
                 if attempt < _PDF_DOWNLOAD_RETRIES:
                     await asyncio.sleep(_PDF_DOWNLOAD_RETRY_DELAY_S * attempt)
@@ -253,6 +272,7 @@ async def _fetch_curl_body(url, tab):
                 if attempt < _PDF_DOWNLOAD_RETRIES:
                     await asyncio.sleep(_PDF_DOWNLOAD_RETRY_DELAY_S * attempt)
                 continue
+            _assert_document_body(body, url)
             await _track_download_outcome(None, tab=tab, url=url)
             return body
         cleared = await _track_download_outcome(last_exc, tab=tab, url=url)
@@ -468,9 +488,12 @@ async def _fetch_browser_body(tab, url) -> bytes:
                         if not result:
                             raise RuntimeError(f"empty response for {url}")
                         body = base64.b64decode(result) if _decode else result
+                        _assert_document_body(body, url)
                         await _track_download_outcome(None, tab=tab, url=url)
                         return body
                     except RuntimeError as exc:
+                        if isinstance(exc, _NonDocumentBody):
+                            raise
                         last_exc = exc
                         if attempt < _PDF_DOWNLOAD_RETRIES:
                             await asyncio.sleep(_PDF_DOWNLOAD_RETRY_DELAY_S * attempt)
@@ -478,6 +501,8 @@ async def _fetch_browser_body(tab, url) -> bytes:
             await _track_download_outcome(None, tab=tab, url=url)
             return body
         except RuntimeError as exc:
+            if isinstance(exc, _NonDocumentBody):
+                raise
             last_exc = exc
             cleared = await _track_download_outcome(exc, tab=tab, url=url)
             if not cleared:
@@ -506,6 +531,7 @@ async def _try_curl_cffi(url) -> bytes:
         raise RuntimeError(f"HTTP {r.status_code} for {url}")
     if not r.content:
         raise RuntimeError(f"empty response for {url}")
+    _assert_document_body(r.content, url)
     return r.content
 
 
