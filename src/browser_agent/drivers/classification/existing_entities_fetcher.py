@@ -46,15 +46,31 @@ class ExistingEntitiesFetcher:
         :meth:`_instance_languages`) so the index covers the key
         values any language variant carries. When
         ``select_filter_name`` and ``select_filter_values`` are
-        both set, each language download is restricted to entities
-        whose value on the named select property is in
-        ``select_filter_values``; otherwise the unfiltered template
-        download runs.
+        both set, each language download is split into one paginated
+        run per option value: Uwazi caps one search response at the
+        10k Elasticsearch result window, so a partitioning select
+        property must be queried one value at a time to stay under
+        it. Without filters the unfiltered template download runs.
         """
         entities: list = []
         for language in self._instance_languages():
-            entities.extend(self._fetch_all(template_name, language, select_filter_name, select_filter_values))
+            for option in self._expand_options(select_filter_name, select_filter_values):
+                entities.extend(self._fetch_all(template_name, language, select_filter_name, [option]))
         return self._index_by_key(entities, key_property)
+
+    @staticmethod
+    def _expand_options(
+        select_filter_name: str | None,
+        select_filter_values: tuple[str, ...] | list[str],
+    ) -> list[str | None]:
+        """Return one query unit per option value, or ``[None]`` unfiltered.
+
+        ``None`` marks the single unfiltered download; every other
+        entry is one select option fetched on its own request chain.
+        """
+        if not select_filter_name or not select_filter_values:
+            return [None]
+        return list(select_filter_values)
 
     def _instance_languages(self) -> list[str]:
         """Return the ISO keys of every language the instance exposes."""
@@ -79,12 +95,15 @@ class ExistingEntitiesFetcher:
         select_filter_name: str | None,
         select_filter_values: tuple[str, ...] | list[str],
     ) -> list:
-        """Fetch every entity for ``template_name`` via paginated search.
+        """Fetch every entity for one filter unit via paginated search.
 
-        A fresh :class:`SearchFilters` is built per page because the
-        downstream ``search_by_filter`` resolves select labels to
-        thesaurus ids in place; reusing one filter object would feed
-        already-resolved ids back into the validator on the next page.
+        Called with a single select option (or none) per invocation;
+        the caller loops over options so each search chain stays
+        under the 10k result window. A fresh :class:`SearchFilters`
+        is built per page because the downstream ``search_by_filter``
+        resolves select labels to thesaurus ids in place; reusing one
+        filter object would feed already-resolved ids back into the
+        validator on the next page.
         """
         out: list = []
         start = 0

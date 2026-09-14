@@ -12,6 +12,7 @@ from __future__ import annotations
 import yaml
 
 from browser_agent.domain.thesaurus_mapping_entry import ThesaurusMappingEntry
+from uwazi_api.domain.thesauri_label import THESAURUS_GROUP_SEPARATOR
 
 
 class ThesaurusLlmOutputParser:
@@ -105,9 +106,31 @@ class ThesaurusLlmOutputParser:
         thesaurus_values: tuple[str, ...],
     ) -> tuple[str | None, bool, str | None]:
         """Return ``(uwazi_value, needs_review, note)`` after validating against the thesaurus."""
-        if uv not in thesaurus_values:
-            return None, True, "value not in thesaurus"
-        return uv, False, None
+        if uv in thesaurus_values:
+            return uv, False, None
+        resolved = self._resolve_qualified(uv, thesaurus_values)
+        if resolved is not None:
+            return resolved, False, None
+        return None, True, "value not in thesaurus"
+
+    def _resolve_qualified(
+        self,
+        uv: str,
+        thesaurus_values: tuple[str, ...],
+    ) -> str | None:
+        """Return the unique qualified label whose child label matches ``uv``, or None.
+
+        A bare ``Resolution`` echoed by the LLM is accepted only when
+        exactly one allowed value has that child label; two or more
+        (the ambiguity the qualified form exists to break) stay
+        needs-review.
+        """
+        matches = [
+            value
+            for value in thesaurus_values
+            if THESAURUS_GROUP_SEPARATOR in value and value.partition(THESAURUS_GROUP_SEPARATOR)[2] == uv
+        ]
+        return matches[0] if len(matches) == 1 else None
 
     def _missing_value_entries(
         self,

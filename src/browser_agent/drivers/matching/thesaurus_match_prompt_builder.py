@@ -13,7 +13,10 @@ _PROMPT_RULES: tuple[str, ...] = (
     "For EACH extracted value, choose the single best matching allowed thesaurus value. Rules:",
     "- If an exact or near-exact match exists (ignoring accents/case), use it.",
     "- If no plausible match exists, output uwazi_value: null.",
-    "- If you are uncertain, still pick the closest and set needs_review: true; otherwise needs_review: false.",
+    '- Values written as "Group: Child" (qualified) are thesaurus values that live '
+    "inside a parent group; an identical bare label under a different group is a "
+    "DIFFERENT value. Copy the qualified form exactly, colon and spacing included; "
+    "never output a bare label for one of these.",
     "",
     "Output ONLY a YAML list, one entry per extracted value:",
     '- crawl_value: "..."',

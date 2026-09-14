@@ -59,14 +59,18 @@ Rules:
   the apply/match drivers will only download entities whose value on
   that property is in the list. Leave both empty (or ``null``) to
   keep the unfiltered behaviour. The chosen values must come from
-  the property's ``thesaurus_values`` leaf labels.
+  the property's ``thesaurus_values`` leaf labels. Labels written as
+  ``"Group: Child"`` (qualified) identify a value inside a parent
+  group whose bare label is shared with another group; copy the
+  qualified form exactly, never a bare label for one of these.
 - For every template property that has NO matching scraped field, emit
   a field entry with ``source=null`` and a guessed ``default_value``:
   a constant text, a thesaurus **leaf** label (for select/multiselect),
   an ISO date (``YYYY-MM-DD``), a number string, or ``null`` to leave
   the property unset. Set ``type`` to the property's type. For thesaurus
   fields, pick one of the listed ``thesaurus_values`` leaf labels, **not**
-  a parent group name.
+  a parent group name. For labels shared by two groups the snapshot
+  lists the qualified ``"Group: Child"`` form — use it verbatim.
 - Skip a scraped field only when (a) the catalog marks it
   ``export_to_uwazi=false`` and the operator opted not to push it,
   or (b) the field has no plausible Uwazi property to map to. Each

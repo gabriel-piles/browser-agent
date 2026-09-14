@@ -23,6 +23,7 @@ from browser_agent.use_cases.source_value_resolver import resolve_source_value
 from browser_agent.domain.uwazi_mapping import UwaziMapping
 from browser_agent.domain.uwazi_template import UwaziTemplate
 from uwazi_api.domain.thesauri_value import ThesauriValue
+from uwazi_api.domain.thesauri_label import THESAURUS_GROUP_SEPARATOR, split_label
 
 
 _THESAURUS_TYPES = (FieldType.SELECT, FieldType.MULTI_SELECT, FieldType.RELATIONSHIP)
@@ -277,7 +278,17 @@ class MetadataValueTransformer:
 
     @staticmethod
     def _wrap_select_item(label: str, parents_map: dict[str, str | None] | None) -> dict:
-        """Wrap one select/multiselect label as the Uwazi ``{value, parent?}`` item."""
+        """Wrap one select/multiselect label as the Uwazi ``{value, parent?}`` item.
+
+        A qualified label ``"Group: Child"`` (the disambiguation form
+        the mapping layer emits for labels shared by two thesaurus
+        groups) is split: ``value`` becomes the child label and
+        ``parent.label`` the group. ``parents_map`` is the fallback
+        parent lookup for unqualified labels.
+        """
+        if THESAURUS_GROUP_SEPARATOR in label:
+            group, child = split_label(label)
+            return {"value": child, "parent": {"label": group}}
         item: dict = {"value": label}
         if parents_map and label in parents_map:
             parent_label = parents_map[label]

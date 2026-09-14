@@ -13,6 +13,10 @@ and hands them in.
 from __future__ import annotations
 
 from browser_agent.domain.field_type import FieldType
+from collections import Counter
+
+from uwazi_api.domain.thesauri_label import qualify_label
+
 from browser_agent.domain.thesauri_snapshot import ThesauriSnapshot
 from browser_agent.domain.thesauri_value import ThesauriValue
 from browser_agent.domain.uwazi_property import UwaziProperty
@@ -77,17 +81,30 @@ def to_template(library_template) -> UwaziTemplate:
 
 
 def _collect_leaves(values) -> tuple[str, ...]:
-    """Collect leaf labels (no children) from a nested ``ThesauriValue`` tree, DFS order."""
-    out: list[str] = []
-    stack = list(values or ())
+    """Collect leaf labels (no children) from a nested tree, DFS order.
+
+    A leaf label that appears under two or more parent groups is
+    ambiguous (two different thesaurus nodes share one label), so it
+    is qualified as ``"Group: Child"`` — the form
+    :mod:`uwazi_api.domain.thesauri_label` uses on both the search
+    and the write side. Unambiguous labels stay bare.
+    """
+    leaves = [v for v in _walk_leaves(values)]
+    counts = Counter(leaf.label for _, leaf in leaves)
+    return tuple(
+        qualify_label(parent, leaf.label) if parent and counts[leaf.label] > 1 else leaf.label for parent, leaf in leaves
+    )
+
+
+def _walk_leaves(values):
+    """Yield ``(parent, leaf)`` pairs (leaf nodes only) in DFS order."""
+    stack = [(None, v) for v in reversed(list(values or ()))]
     while stack:
-        v = stack.pop()
+        parent, v = stack.pop()
         if v.values:
-            stack.extend(v.values)
+            stack.extend((v.label, child) for child in reversed(v.values))
         else:
-            out.append(v.label)
-    out.reverse()
-    return tuple(out)
+            yield parent, v
 
 
 def _collect_all_labels(values) -> tuple[str, ...]:

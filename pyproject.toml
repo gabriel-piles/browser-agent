@@ -3,7 +3,7 @@ name = "browser-agent"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "beautifulsoup4>=4.15.0",
     "curl-cffi>=0.15.0",
@@ -42,4 +42,4 @@ pythonpath = ["src", "scripts"]
 addopts = "-ra --disable-warnings"
 
 [tool.uv.sources]
-uwazi-api = { git = "https://github.com/huridocs/python_uwazi_API", rev = "2026.7.31.2" }
+uwazi-api = { git = "https://github.com/huridocs/python_uwazi_API", rev = "2026.9.14.2" }
